@@ -365,6 +365,27 @@ export async function startHttpBridgeServer(
         return;
       }
 
+      if (req.method === "GET" && reqUrl.pathname === "/account-quota") {
+        const conversationKey = parseConversationKey(
+          reqUrl.searchParams.get("conversationKey"),
+        );
+        if (conversationKey === undefined) {
+          sendJson(res, 400, { error: "conversationKey query param is required" });
+          return;
+        }
+        const quota = await options.adapter.getAccountQuota({
+          conversationKey,
+          settingSources: parseSettingSources(
+            reqUrl.searchParams.get("settingSources"),
+          ),
+          scopeType: parseScopeType(reqUrl.searchParams.get("scopeType")),
+          scopeId: reqUrl.searchParams.get("scopeId")?.trim() || undefined,
+          scopeLabel: reqUrl.searchParams.get("scopeLabel")?.trim() || undefined,
+        });
+        sendJson(res, 200, { quota });
+        return;
+      }
+
       if (req.method === "GET" && reqUrl.pathname === "/models") {
         const settingSources = parseSettingSources(
           reqUrl.searchParams.get("settingSources"),

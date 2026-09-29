@@ -69,6 +69,19 @@ export interface RuntimeModelCatalog {
   modelInfos?: RuntimeModelInfo[];
 }
 
+export interface RuntimeAccountQuota {
+  windows: Array<{
+    usedPercent: number;
+    durationMins: number;
+    resetsAt?: number;
+  }>;
+}
+
+export interface RuntimeAccountQuotaOptions {
+  settingSources?: Array<"user" | "project" | "local">;
+  runtimeCwdRelative?: string;
+}
+
 export interface RuntimePermissionModeInfo {
   id:
     | "default"
@@ -91,6 +104,9 @@ export type StructuredCompletionRequest = { prompt: string; model?: string; time
 export type StructuredCompletionResult = { text: string };
 
 export interface ClaudeCodeRuntimeClient {
+  getAccountQuota?(
+    options?: RuntimeAccountQuotaOptions,
+  ): Promise<RuntimeAccountQuota | null>;
   completeStructured?(request: StructuredCompletionRequest): Promise<StructuredCompletionResult>;
   startTurn(request: RuntimeTurnRequest): Promise<RuntimeTurnStream>;
   retainHotRuntime?(request: RuntimeTurnRequest, mountId: string): Promise<void>;
