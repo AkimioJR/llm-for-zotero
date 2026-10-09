@@ -29,9 +29,22 @@ Documentation:
   <img src="./assets/demo.png" alt="Screenshot of the llm-for-zotero sidebar inside the Zotero PDF reader" width="1024" />
 </p>
 
-<p align="center">
-  <img src="./assets/demo2.png" alt="Screenshot of the llm-for-zotero sidebar inside the Zotero PDF reader" width="1024" />
-</p>
+
+## Demo Video
+
+How to do a library chat literature review with llm-for-zotero agent
+<div align="center">
+  <video
+    src="https://github.com/user-attachments/assets/c3c80e9c-a8cd-487f-9b1c-49ff717f514c"
+    width="1024"
+    controls>
+  </video>
+</div>
+
+
+
+
+
 
 ## Table of Contents
 
