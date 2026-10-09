@@ -2950,6 +2950,133 @@ type FindControllerSearchSnapshot = {
   selectedMatchIndex: number | null;
 };
 
+/**
+ * One search sent to PDF.js, followed from the moment it is sent.
+ *
+ * PDF.js marks the results dirty as soon as a search arrives and clears the
+ * mark only once the search has run. It empties and refills the same result
+ * list, so a finished search can leave the counts, the page and the selected
+ * match exactly as the previous search left them (two quotes on one page with
+ * one match each; two searches that both find nothing). The mark, seen set
+ * and then clear with this query, is the evidence that the results are this
+ * search's.
+ */
+type FindControllerSearchRun = {
+  query: string;
+  dirtySeen: boolean;
+};
+
+/** Start following a search; call it right after sending the search. */
+function followFindControllerSearch(
+  findController: any,
+  query: string,
+): FindControllerSearchRun {
+  const run = { query, dirtySeen: false };
+  noteFindControllerSearchRun(findController, run);
+  return run;
+}
+
+/**
+ * The query of the last search PDF.js was sent. Its state holds it as soon as
+ * the search arrives; `_rawQuery` (which `getFindControllerQuery` reads
+ * first) follows only once the search runs.
+ */
+function getFindControllerRequestedQuery(
+  findController: any,
+): string | undefined {
+  const query = findController?.state?.query ?? findController?._state?.query;
+  return typeof query === "string" ? query : undefined;
+}
+
+function noteFindControllerSearchRun(
+  findController: any,
+  run: FindControllerSearchRun | undefined,
+): void {
+  if (
+    run &&
+    !run.dirtySeen &&
+    findController?._dirtyMatch === true &&
+    getFindControllerRequestedQuery(findController) === run.query
+  ) {
+    run.dirtySeen = true;
+  }
+}
+
+/** Whether PDF.js has run this search since it arrived. */
+function hasFindControllerSearchRun(
+  findController: any,
+  run: FindControllerSearchRun | undefined,
+): boolean {
+  noteFindControllerSearchRun(findController, run);
+  return (
+    run?.dirtySeen === true &&
+    findController?._dirtyMatch === false &&
+    getFindControllerRequestedQuery(findController) === run.query &&
+    getFindControllerQuery(findController) === run.query
+  );
+}
+
+type CloneIntoFn = (value: unknown, targetScope: unknown) => any;
+
+function getCloneInto(): CloneIntoFn | undefined {
+  const globalWithClone = globalThis as unknown as {
+    cloneInto?: CloneIntoFn;
+    Components?: { utils?: { cloneInto?: CloneIntoFn } };
+  };
+  return (
+    globalWithClone.cloneInto || globalWithClone.Components?.utils?.cloneInto
+  );
+}
+
+/** The reader page's window, where PDF.js runs. */
+function getPdfViewerWindow(app: any): unknown {
+  const findBar = app?.findBar;
+  for (const node of [
+    findBar?._findField ?? findBar?.findField,
+    app?.appConfig?.mainContainer,
+    app?.pdfViewer?.container,
+  ]) {
+    const view = node?.ownerDocument?.defaultView;
+    if (view) return view;
+  }
+  return null;
+}
+
+/** The plain settings of a PDF.js find state: text, flags and numbers. */
+function findStateSettings(state: unknown): Record<string, unknown> {
+  const settings: Record<string, unknown> = {};
+  if (!state || typeof state !== "object") return settings;
+  for (const key of Object.keys(state)) {
+    const value = (state as Record<string, unknown>)[key];
+    if (["string", "boolean", "number"].includes(typeof value)) {
+      settings[key] = value;
+    }
+  }
+  return settings;
+}
+
+/**
+ * A request PDF.js can read. PDF.js runs in the reader page, which cannot
+ * read the fields of an object made in the plugin's privileged code: such a
+ * "find" request reaches PDF.js with no type and no query, as an empty search
+ * that clears every result. The request is copied into the reader page;
+ * `source`, an object of the page, is set on the copy.
+ */
+function toPdfViewerRequest(
+  app: any,
+  request: Record<string, unknown>,
+  source?: unknown,
+): any {
+  const view = getPdfViewerWindow(app);
+  const cloneInto = getCloneInto();
+  if (!view || typeof cloneInto !== "function") {
+    return source === undefined ? request : { ...request, source };
+  }
+  const copy = cloneInto(request, view);
+  if (source !== undefined) (copy?.wrappedJSObject ?? copy).source = source;
+  return copy;
+}
+
 function getFindControllerPageMatchesValue(findController: any): unknown {
   return findController?.pageMatches ?? findController?._pageMatches;
 }
@@ -3052,12 +3179,16 @@ function hasFindControllerResultsForQuery(
   findController: any,
   snapshot: FindControllerSearchSnapshot,
   expectedQuery: string,
+  run?: FindControllerSearchRun,
 ): boolean {
   // Updating the query happens before PDF.js replaces the previous results.
   // Neither old hits nor an old empty result are evidence about the new query.
+  // A search PDF.js was seen to run is; an unchanged-looking result is not
+  // evidence against it (see `FindControllerSearchRun`).
   return (
     findController?._dirtyMatch !== true &&
     (snapshot.query === expectedQuery ||
+      hasFindControllerSearchRun(findController, run) ||
       didFindControllerSearchStateChange(findController, snapshot))
   );
 }
@@ -3071,6 +3202,7 @@ async function waitForFindControllerSearchAcceptance(
     timeoutMs?: number;
     hardDeadlineAt?: number;
     isCancelled?: () => boolean;
+    run?: FindControllerSearchRun;
   },
 ): Promise<number | null> {
   const startedAt = Date.now();
@@ -3085,6 +3217,7 @@ async function waitForFindControllerSearchAcceptance(
   const progressWaiter = createFindControllerProgressWaiter(options?.eventBus);
   try {
     while (true) {
+      noteFindControllerSearchRun(findController, options?.run);
       const rawQuery = getFindControllerQuery(findController);
       if (
         rawQuery === expectedQuery ||
@@ -3200,6 +3333,7 @@ function mergeFindControllerResultSnapshot(params: {
   completionReason?: FindControllerSearchResult["completionReason"];
   snapshotCount: number;
   allowUnobservableQuery?: boolean;
+  run?: FindControllerSearchRun;
 }): FindControllerSearchResult {
   const pageMatches = getFindControllerPageMatches(params.findController);
   const currentQuery = getFindControllerQuery(params.findController);
@@ -3210,6 +3344,7 @@ function mergeFindControllerResultSnapshot(params: {
       params.findController,
       params.previousSnapshot,
       params.expectedQuery,
+      params.run,
     );
   // PDF.js replaces pageMatches in place for the newest query. Never attribute
   // a newer click's positive results to an older, superseded navigation.
@@ -3238,7 +3373,8 @@ function mergeFindControllerResultSnapshot(params: {
     if (
       selectedPageIndex !== null &&
       (matchStateChanged ||
-        params.previousSnapshot.query === params.expectedQuery)
+        params.previousSnapshot.query === params.expectedQuery ||
+        hasFindControllerSearchRun(params.findController, params.run))
     ) {
       if (!summary.matchedPageIndexes.includes(selectedPageIndex)) {
         summary.matchedPageIndexes.push(selectedPageIndex);
@@ -3275,6 +3411,7 @@ async function waitForFindControllerPageMatches(params: {
   hardDeadlineAt: number;
   isCancelled?: () => boolean;
   requireCompleteResults?: boolean;
+  run?: FindControllerSearchRun;
 }): Promise<FindControllerSearchResult> {
   const startedAt = Date.now();
   let lastProgressAt = startedAt;
@@ -3287,6 +3424,7 @@ async function waitForFindControllerPageMatches(params: {
   try {
     while (true) {
       snapshotCount += 1;
+      noteFindControllerSearchRun(params.findController, params.run);
       const rawQuery = getFindControllerQuery(params.findController);
       if (rawQuery === params.expectedQuery) {
         queryConfirmed = true;
@@ -3344,6 +3482,7 @@ async function waitForFindControllerPageMatches(params: {
         resultsComplete: false,
         snapshotCount,
         allowUnobservableQuery: queryConfirmed,
+        run: params.run,
       });
       if (
         queryConfirmed &&
@@ -3372,6 +3511,7 @@ async function waitForFindControllerPageMatches(params: {
           params.findController,
           params.previousSnapshot,
           params.expectedQuery,
+          params.run,
         ) &&
         (pageMatches.length >= params.pagesCount || pagesToSearch === 0) &&
         pendingCount === 0 &&
@@ -3407,6 +3547,7 @@ async function waitForFindControllerPageMatches(params: {
               : "inactivity",
           snapshotCount: snapshotCount + 1,
           allowUnobservableQuery: queryConfirmed,
+          run: params.run,
         });
         if (queryConfirmed && finalSnapshot.totalMatches > 0) {
           return { ...finalSnapshot, completion: "found" };
@@ -3489,6 +3630,9 @@ async function searchFindControllerForQuery(
 
   let shouldRunCommandFallback = true;
   let acceptanceMs: number | null = null;
+  // Followed from the moment the search is sent; a find bar that handles the
+  // input later is followed by the waits below.
+  let run: FindControllerSearchRun | undefined;
 
   if (findField) {
     try {
@@ -3508,6 +3652,7 @@ async function searchFindControllerForQuery(
       findField.dispatchEvent(
         new EventCtor("input", { bubbles: true } as EventInit),
       );
+      run = followFindControllerSearch(findController, query);
       const findFieldAcceptanceMs = await waitForFindControllerSearchAcceptance(
         findController,
         query,
@@ -3516,6 +3661,7 @@ async function searchFindControllerForQuery(
           eventBus,
           hardDeadlineAt: options.hardDeadlineAt,
           isCancelled: options.isCancelled,
+          run,
         },
       );
       shouldRunCommandFallback = findFieldAcceptanceMs === null;
@@ -3536,17 +3682,20 @@ async function searchFindControllerForQuery(
     if (!eventBus && typeof findController.executeCommand !== "function") {
       return null;
     }
-    const findState = {
-      source: findBar ?? { source: "llm-live-quote-locator" },
-      type: "",
-      query,
-      phraseSearch: true,
-      caseSensitive: false,
-      entireWord: false,
-      highlightAll: true,
-      findPrevious: false,
-      matchDiacritics: false,
-    };
+    const findState = toPdfViewerRequest(
+      app,
+      {
+        type: "",
+        query,
+        phraseSearch: true,
+        caseSensitive: false,
+        entireWord: false,
+        highlightAll: true,
+        findPrevious: false,
+        matchDiacritics: false,
+      },
+      findBar ?? undefined,
+    );
     try {
       if (typeof findBar?.open === "function") findBar.open();
     } catch {
@@ -3564,6 +3713,7 @@ async function searchFindControllerForQuery(
     if (!dispatched && eventBus) {
       eventBus.dispatch("find", findState);
     }
+    run = followFindControllerSearch(findController, query);
     const commandAcceptanceMs = await waitForFindControllerSearchAcceptance(
       findController,
       query,
@@ -3572,6 +3722,7 @@ async function searchFindControllerForQuery(
         eventBus,
         hardDeadlineAt: options.hardDeadlineAt,
         isCancelled: options.isCancelled,
+        run,
       },
     );
     if (commandAcceptanceMs !== null) {
@@ -3596,6 +3747,7 @@ async function searchFindControllerForQuery(
     hardDeadlineAt: options.hardDeadlineAt,
     isCancelled: options.isCancelled,
     requireCompleteResults: options.requireCompleteResults,
+    run,
   });
 }
 
@@ -3904,7 +4056,12 @@ function captureFindControllerUserState(app: any): FindControllerUserState {
     findBar?._findField ?? findBar?.findField ?? null;
   const rawState = findController?.state ?? findController?._state;
   return {
-    query: getFindControllerQuery(findController) || "",
+    // The search the reader was last sent: the user's, or one this plugin
+    // put back. The last search PDF.js ran can be an earlier wording of this
+    // navigation that the put-back search has not yet replaced.
+    query:
+      getFindControllerRequestedQuery(findController) ??
+      (getFindControllerQuery(findController) || ""),
     state:
       rawState && typeof rawState === "object"
         ? { ...(rawState as Record<string, unknown>) }
@@ -3942,18 +4099,24 @@ async function restoreFindControllerUserState(
       findField.value = query;
       dispatchFindFieldInput(findField);
     } else if (eventBus && previous.state) {
-      eventBus.dispatch("find", {
-        ...previous.state,
-        source: findBar ?? { source: "llm-live-quote-locator" },
-        type: "",
-        query,
-      });
+      eventBus.dispatch(
+        "find",
+        toPdfViewerRequest(
+          app,
+          { ...findStateSettings(previous.state), type: "", query },
+          findBar ?? undefined,
+        ),
+      );
     } else if (query && typeof findController?.executeCommand === "function") {
-      findController.executeCommand("find", {
-        ...(previous.state || {}),
-        query,
-      });
+      findController.executeCommand(
+        "find",
+        toPdfViewerRequest(app, {
+          ...findStateSettings(previous.state),
+          query,
+        }),
+      );
     }
+    const run = followFindControllerSearch(findController, query);
     if (
       query &&
       previous.matchCount > 0 &&
@@ -3969,6 +4132,7 @@ async function restoreFindControllerUserState(
           eventBus,
           timeoutMs: 800,
           hardDeadlineAt: restoreDeadlineAt,
+          run,
         },
       );
       const restoredSearch = await waitForFindControllerPageMatches({
@@ -3979,6 +4143,7 @@ async function restoreFindControllerUserState(
         previousSnapshot: restoreSnapshot,
         acceptanceMs: 0,
         hardDeadlineAt: restoreDeadlineAt,
+        run,
       });
       const pageMatchCount =
         restoredSearch.pageMatchCounts[previous.selectedPageIndex] || 0;
@@ -3994,9 +4159,10 @@ async function restoreFindControllerUserState(
       }
     }
     if (!query) {
-      eventBus?.dispatch?.("findbarclose", {
-        source: findBar ?? { source: "llm-live-quote-locator" },
-      });
+      eventBus?.dispatch?.(
+        "findbarclose",
+        toPdfViewerRequest(app, {}, findBar ?? undefined),
+      );
     }
     if (
       previous.findBarWasOpen === false &&
@@ -4128,6 +4294,35 @@ async function waitForFindControllerSelectionChange(
   }
 }
 
+/**
+ * Ask PDF.js for the next match of the current search, as the find bar's
+ * Next button does. The find bar builds the request in the reader page from
+ * its own field, which holds the current search; without one, the request is
+ * copied into the reader page (see `toPdfViewerRequest`).
+ */
+function sendFindAgain(app: any): void {
+  const findController = app?.findController;
+  const findBar = app?.findBar;
+  const findField = findBar?._findField ?? findBar?.findField;
+  if (
+    typeof findBar?.dispatchEvent === "function" &&
+    findField &&
+    String(findField.value ?? "") === getFindControllerQuery(findController)
+  ) {
+    findBar.dispatchEvent("again", false);
+    return;
+  }
+  const state = findController?.state ?? findController?._state ?? {};
+  app?.eventBus?.dispatch(
+    "find",
+    toPdfViewerRequest(
+      app,
+      { ...findStateSettings(state), type: "again", findPrevious: false },
+      findBar ?? undefined,
+    ),
+  );
+}
+
 async function selectNativeFindControllerMatch(params: {
   app: any;
   pageIndex: number;
@@ -4161,13 +4356,7 @@ async function selectNativeFindControllerMatch(params: {
       getFindControllerSelectedPageIndex(findController);
     const previousMatchIndex =
       getFindControllerSelectedMatchIndex(findController);
-    const state = findController?.state ?? findController?._state ?? {};
-    eventBus.dispatch("find", {
-      ...state,
-      source: params.app?.findBar ?? { source: "llm-live-quote-locator" },
-      type: "again",
-      findPrevious: false,
-    });
+    sendFindAgain(params.app);
     await waitForFindControllerSelectionChange(
       findController,
       previousPageIndex,
