@@ -15857,9 +15857,13 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   margin-top: 6px;
 }
 
+/* A quote may wrap: Zotero's macOS window caps every button at 25px, so the
+   link takes back its content height or later links draw over its lines. */
 .llm-task-paper-citation {
   appearance: none;
+  height: auto;
   min-height: 0;
+  max-height: none;
   margin: 0;
   padding: 2px 0;
   border: 0;

@@ -904,6 +904,19 @@ describe("workflow: task progress", function () {
         ".llm-task-paper-citation",
       ) as HTMLButtonElement;
       assert.isOk(link, "the cited paper links to its chip");
+      // A quote that wraps keeps every line inside its link: the next link
+      // starts below it. Zotero's macOS window caps every button at 25px.
+      const linkRect = link.getBoundingClientRect();
+      assert.isAbove(
+        linkRect.height,
+        30,
+        `the quote wraps in the test layout (${surface})`,
+      );
+      assert.isAtMost(
+        link.scrollHeight,
+        Math.ceil(linkRect.height),
+        `the wrapped quote fits inside its link (${surface})`,
+      );
       link.click();
       assert.equal(
         view.drawer.dataset.state,
