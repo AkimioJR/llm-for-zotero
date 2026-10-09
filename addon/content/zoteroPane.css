@@ -89,6 +89,11 @@
   --llm-fs-10: calc(10px * var(--llm-font-scale));
   --llm-fs-11: calc(11px * var(--llm-font-scale));
   --llm-fs-12: calc(12px * var(--llm-font-scale));
+  --llm-quote-card-surface: color-mix(
+    in srgb,
+    var(--material-background) 96%,
+    var(--fill-primary) 4%
+  );
   --llm-fs-13: calc(13px * var(--llm-font-scale));
   --llm-fs-14: calc(14px * var(--llm-font-scale));
   --llm-fs-16: calc(16px * var(--llm-font-scale));
@@ -1503,6 +1508,11 @@
   --llm-fs-10: calc(10px * var(--llm-font-scale));
   --llm-fs-11: calc(11px * var(--llm-font-scale));
   --llm-fs-12: calc(12px * var(--llm-font-scale));
+  --llm-quote-card-surface: color-mix(
+    in srgb,
+    var(--material-background) 96%,
+    var(--fill-primary) 4%
+  );
   --llm-fs-13: calc(13px * var(--llm-font-scale));
   --llm-fs-14: calc(14px * var(--llm-font-scale));
   --llm-standalone-ui-font-size: var(--llm-fs-12);
@@ -4371,18 +4381,13 @@
   cursor: not-allowed;
 }
 
-.llm-assistant-selection-action {
-  appearance: none;
-  -moz-appearance: none;
+/* Assistant-text selection popup: Quote button, then the inline prompt box. */
+.llm-assistant-selection-popup {
   position: absolute;
   z-index: 8;
-  background: var(--material-background);
-  border-color: var(--stroke-secondary);
-  color: var(--fill-primary);
-  width: auto;
-  max-width: none;
-  margin: 0;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -4394,11 +4399,86 @@
     visibility 140ms ease;
 }
 
-.llm-assistant-selection-action.is-visible {
+.llm-assistant-selection-popup.is-visible {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
   pointer-events: auto;
+}
+
+.llm-assistant-selection-action {
+  appearance: none;
+  -moz-appearance: none;
+  align-self: flex-start;
+  background: var(--material-background);
+  border-color: var(--stroke-secondary);
+  color: var(--fill-primary);
+  width: auto;
+  max-width: none;
+  margin: 0;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+.llm-assistant-selection-prompt {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  width: min(360px, 80vw);
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--stroke-secondary);
+  border-radius: 10px;
+  background: var(--material-background);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+.llm-assistant-selection-popup.is-expanded .llm-assistant-selection-prompt {
+  display: flex;
+}
+
+.llm-assistant-selection-popup.is-expanded .llm-assistant-selection-action {
+  display: none;
+}
+
+/* The quoted selection above the input, clamped to four lines. */
+.llm-assistant-selection-quote {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-12);
+  line-height: 1.4;
+}
+
+.llm-assistant-selection-prompt-input {
+  width: 100%;
+  min-height: 28px;
+  max-height: 120px;
+  resize: none;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: 1px solid var(--stroke-secondary);
+  border-radius: 6px;
+  background: var(--fill-quinary);
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: var(--llm-fs-11);
+  user-select: text;
+  -moz-user-select: text;
+}
+
+.llm-assistant-selection-prompt-input::placeholder {
+  color: var(--fill-tertiary);
+}
+
+.llm-assistant-selection-prompt-hint {
+  font-size: var(--llm-fs-10);
+  line-height: 1.25;
+  color: var(--fill-tertiary);
 }
 
 .llm-assistant-selection-action:hover:not(:disabled),
@@ -4643,6 +4723,15 @@
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+.llm-user-selected-text-expanded .llm-selected-context-text {
+  max-height: none;
+}
+
+/* A sent chip with a question: selection, divider, question. */
+.llm-user-selected-text-expanded > .llm-agent-output-divider {
+  margin: 8px 0;
 }
 
 .llm-user-context-badges {
@@ -8870,11 +8959,6 @@ label.llm-search-results-item:hover {
 }
 
 .llm-quote-card {
-  --llm-quote-card-surface: color-mix(
-    in srgb,
-    var(--material-background) 96%,
-    var(--fill-primary) 4%
-  );
   --llm-quote-card-rail: var(--color-accent);
   margin: 10px 0;
   border: none;
@@ -10317,6 +10401,12 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 }
 
 .llm-plan-document-window-root {
+  /* Quote cards render here too; keep the token in reach outside the panels. */
+  --llm-quote-card-surface: color-mix(
+    in srgb,
+    var(--material-background) 96%,
+    var(--fill-primary) 4%
+  );
   box-sizing: border-box;
   min-height: 100vh;
   overflow: auto;
@@ -12910,15 +13000,45 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   line-height: 1.35;
 }
 
-.llm-selected-context-text {
+.llm-selected-context-text,
+.llm-selected-context-question {
   font-size: var(--llm-fs-12);
   line-height: 1.4;
-  color: var(--fill-primary);
+  color: var(--fill-secondary);
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
   max-height: none;
   overflow: visible;
+}
+
+/* Selection in a chip card or sent bubble: three lines; notes show in full. */
+.llm-selected-context-text:not(.llm-note-context-text) {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+/* Small muted section label ("Selected text", "Your question"). */
+.llm-selected-context-label {
+  font-size: var(--llm-fs-11);
+  color: var(--fill-tertiary);
+  line-height: 1.2;
+}
+
+/* A label sits tight on its text; the card gap only separates sections. */
+.llm-selected-context-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* The question stays primary; the note chip body is not a quoted selection. */
+.llm-selected-context-question,
+.llm-note-context-text {
+  color: var(--fill-primary);
 }
 
 .llm-selected-context-warning {

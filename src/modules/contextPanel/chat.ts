@@ -7,6 +7,7 @@ import { syncTaskProgressPanel } from "./taskProgress/panel";
 import { createProviderRequestScope } from "../../utils/providerTransport";
 import { renderMarkdownForNote } from "../../utils/markdown";
 import { HTML_NS } from "../../utils/domHelpers";
+import { appendSelectedTextSections } from "./selectedTextPreviewSections";
 import {
   t,
   getWelcomeHtml,
@@ -335,6 +336,7 @@ import {
   getActiveContextAttachmentFromTabs,
   resolveContextSourceItem,
   setSelectedTextContextEntries,
+  stripSelectedTextQuestionsForItem,
 } from "./contextResolution";
 import {
   resolveActiveNoteSession,
@@ -1081,6 +1083,30 @@ function collectAttachmentHashesFromStoredMessages(
 
 function getMessageSelectedTexts(message: Message): string[] {
   return normalizeSelectedTexts(message.selectedTexts, message.selectedText);
+}
+
+/**
+ * The question attached to the sent chip at `index`, if any. The structured
+ * contexts normally line up with `selectedTexts`; when they do not, the
+ * first context with the same text is used. Messages without structured
+ * contexts have no question.
+ */
+function getMessageSelectedTextQuery(
+  message: Message,
+  index: number,
+  text: string,
+): string {
+  const contexts = Array.isArray(message.selectedTextContexts)
+    ? message.selectedTextContexts
+    : [];
+  const byIndex = contexts[index];
+  const context =
+    byIndex && sanitizeText(byIndex.text || "").trim() === text
+      ? byIndex
+      : contexts.find(
+          (entry) => sanitizeText(entry?.text || "").trim() === text,
+        );
+  return typeof context?.userQuery === "string" ? context.userQuery.trim() : "";
 }
 
 /**
@@ -9492,6 +9518,15 @@ function buildInlineEditWidget(
       }
       setInlineEditBorrowedInputSection(body, null, null, null);
       setInlineEditSavedDraft(body, "");
+      // The chips' questions belong to the turn that was edited; they must not
+      // ride along with the next message.
+      if (
+        stripSelectedTextQuestionsForItem(
+          editConversationKey ?? getConversationKey(item),
+        )
+      ) {
+        activeContextPanelStateSync.get(body)?.();
+      }
       if (superseded) {
         keepSupersededInlineEditText(
           body,
@@ -10667,9 +10702,24 @@ export function refreshChat(
 
           const selectedExpanded = doc.createElement("div") as HTMLDivElement;
           selectedExpanded.className = "llm-user-selected-text-expanded";
-          selectedExpanded.textContent = selectedTextPaperLabel
+          const expandedText = selectedTextPaperLabel
             ? `${selectedTextPaperLabel}\n\n${selectedText}`
             : selectedText;
+          const selectedTextQuery = getMessageSelectedTextQuery(
+            msg,
+            contextIndex,
+            selectedText,
+          );
+          if (selectedTextQuery) {
+            appendSelectedTextSections(
+              doc,
+              selectedExpanded,
+              expandedText,
+              selectedTextQuery,
+            );
+          } else {
+            selectedExpanded.textContent = expandedText;
+          }
 
           selectedBar.append(selectedIcon, selectedContent);
           const applySelectedTextState = () => {

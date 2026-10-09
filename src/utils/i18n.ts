@@ -1426,6 +1426,17 @@ const zhCN: Record<string, string> = {
   Language: "语言",
   "Auto (follow Zotero)": "自动（跟随 Zotero）",
   "Restart Zotero to apply language change.": "重启 Zotero 以应用语言更改。",
+  // ── Selection prompt ────────────────────────────────────────────────────
+  Quote: "引用",
+  "Ask about this selection…": "就这段选中文字提问…",
+  "Selected text is no longer in the context": "选中文字已不在上下文中",
+  "Selected text already included": "选中文字已包含",
+  "Selected text": "选中文字",
+  "Your question": "你的问题",
+  "Enter to add · Shift+Enter for a new line · Esc to close":
+    "Enter 添加 · Shift+Enter 换行 · Esc 关闭",
+  Add: "添加",
+  "Question attached to the selected text": "问题已附加到选中文字",
 };
 
 // ── Runtime state ────────────────────────────────────────────────────────────
