@@ -954,6 +954,10 @@ describe("task progress view", function () {
       rawSnippet: "",
       label: "Discussion",
     });
+    // A link the panel is still opening does nothing more.
+    links[0].disabled = true;
+    links[0].dispatchFakeEvent("click");
+    assert.lengthOf(dispatched, 1);
   });
 
   it("closes on Escape and returns focus to the row", function () {
@@ -1138,7 +1142,13 @@ describe("task progress view", function () {
     applyTaskPaperUpdate(KEY, ledgerDelta("c1", [[1, "read", "One"]]), "run-a");
     completeTaskRun(KEY, {
       runId: "run-a",
-      quoteCitations: [quoteCitation("Q1.a:p2", 1)],
+      quoteCitations: [
+        {
+          ...quoteCitation("Q1.a:p2", 1),
+          pageHintLabel: "7",
+          contextItemId: 9,
+        },
+      ],
     });
     harness.row.dispatchFakeEvent("click");
     const item = harness.items()[0];
@@ -1168,6 +1178,10 @@ describe("task progress view", function () {
       rawSnippet: "Quoted evidence Q1.a:p2",
       cleanedSnippet: "Quoted evidence Q1.a:p2",
       label: "(Smith, 2021)",
+      // The page and the attachment the quote recorded, for the fallback
+      // and the right PDF.
+      pageLabel: "7",
+      contextItemId: 9,
       granularity: "passage",
     });
     assert.isTrue(harness.view.isOpen(), "the drawer stays open");

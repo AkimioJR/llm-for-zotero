@@ -3070,6 +3070,15 @@ function toPdfViewerRequest(
   const view = getPdfViewerWindow(app);
   const cloneInto = getCloneInto();
   if (!view || typeof cloneInto !== "function") {
+    // PDF.js may not be able to read this request (an empty search that
+    // clears every result); say so, so the failure is not silent.
+    logFindControllerDiagnostic(
+      "LLM paragraph-jump: sending PDF.js a request it may not be able to read",
+      {
+        hasViewerWindow: Boolean(view),
+        hasCloneInto: typeof cloneInto === "function",
+      },
+    );
     return source === undefined ? request : { ...request, source };
   }
   const copy = cloneInto(request, view);

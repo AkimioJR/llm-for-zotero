@@ -2695,6 +2695,32 @@ describe("page-native scrollToExactQuoteInReader", function () {
     assert.isEmpty(fixture.dispatched);
   });
 
+  // PDF.js holds a search as its state as soon as it arrives and runs it a
+  // moment later; the search to put back is the one last sent.
+  it("puts back the search PDF.js was last sent, not the last one it ran", async function () {
+    const quote =
+      "The complete quote aligns to the page but FindController unexpectedly reports no match.";
+    const previousQuery = "user's existing find query";
+    const fixture = createExactFindControllerReader({
+      pageItems: [[{ str: quote }]],
+      targetPageIndex: 0,
+      shouldMatch: false,
+      previousQuery,
+    });
+    // An earlier wording of this plugin's, still the last search run.
+    fixture.findController._rawQuery = "an earlier wording of the quote";
+
+    const result = await scrollToExactQuoteInReader(fixture.reader, quote, {
+      expectedPageIndex: 0,
+    });
+
+    assert.isFalse(result.matched);
+    const queries = fixture.dispatched.map((entry) => entry.query);
+    assert.equal(queries[queries.length - 1], previousQuery);
+    assert.notInclude(queries, "an earlier wording of the quote");
+    assert.equal(fixture.findController._state.query, previousQuery);
+  });
+
   it("restores the previous FindController query after an exact-match failure", async function () {
     const quote =
       "The complete quote aligns to the page but FindController unexpectedly reports no match.";

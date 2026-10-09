@@ -1963,6 +1963,37 @@ describe("citation navigation characterization", function () {
       ]);
     });
 
+    it("Task progress: a cited quote not in the PDF opens the page its citation recorded", async function () {
+      // A citation's label names the paper, not a page; the page the quote
+      // recorded is given outright and read as a page number.
+      const paper = smith();
+      const r = install({ papers: [paper] });
+
+      const outcome = await navigateToTaskPaperPassage({
+        body: r.body,
+        target: {
+          itemId: 10,
+          contextItemId: 11,
+          libraryID: 1,
+          rawSnippet: QUOTE_MISSING,
+          cleanedSnippet: QUOTE_MISSING,
+          label: "(Smith, 2021)",
+          pageLabel: "2",
+          granularity: "passage",
+        },
+      });
+
+      assert.equal(outcome, "page");
+      assert.deepEqual(r.reader(11)!.navigations, [
+        { pageIndex: 1, pageLabel: "102" },
+        { pageIndex: 1, pageLabel: "102" },
+      ]);
+      assert.equal(
+        statusTexts(r).pop(),
+        "warning: Couldn't find this passage in the PDF; opened page 102",
+      );
+    });
+
     it("Task progress: an old read's guessed label is never matched against printed labels (D5)", async function () {
       // Printed labels i…x, then 1…4: printed "4" sits on page index 13.
       const printed = [

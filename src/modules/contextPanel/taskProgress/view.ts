@@ -1862,7 +1862,9 @@ export function mountTaskProgressView(params: {
       libraryID: model.libraryID,
       ...detail,
     };
-    const contextItemId = model.entry?.contextItemIds?.[0];
+    // The passage's own attachment when known; else the paper's first.
+    const contextItemId =
+      detail.contextItemId || model.entry?.contextItemIds?.[0];
     if (contextItemId) target.contextItemId = contextItemId;
     from.dispatchEvent(
       new View(TASK_PROGRESS_OPEN_PASSAGE_EVENT, {
@@ -1887,6 +1889,7 @@ export function mountTaskProgressView(params: {
     link.addEventListener("click", (event: Event) => {
       event.preventDefault?.();
       event.stopPropagation?.();
+      if (link.disabled) return;
       dispatchOpenPassage(link, model, {
         rawSnippet: "",
         cleanedSnippet: "",
@@ -1909,6 +1912,8 @@ export function mountTaskProgressView(params: {
       shown: string;
       quote: string;
       label: string;
+      pageLabel: string;
+      contextItemId?: number;
     }> = [];
     const documentSections: string[] = [];
     const readsByTurn = new Map(
@@ -2031,6 +2036,10 @@ export function mountTaskProgressView(params: {
           shown: citation.quote || citation.label || citation.citationId,
           quote: citation.quote || "",
           label: citation.label || "",
+          pageLabel: citation.pageLabel || "",
+          ...(citation.contextItemId
+            ? { contextItemId: citation.contextItemId }
+            : {}),
         });
       }
     }
@@ -2088,6 +2097,10 @@ export function mountTaskProgressView(params: {
             rawSnippet: citation.quote,
             cleanedSnippet: citation.quote,
             label: citation.label,
+            ...(citation.pageLabel ? { pageLabel: citation.pageLabel } : {}),
+            ...(citation.contextItemId
+              ? { contextItemId: citation.contextItemId }
+              : {}),
             granularity: citation.quote ? "passage" : "full",
           });
         });
