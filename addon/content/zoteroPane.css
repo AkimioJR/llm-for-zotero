@@ -15879,6 +15879,12 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   text-decoration: underline;
 }
 
+.llm-task-paper-citation:disabled {
+  opacity: 0.5;
+  cursor: default;
+  text-decoration: none;
+}
+
 .llm-task-progress-more {
   padding: 8px 14px;
   color: var(--fill-tertiary);
@@ -15918,9 +15924,4 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 
 .llm-task-progress-papers-title {
   padding: 2px 14px 4px;
-}
-
-.llm-quote-card.llm-task-progress-flash {
-  box-shadow: 0 0 0 2px var(--color-accent);
-  transition: box-shadow 300ms ease;
 }

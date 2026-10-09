@@ -4758,13 +4758,14 @@ export function setupHandlers(
   body.addEventListener(TASK_PROGRESS_REMOVE_PAPER_EVENT, (event: Event) => {
     void removeTaskProgressPaper(event);
   });
-  // "Source" on a passage the card lists: open its paper at the passage.
+  // "Source" on a passage the card lists, or a citation under its paper:
+  // open the paper at the passage.
   body.addEventListener(TASK_PROGRESS_OPEN_PASSAGE_EVENT, (event: Event) => {
     const target = (event as CustomEvent<TaskPaperPassageTarget>).detail;
     if (!target || !(Number(target.itemId) > 0)) return;
     const button =
       (event.target as Element | null)?.closest?.<HTMLButtonElement>(
-        "button.llm-task-paper-open",
+        "button.llm-task-paper-open, button.llm-task-paper-citation",
       ) || null;
     void navigateToTaskPaperPassage({ body, target, button }).catch(
       (error: unknown) => {
