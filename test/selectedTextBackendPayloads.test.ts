@@ -153,4 +153,84 @@ describe("highlight-aware backend payloads", function () {
     assert.include(block, "The highlighted claim and its explanation.");
     assert.include(block, "read PDF page 588");
   });
+
+  describe("a chip's question", function () {
+    const questionContext: SelectedTextContext = {
+      ...selectedTextContext,
+      userQuery: "Is this claim supported?",
+    };
+
+    it("follows the quoted text for direct API and webchat prompts", function () {
+      for (const includeAnchorContext of [false, true]) {
+        const prompt = buildQuestionWithSelectedTextContexts(
+          [questionContext.text],
+          ["pdf"],
+          "Is this claim supported?",
+          {
+            selectedTextContexts: [questionContext],
+            resolvedSelectedTextAnchors: [resolvedAnchor],
+            includeAnchorContext,
+          },
+        );
+        assert.include(
+          prompt,
+          `"""\n${questionContext.text}\n"""\nQuestion about this text:\nIs this claim supported?`,
+        );
+      }
+    });
+
+    it("follows the quoted text in plugin Agent messages", async function () {
+      const request: AgentRuntimeRequest = resolvedAgentRequest({
+        conversationKey: 30304,
+        mode: "agent",
+        userText: "Is this claim supported?",
+        libraryID: 1,
+        selectedTextContexts: [
+          questionContext,
+          { text: "A second quote.", source: "model" },
+        ],
+        selectedTexts: [questionContext.text, "A second quote."],
+        selectedTextSources: ["pdf", "model"],
+        selectedTextPaperContexts: [questionContext.paperContext, undefined],
+      });
+      const messages = await buildAgentInitialMessages(request, [], []);
+      const text = [...messages]
+        .reverse()
+        .filter((message) => message.role === "user")
+        .map(messageText)
+        .join("\n");
+
+      assert.include(
+        text,
+        `"""\n${questionContext.text}\n"""\nQuestion about this text:\nIs this claim supported?`,
+      );
+      assert.include(text, '"""\nA second quote.\n"""');
+      assert.notInclude(
+        text,
+        '"""\nA second quote.\n"""\nQuestion about this text:',
+      );
+    });
+
+    it("rides in the Claude bridge envelope rows", function () {
+      const envelope = buildExternalBridgeContextEnvelopeForTests({
+        conversationKey: 30305,
+        mode: "agent",
+        userText: "Is this claim supported?",
+        libraryID: 1,
+        selectedTextContexts: [
+          questionContext,
+          { text: "A second quote.", source: "model" },
+        ],
+        selectedTexts: [questionContext.text, "A second quote."],
+        selectedTextSources: ["pdf", "model"],
+        selectedTextPaperContexts: [questionContext.paperContext, undefined],
+      });
+
+      assert.equal(
+        envelope.selectedTexts[0]?.userQuery,
+        "Is this claim supported?",
+      );
+      assert.notProperty(envelope.selectedTexts[1], "userQuery");
+    });
+  });
 });

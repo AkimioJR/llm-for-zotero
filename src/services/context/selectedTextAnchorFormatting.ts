@@ -2,7 +2,10 @@ import type {
   ResolvedSelectedTextAnchor,
   SelectedTextContext,
 } from "../../shared/types";
-import { normalizePositiveInt } from "./normalizers";
+import {
+  normalizePositiveInt,
+  normalizeSelectedTextUserQuery,
+} from "./normalizers";
 
 function cleanText(value: unknown): string {
   if (typeof value !== "string") return "";
@@ -20,6 +23,28 @@ function cleanText(value: unknown): string {
     cleaned += character;
   }
   return cleaned.trim();
+}
+
+/**
+ * The line placed under a chip's closing quotes when the user attached a
+ * question to it (D3), including its leading newline; "" without a question.
+ */
+export function formatSelectedTextQuestionSuffix(userQuery: unknown): string {
+  const question = normalizeSelectedTextUserQuery(userQuery);
+  return question ? `\nQuestion about this text:\n${question}` : "";
+}
+
+/** The chip questions in chip order, joined by blank lines; "" when none. */
+export function joinSelectedTextQuestions(
+  contexts: readonly Pick<SelectedTextContext, "userQuery">[] | undefined,
+  sanitize?: (value: string) => string,
+): string {
+  return (contexts || [])
+    .map((context) =>
+      normalizeSelectedTextUserQuery(context?.userQuery, sanitize),
+    )
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 export function formatSelectedTextLocator(

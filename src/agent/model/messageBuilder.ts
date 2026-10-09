@@ -50,6 +50,7 @@ import {
 import { synthesizeSelectedTextContexts } from "../../services/context/normalizers";
 import {
   formatSelectedTextLocator,
+  formatSelectedTextQuestionSuffix,
   renderSelectedTextAnchorContext,
 } from "../../services/context/selectedTextAnchorFormatting";
 import {
@@ -275,7 +276,10 @@ function buildFullUserMessage(
           selectedTextContexts[index],
           anchorsByIndex.get(index),
         );
-        return `Selected text ${index + 1} [source=${sourceLabel}${sourceMeta}]${locator ? ` ${locator}` : ""}:\n"""\n${entry}\n"""`;
+        const question = formatSelectedTextQuestionSuffix(
+          selectedTextContexts[index]?.userQuery,
+        );
+        return `Selected text ${index + 1} [source=${sourceLabel}${sourceMeta}]${locator ? ` ${locator}` : ""}:\n"""\n${entry}\n"""${question}`;
       })
       .join("\n\n");
     contextLines.push(

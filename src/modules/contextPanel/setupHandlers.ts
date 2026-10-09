@@ -907,7 +907,10 @@ export function setupHandlers(
   let renderQueuedFollowUpInputs: () => void = () => {};
   let scheduleQueuedFollowUpDrain: () => void = () => {};
   let isQueuedFollowUpSendAvailable: () => boolean = () => false;
-  let queueFollowUpInput: (text: string) => void = () => {};
+  let queueFollowUpInput: (
+    text: string,
+    options?: { preserveInputDraft?: boolean },
+  ) => boolean = () => false;
 
   let quotaControl: ReturnType<typeof attachFooterQuotaControl> | null = null;
   let quotaPendingConversationKey: number | null = null;
@@ -7187,11 +7190,14 @@ export function setupHandlers(
     );
   };
 
-  queueFollowUpInput = (text: string) => {
+  queueFollowUpInput = (text, options) => {
     const nextQueue = enqueueQueuedFollowUp(getQueuedFollowUpThreadKey(), text);
-    if (!nextQueue.length) return;
-    inputBox.value = "";
-    persistDraftInputForCurrentConversation();
+    if (!nextQueue.length) return false;
+    // Text that did not come from the composer must not erase its draft.
+    if (!options?.preserveInputDraft) {
+      inputBox.value = "";
+      persistDraftInputForCurrentConversation();
+    }
     renderQueuedFollowUpInputs();
     if (status) {
       setStatus(
@@ -7202,6 +7208,7 @@ export function setupHandlers(
         "ready",
       );
     }
+    return true;
   };
 
   syncRequestUiForCurrentConversation();
@@ -7221,7 +7228,7 @@ export function setupHandlers(
     beginRequest: beginPanelRequest,
     isRequestOwner,
     finishRequest: finishPanelRequest,
-    queueFollowUpInput: (text) => queueFollowUpInput(text),
+    queueFollowUpInput: (text, options) => queueFollowUpInput(text, options),
     resolveContextSource: resolveAutoLoadedContextSourceAsync,
     closeSlashMenu,
     closePaperPicker,
@@ -7900,6 +7907,9 @@ export function setupHandlers(
     if (ke.key === "Enter" && !ke.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
+      // A held Enter that started in an inline selection prompt lands here
+      // as auto-repeat after that box closes; it must not send the draft.
+      if (ke.repeat) return;
       void executeSend();
     }
   });

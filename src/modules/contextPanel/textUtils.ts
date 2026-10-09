@@ -18,6 +18,8 @@ import {
 } from "../../services/quotes/quoteCitations";
 import {
   formatSelectedTextLocator,
+  formatSelectedTextQuestionSuffix,
+  joinSelectedTextQuestions,
   renderSelectedTextAnchorContext,
 } from "../../services/context/selectedTextAnchorFormatting";
 import { t } from "../../utils/i18n";
@@ -30,11 +32,12 @@ export const DEFAULT_FILE_ANALYSIS_PROMPT = "Please analyze attached files.";
 function buildQuestionWithSelectedNoteText(
   selectedText: string,
   userPrompt: string,
+  userQuery?: string,
 ): string {
   const normalizedPrompt = userPrompt.trim() || DEFAULT_SELECTED_TEXT_PROMPT;
   return [
     "Selected text from a Zotero note:",
-    `"""\n${selectedText}\n"""`,
+    `"""\n${selectedText}\n"""${formatSelectedTextQuestionSuffix(userQuery)}`,
     "",
     `User question:\n${normalizedPrompt}`,
   ].join("\n");
@@ -43,11 +46,12 @@ function buildQuestionWithSelectedNoteText(
 function buildQuestionWithNoteEditingText(
   selectedText: string,
   userPrompt: string,
+  userQuery?: string,
 ): string {
   const normalizedPrompt = userPrompt.trim() || DEFAULT_SELECTED_TEXT_PROMPT;
   return [
     "Selected text from the current Zotero note editor (editing focus):",
-    `"""\n${selectedText}\n"""`,
+    `"""\n${selectedText}\n"""${formatSelectedTextQuestionSuffix(userQuery)}`,
     "The user selected this snippet inside the active note and wants help editing it in place.",
     "",
     `User question:\n${normalizedPrompt}`,
@@ -135,9 +139,10 @@ export function isLikelyCorruptedSelectedText(text: string): boolean {
 export function buildQuestionWithSelectedText(
   selectedText: string,
   userPrompt: string,
+  userQuery?: string,
 ): string {
   const normalizedPrompt = userPrompt.trim() || DEFAULT_SELECTED_TEXT_PROMPT;
-  return `Selected text from the PDF reader:\n"""\n${selectedText}\n"""\n\nUser question:\n${normalizedPrompt}`;
+  return `Selected text from the PDF reader:\n"""\n${selectedText}\n"""${formatSelectedTextQuestionSuffix(userQuery)}\n\nUser question:\n${normalizedPrompt}`;
 }
 
 export function buildQuestionWithSelectedTextContexts(
@@ -183,18 +188,24 @@ export function buildQuestionWithSelectedTextContexts(
     !includePaperAttribution &&
     !formatSelectedTextLocator(contexts[0], anchorsByContextIndex.get(0))
   ) {
-    return buildQuestionWithSelectedText(normalizedTexts[0], normalizedPrompt);
+    return buildQuestionWithSelectedText(
+      normalizedTexts[0],
+      normalizedPrompt,
+      contexts[0].userQuery,
+    );
   }
   if (normalizedTexts.length === 1 && normalizedSources[0] === "note-edit") {
     return buildQuestionWithNoteEditingText(
       normalizedTexts[0],
       normalizedPrompt,
+      contexts[0].userQuery,
     );
   }
   if (normalizedTexts.length === 1 && normalizedSources[0] === "note") {
     return buildQuestionWithSelectedNoteText(
       normalizedTexts[0],
       normalizedPrompt,
+      contexts[0].userQuery,
     );
   }
   const contextBlocks = normalizedTexts.map((text, index) => {
@@ -224,7 +235,10 @@ export function buildQuestionWithSelectedTextContexts(
       anchorsByContextIndex.get(index),
     );
     const locatorPart = locator ? ` ${locator}` : "";
-    return `Text Context ${index + 1} [source=${sourceLabel}]${paperPart}${citationPart}${locatorPart}:\n"""\n${text}\n"""`;
+    const questionPart = formatSelectedTextQuestionSuffix(
+      contexts[index].userQuery,
+    );
+    return `Text Context ${index + 1} [source=${sourceLabel}]${paperPart}${citationPart}${locatorPart}:\n"""\n${text}\n"""${questionPart}`;
   });
   const selectedTextQuoteCitations = includePaperAttribution
     ? buildSelectedTextQuoteCitations(
@@ -260,13 +274,24 @@ export function buildQuestionWithSelectedTextContexts(
   return anchorContext ? `${question}\n\n${anchorContext}` : question;
 }
 
+/**
+ * The user-question text for a send. Composer text wins; with an empty
+ * composer, the questions attached to selected-text chips (in chip order,
+ * blank-line separated) replace the default selected-text prompt (D3).
+ */
 export function resolvePromptText(
   userInput: string,
   selectedText: string,
   hasAttachments: boolean,
+  selectedTextContexts?: readonly SelectedTextContext[],
 ): string {
   const normalizedInput = sanitizeText(userInput).trim();
   if (normalizedInput) return normalizedInput;
+  const chipQuestions = joinSelectedTextQuestions(
+    selectedTextContexts,
+    sanitizeText,
+  );
+  if (chipQuestions) return chipQuestions;
   if (sanitizeText(selectedText).trim()) return DEFAULT_SELECTED_TEXT_PROMPT;
   if (hasAttachments) return DEFAULT_FILE_ANALYSIS_PROMPT;
   return "";
