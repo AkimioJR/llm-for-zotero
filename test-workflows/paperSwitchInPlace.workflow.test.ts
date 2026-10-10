@@ -69,6 +69,43 @@ describe("workflow: switching papers keeps the mounted library panel", function 
     );
   }
 
+  const chipTexts = () =>
+    Array.from(
+      panel()?.querySelectorAll(".llm-selected-context-text") || [],
+    ).map((node: any) => node.textContent || "");
+
+  // Open each paper's chat once and seed it under the key the panel uses.
+  let seeded = false;
+  async function seedPaperChats() {
+    if (seeded) return;
+    for (const [index, fixture] of fixtures.entries()) {
+      await win.ZoteroPane.selectItem(fixture.parentItemId);
+      await openChatPane();
+      await until(
+        () =>
+          panel()?.dataset.basePaperItemId === `${fixture.parentItemId}` &&
+          Number(panel()?.dataset.itemId) > 0,
+        `panel is on paper ${index}`,
+      );
+      const timestamp = Date.now() - 10000 + index * 10;
+      await api.seedStoredConversationTurns(Number(panel()!.dataset.itemId), [
+        { role: "user", text: `Question for paper ${index}`, timestamp },
+        {
+          role: "assistant",
+          text: `Answer for paper ${index}`,
+          timestamp: timestamp + 1,
+        },
+      ]);
+    }
+    seeded = true;
+  }
+
+  async function showPaper(index: number) {
+    await win.ZoteroPane.selectItem(fixtures[index].parentItemId);
+    await openChatPane();
+    await until(() => showsPaper(index), `paper ${index}'s chat is shown`);
+  }
+
   function typeDraft(text: string) {
     const box = input()!;
     box.value = text;
@@ -98,26 +135,7 @@ describe("workflow: switching papers keeps the mounted library panel", function 
   });
 
   it("moves the same panel between papers and keeps each paper's draft", async function () {
-    // Open each paper's chat once and seed it under the key the panel uses.
-    for (const [index, fixture] of fixtures.entries()) {
-      await win.ZoteroPane.selectItem(fixture.parentItemId);
-      await openChatPane();
-      await until(
-        () =>
-          panel()?.dataset.basePaperItemId === `${fixture.parentItemId}` &&
-          Number(panel()?.dataset.itemId) > 0,
-        `panel is on paper ${index}`,
-      );
-      const timestamp = Date.now() - 10000 + index * 10;
-      await api.seedStoredConversationTurns(Number(panel()!.dataset.itemId), [
-        { role: "user", text: `Question for paper ${index}`, timestamp },
-        {
-          role: "assistant",
-          text: `Answer for paper ${index}`,
-          timestamp: timestamp + 1,
-        },
-      ]);
-    }
+    await seedPaperChats();
     await win.ZoteroPane.selectItem(fixtures[0].parentItemId);
     await openChatPane();
     await until(() => showsPaper(0), "first paper's chat is shown");
@@ -159,5 +177,99 @@ describe("workflow: switching papers keeps the mounted library panel", function 
     await Zotero.Promise.delay(500);
     assert.isTrue(showsPaper(0), "a slower earlier switch did not win");
     assert.equal(input()?.value, "Draft for paper 0");
+  });
+
+  it("shows only the next paper's chips from the moment it switches", async function () {
+    await seedPaperChats();
+    await showPaper(0);
+    const chip = "Chip text for paper 0";
+    await api.setMountedPanelSelectedText(panel()!.parentElement!, chip);
+    await until(
+      () => chipTexts().some((text) => text.includes(chip)),
+      "the first paper shows its chip",
+    );
+    // Record the composer in the same task that moves the panel to the
+    // second paper, before any frame or the second paper's chat draw.
+    const root = panel()!;
+    let atSwitch: { chips: string[] } | null = null;
+    const observer = new win.MutationObserver(() => {
+      if (
+        !atSwitch &&
+        root.dataset.basePaperItemId === `${fixtures[1].parentItemId}`
+      ) {
+        atSwitch = { chips: chipTexts() };
+      }
+    });
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: ["data-base-paper-item-id"],
+    });
+    try {
+      await win.ZoteroPane.selectItem(fixtures[1].parentItemId);
+      await until(() => atSwitch !== null, "the panel moved to paper 1");
+    } finally {
+      observer.disconnect();
+    }
+    assert.strictEqual(panel(), root, "the panel moved in place");
+    assert.deepEqual(
+      atSwitch!.chips,
+      [],
+      "the first paper's chip did not follow the switch",
+    );
+    await until(() => showsPaper(1), "second paper's chat is shown");
+    assert.deepEqual(chipTexts(), [], "the second paper shows no chip");
+
+    await showPaper(0);
+    await until(
+      () => chipTexts().some((text) => text.includes(chip)),
+      "the first paper's chip is back",
+    );
+    await api.setMountedPanelSelectedText(panel()!.parentElement!, null);
+  });
+
+  it("a failed switch never shows the last paper's messages under the next paper", async function () {
+    await seedPaperChats();
+    await showPaper(0);
+    const paper1 = `${fixtures[1].parentItemId}`;
+    // Watch the whole pane: the recovery rebuild replaces the panel root.
+    // Until paper 1's chat draws, paper 0's messages stay on screen but
+    // inert; a leak is paper 0's chat taking input under paper 1.
+    const leaks: string[] = [];
+    const check = () => {
+      const root = panel();
+      if (root?.dataset.basePaperItemId !== paper1) return;
+      const chatBox = root.querySelector("#llm-chat-box");
+      if (!chatBox || chatBox.hasAttribute("inert")) return;
+      if (root.hasAttribute("inert")) return;
+      const text = chatBox.textContent || "";
+      if (text.includes("for paper 0")) leaks.push(text);
+    };
+    const observer = new win.MutationObserver(check);
+    observer.observe(section()!, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+    });
+    try {
+      await api.failNextInPlacePaperSwitches(1);
+      await win.ZoteroPane.selectItem(fixtures[1].parentItemId);
+      await until(() => showsPaper(1), "the second paper's chat is drawn");
+      await Zotero.Promise.delay(300);
+      check();
+    } finally {
+      observer.disconnect();
+    }
+    assert.equal(
+      await api.getPendingInPlacePaperSwitchFailures(),
+      0,
+      "the in-place switch used the forced failure",
+    );
+    assert.deepEqual(
+      leaks,
+      [],
+      "paper 0's chat never took input under paper 1",
+    );
+    assert.isTrue(showsPaper(1), "the panel ends on the second paper");
   });
 });

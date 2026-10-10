@@ -1111,6 +1111,18 @@ export type WorkflowTestApi = {
   isFinalRequestHeld: () => Promise<boolean>;
   releaseFinalRequest: () => Promise<void>;
   forceWebChatSessionAnchorFailures: (count: number) => Promise<void>;
+  /** Makes the next N in-place paper switches fail before they draw. */
+  failNextInPlacePaperSwitches: (count: number) => Promise<void>;
+  /** Forced in-place switch failures that no switch has used yet. */
+  getPendingInPlacePaperSwitchFailures: () => Promise<number>;
+  /**
+   * Adds a selected-text chip to the conversation a mounted pane shows, or
+   * clears its chips when text is null. Resolves to that conversation's key.
+   */
+  setMountedPanelSelectedText: (
+    body: Element,
+    text: string | null,
+  ) => Promise<number>;
   askCapturingFinalRequest: (
     panelId: string,
     text: string,

@@ -295,6 +295,8 @@ export function registerReaderContextPanel() {
       !panelHandle.switchToPaperItem(
         nextItem,
         resolvedState.basePaperItem || null,
+        // A switch that cannot draw the paper falls back to the full remount.
+        () => rebuildEmbeddedPanelForHost(body, rawItem, resolvedState),
       )
     ) {
       activeContextPanelRawItems.set(body, previousRawItem || null);
