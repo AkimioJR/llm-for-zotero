@@ -6489,6 +6489,9 @@ export function setupHandlers(
     setReasoningSelection: panelChoices.setCodexDirectReasoningSelection,
   });
 
+  let setupHandlersCleaned = false;
+  // Latest in-place paper switch; only it may re-enable the chat box.
+  let paperItemSwitchToken = 0;
   const panelHandle: PanelHandle = {
     refreshContextSourceForCurrentItem: () => {
       withScrollGuard(chatBox, conversationKey, () => {
@@ -6503,6 +6506,81 @@ export function setupHandlers(
       });
     },
     applyResolvedClaudeEffort: applyClaudeResolvedReasoningDisplay,
+    switchToPaperItem: (nextItem, nextBasePaperItem) => {
+      // Only the plain paper-chat case moves in place. Notes, WebChat, the
+      // standalone window, an open inline edit, a runtime switch in flight,
+      // or a change of mode or runtime all keep the full remount.
+      if (
+        setupHandlersCleaned ||
+        isStandalonePanel ||
+        !item ||
+        !panelRoot.isConnected ||
+        panelRoot.dataset.ownershipBlocked ||
+        !isPaperMode() ||
+        isNoteSession() ||
+        isWebChatModeActive() ||
+        runtimeSystemSwitchInFlight ||
+        getInlineEditTarget(body) ||
+        resolveActiveNoteSession(nextItem) ||
+        resolveDisplayConversationKind(nextItem) !== "paper" ||
+        (resolveConversationSystemForItem(nextItem) || "upstream") !==
+          currentConversationSystem
+      ) {
+        return false;
+      }
+      const lease = capturePanelOperationLease(body);
+      if (!lease) return false;
+      persistDraftInputForCurrentConversation();
+      // The host is already bound to the next paper, so the mounted scope is
+      // written before syncConversationIdentity runs its ownership check.
+      item = nextItem;
+      basePaperItem =
+        nextBasePaperItem || resolveConversationBaseItem(nextItem);
+      const nextKey = getConversationKey(nextItem);
+      panelRoot.dataset.itemId = nextKey > 0 ? `${nextKey}` : "";
+      panelRoot.dataset.libraryId = nextItem.libraryID
+        ? `${nextItem.libraryID}`
+        : "";
+      panelRoot.dataset.conversationKind = "paper";
+      panelRoot.dataset.conversationSystem = currentConversationSystem;
+      const nextBaseId = Number(basePaperItem?.id || 0);
+      panelRoot.dataset.basePaperItemId = nextBaseId > 0 ? `${nextBaseId}` : "";
+      clearAutoLoadedContextSnapshot();
+      syncConversationIdentity();
+      // Before switchPaperConversation persists the composer as this paper's
+      // draft, the composer must hold this paper's draft, not the last one's.
+      restoreDraftInputForCurrentConversation();
+      syncRequestUiForCurrentConversation();
+      if (status) setStatus(status, t("Ready"), "ready");
+      // The previous paper's messages stay on screen until the next paper's
+      // chat is drawn; they must not take input meanwhile.
+      const switchToken = ++paperItemSwitchToken;
+      chatBox?.setAttribute("inert", "");
+      void (async () => {
+        try {
+          const switched = await switchPaperConversation();
+          if (
+            !switched &&
+            item === nextItem &&
+            isPanelOperationLeaseCurrent(lease)
+          ) {
+            await ensureConversationLoaded(nextItem, { body });
+            if (item !== nextItem || !isPanelOperationLeaseCurrent(lease))
+              return;
+            restoreDraftInputForCurrentConversation();
+            refreshChatPreservingScroll();
+            resetComposePreviewUI();
+          }
+        } catch (err) {
+          appLogger.warn("LLM: in-place paper switch failed", err);
+        } finally {
+          if (switchToken === paperItemSwitchToken) {
+            chatBox?.removeAttribute("inert");
+          }
+        }
+      })();
+      return true;
+    },
   };
   publishPanelHandle(body, panelHandle);
 
@@ -8269,7 +8347,6 @@ export function setupHandlers(
   }
 
   let disconnectObserverCleanup: (() => void) | null = null;
-  let setupHandlersCleaned = false;
   const cleanupSetupHandlers = () => {
     if (setupHandlersCleaned) return;
     setupHandlersCleaned = true;

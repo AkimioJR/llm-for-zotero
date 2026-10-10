@@ -54,6 +54,7 @@ import { renderShortcuts } from "./shortcuts";
 import { refreshChat } from "./chat";
 import {
   beginChatRenderCycle,
+  beginOwnedChatRenderCycle,
   claimAsyncChatRender,
   claimDeferredChatRender,
   setPanelRenderClaim,
@@ -263,10 +264,92 @@ export function registerReaderContextPanel() {
   ) => {
     setupHandlers(body, rawItem);
   };
+  // Clicking another paper in the library rebinds the same pane body. A
+  // mounted paper chat moves to that paper in place instead of rebuilding
+  // the whole panel and wiring every handler again; it then draws the chat
+  // once, so the lifecycle's own chat renders are claimed up front.
+  const switchEmbeddedPanelInPlace = (
+    body: Element,
+    rawItem: Zotero.Item | null | undefined,
+    resolvedState: {
+      item: Zotero.Item | null;
+      basePaperItem?: Zotero.Item | null;
+    },
+  ): boolean => {
+    const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
+    const panelHandle = getPanelHandle(body);
+    const nextItem = resolvedState.item;
+    if (
+      !nextItem ||
+      !panelHandle ||
+      !panelRoot ||
+      !isPanelRootInitialized(panelRoot) ||
+      !activeContextPanels.has(body)
+    ) {
+      return false;
+    }
+    const previousRawItem = activeContextPanelRawItems.get(body);
+    // The panel resolves the next paper from the live raw item.
+    activeContextPanelRawItems.set(body, rawItem || null);
+    if (
+      !panelHandle.switchToPaperItem(
+        nextItem,
+        resolvedState.basePaperItem || null,
+      )
+    ) {
+      activeContextPanelRawItems.set(body, previousRawItem || null);
+      return false;
+    }
+    writePanelContextDataset(panelRoot, rawItem || nextItem);
+    setPanelRenderClaim(body, {
+      kind: "sync-rendered",
+      itemKey: getPanelItemIdKey(rawItem || null),
+      cycle: beginOwnedChatRenderCycle(body),
+    });
+    return true;
+  };
+  const switchEmbeddedPanelForHost = (
+    body: Element,
+    rawItem: Zotero.Item | null | undefined,
+    resolvedState: {
+      item: Zotero.Item | null;
+      basePaperItem?: Zotero.Item | null;
+    },
+  ): boolean => {
+    const nextItem = resolvedState.item;
+    if (!nextItem) return false;
+    // A library-wide lock moves the panel to Library chat; that remounts.
+    const nextSystem = resolveConversationSystemForItem(nextItem) || "upstream";
+    const libraryID = Number(nextItem.libraryID || 0);
+    if (
+      nextSystem === "upstream" &&
+      libraryID > 0 &&
+      getLockedGlobalConversationKey(libraryID) !== null
+    ) {
+      return false;
+    }
+    const hostLease = capturePanelOperationLease(body);
+    if (
+      !canLifecycleCommitPanelConversation(
+        body,
+        nextItem,
+        "embedded-switch",
+        hostLease,
+      )
+    ) {
+      return false;
+    }
+    clearCompletedPanelLifecycleSignature(body);
+    persistPendingChatScrollRestoreFromBody(body);
+    return switchEmbeddedPanelInPlace(body, rawItem, resolvedState);
+  };
   const rebuildEmbeddedPanelForHost = (
     body: Element,
     rawItem: Zotero.Item | null | undefined,
-    resolvedState: { item: Zotero.Item | null },
+    resolvedState: {
+      item: Zotero.Item | null;
+      basePaperItem?: Zotero.Item | null;
+    },
   ) => {
     const hostLease = capturePanelOperationLease(body);
     if (
@@ -349,8 +432,10 @@ export function registerReaderContextPanel() {
         mountedVerdict === "host-mismatch" ||
         (mountedVerdict === "unresolved" && isPanelBodyInitialized(body))
       ) {
-        renderPanelOwnershipBlocked(body, "onItemChange", mountedVerdict);
-        rebuildEmbeddedPanelForHost(body, item || null, resolvedState);
+        if (!switchEmbeddedPanelForHost(body, item || null, resolvedState)) {
+          renderPanelOwnershipBlocked(body, "onItemChange", mountedVerdict);
+          rebuildEmbeddedPanelForHost(body, item || null, resolvedState);
+        }
       }
       const selectedTabId = refreshLastKnownSelectedTabId();
       const itemChangeSignature = [
@@ -468,7 +553,15 @@ export function registerReaderContextPanel() {
         ) {
           // Build and attach synchronously so host identity is corrected even
           // when Zotero reveals a reused pane without a useful async render.
-          rebuildEmbeddedPanelForHost(body, item, resolvedState);
+          // A plain change of paper moves the mounted panel in place instead.
+          const onlyPaperChanged =
+            !needsFullRender && !lockStale && !systemChanged;
+          if (
+            !onlyPaperChanged ||
+            !switchEmbeddedPanelForHost(body, item, resolvedState)
+          ) {
+            rebuildEmbeddedPanelForHost(body, item, resolvedState);
+          }
         } else {
           // Same item — keep item reference current so delegated handlers
           // (e.g. Add Text) always resolve the active item.
