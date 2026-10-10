@@ -9420,6 +9420,20 @@ label.llm-search-results-item:hover {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 2px;
+  /* A scroll container clips absolutely positioned hover cards that sit
+     above its top edge. Stop being their containing block, so they anchor to
+     .llm-input-section, which does not scroll. */
+  position: static;
+  container-type: normal;
+}
+
+/* Same inset and gap as the sidebar, measured from the input section: the
+   row starts one section padding below the section's top edge. */
+[data-standalone="true"] .llm-context-previews .llm-selected-context-expanded,
+[data-standalone="true"] .llm-context-previews .llm-image-preview-expanded {
+  left: var(--llm-input-section-padding, 10px);
+  right: var(--llm-input-section-padding, 10px);
+  bottom: calc(100% - var(--llm-input-section-padding, 10px) + 8px);
 }
 
 .llm-agent-process-summary {

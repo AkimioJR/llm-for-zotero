@@ -152,9 +152,12 @@ import {
 import { getAdvancedModelParamsForEntry } from "./prefHelpers";
 import { loadUsageEventsForConversation } from "../../utils/usageStore";
 import {
+  appendSelectedTextContextForItem,
   applySelectedTextPreview,
   getSelectedTextContextEntries,
   resolveContextSourceItemAsync,
+  setSelectedTextContextEntries,
+  setSelectedTextExpandedIndex,
 } from "./contextResolution";
 import {
   resolveConversationBaseItem,
@@ -5629,6 +5632,82 @@ async function exerciseHighlightAwareContextRetrieval(input: {
   }
 }
 
+async function exerciseContextChipCardVisibility(input: {
+  panelId?: string;
+  standalone: boolean;
+  selectedText: string;
+}): ReturnType<WorkflowTestApi["exerciseContextChipCardVisibility"]> {
+  assertWorkflowTestEnabled();
+  const body = input.standalone
+    ? ((await waitForStandaloneReady()).querySelector(
+        ".llm-standalone-content",
+      ) as HTMLElement | null)
+    : getPanel(input.panelId || "").body;
+  if (!body) throw new Error("Workflow chip panel body is unavailable");
+  const doc = body.ownerDocument;
+  const item = activeContextPanels.get(body)?.();
+  if (!item) throw new Error("Workflow chip panel is not mounted");
+  const conversationKey = getConversationKey(item);
+  // The sidebar host sits off screen, where hit testing finds nothing.
+  const previousLeft = body.style.left;
+  const previousZIndex = body.style.zIndex;
+  if (!input.standalone) {
+    body.style.left = "0";
+    body.style.zIndex = "2147483647";
+  }
+  const added = appendSelectedTextContextForItem(
+    conversationKey,
+    input.selectedText,
+    "pdf",
+  );
+  if (!added) throw new Error("Workflow chip was not added");
+  try {
+    setSelectedTextExpandedIndex(conversationKey, 0);
+    applySelectedTextPreview(body, conversationKey);
+    // The card fades in over about 140 ms.
+    await Zotero.Promise.delay(250);
+    const card = body.querySelector(
+      "#llm-selected-context-list .llm-selected-context.expanded .llm-selected-context-expanded",
+    ) as HTMLElement | null;
+    const row = body.querySelector(
+      "#llm-context-previews",
+    ) as HTMLElement | null;
+    const section = body.querySelector(
+      ".llm-input-section",
+    ) as HTMLElement | null;
+    if (!card || !row || !section) {
+      throw new Error("Workflow chip card, row, or input section is missing");
+    }
+    const cardRect = card.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const sectionRect = section.getBoundingClientRect();
+    const centerX = cardRect.left + cardRect.width / 2;
+    const centerY = cardRect.top + cardRect.height / 2;
+    const hit = doc.elementFromPoint(centerX, centerY);
+    return {
+      cardWidth: cardRect.width,
+      cardHeight: cardRect.height,
+      cardTop: cardRect.top,
+      cardBottom: cardRect.bottom,
+      rowTop: rowRect.top,
+      leftInset: cardRect.left - sectionRect.left,
+      rightInset: sectionRect.right - cardRect.right,
+      hitIsCard: Boolean(hit && (hit === card || card.contains(hit))),
+      hitDescription: hit
+        ? `${hit.localName}.${String(hit.className || "")}`
+        : "none",
+    };
+  } finally {
+    if (!input.standalone) {
+      body.style.left = previousLeft;
+      body.style.zIndex = previousZIndex;
+    }
+    setSelectedTextExpandedIndex(conversationKey, null);
+    setSelectedTextContextEntries(conversationKey, []);
+    applySelectedTextPreview(body, conversationKey);
+  }
+}
+
 async function exerciseAssistantSelectionInlinePrompt(input: {
   panelId: string;
   assistantText: string;
@@ -7405,6 +7484,7 @@ export function installWorkflowTestHarness(targetAddon: {
     exerciseReaderPopupDuplicateAttach,
     exerciseReaderPopupPromptDismissal,
     exerciseHighlightAwareContextRetrieval,
+    exerciseContextChipCardVisibility,
     exerciseAssistantSelectionInlinePrompt,
     exerciseAssistantSelectionPromptDismissal,
     cleanupFixture,

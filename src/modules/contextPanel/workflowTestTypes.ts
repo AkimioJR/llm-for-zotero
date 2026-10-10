@@ -1130,6 +1130,24 @@ export type WorkflowTestApi = {
     question: string;
     trigger: "popup" | "action-bar";
   }) => Promise<WorkflowTestHighlightAwareRetrievalDiagnostics>;
+  exerciseContextChipCardVisibility: (input: {
+    panelId?: string;
+    standalone: boolean;
+    selectedText: string;
+  }) => Promise<{
+    cardWidth: number;
+    cardHeight: number;
+    cardTop: number;
+    cardBottom: number;
+    /** Top edge of #llm-context-previews. */
+    rowTop: number;
+    /** Card edge distance from the .llm-input-section edge. */
+    leftInset: number;
+    rightInset: number;
+    /** Whether elementFromPoint at the card center lands in the card. */
+    hitIsCard: boolean;
+    hitDescription: string;
+  }>;
   exerciseAssistantSelectionInlinePrompt: (input: {
     panelId: string;
     assistantText: string;
