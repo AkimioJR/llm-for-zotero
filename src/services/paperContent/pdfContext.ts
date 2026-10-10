@@ -80,6 +80,7 @@ import {
 } from "./textAttachmentExtraction";
 import type { TextAttachmentSourceMode } from "./contextAttachmentTypes";
 import { isPdfContextAttachment } from "./contextAttachmentSupport";
+import { seedPageTextCacheFromFullText } from "../pdf/livePdfSelectionLocator";
 import { isBodyEvidenceSection } from "../../shared/libraryChatEvidencePolicy";
 import {
   extractDocumentReferenceEvidence,
@@ -463,6 +464,17 @@ async function cachePDFText(
           )
             ? rawPageChars
             : undefined;
+          // Quote checks need this same text split into pages. Hand it over
+          // instead of letting the quote warm extract the PDF a second time.
+          // Background library indexing reads papers no chat is quoting and
+          // would only evict the pages a chat needs.
+          if (!options?.preferFulltextCache) {
+            void seedPageTextCacheFromFullText(pdfItem.id, result).catch(
+              (error) => {
+                appLogger.debug("LLM: PDF page text seed failed", error);
+              },
+            );
+          }
         }
       } catch (e) {
         appLogger.warn("PDF extraction failed:", e);

@@ -3,6 +3,7 @@ import { appLogger } from "../../core/logging";
 import { collectReaderSelectionDocuments } from "./readerSelection";
 import { sanitizeText } from "../../utils/textSanitization";
 import { clearCitationPageCache } from "./citationNavigationCache";
+import { readPageCompleteZoteroFulltextCache } from "./zoteroFulltextPageCache";
 import {
   findLargestUniqueQuoteTextAnchorMatch,
   normalizeLocatorText,
@@ -1799,6 +1800,13 @@ export function getCachedPageTextForAttachment(
   return key ? getCachedPageTextIndex([key]) : null;
 }
 
+/**
+ * The share of pages that may be blank in a PDF still called complete,
+ * rounded up. A page with no text cannot be told apart from a scanned page,
+ * so only an occasional blank page between text pages is allowed.
+ */
+const MAX_BLANK_PAGE_FRACTION = 0.1;
+
 export function hasCompleteSearchablePageTextForAttachment(
   contextItemId: number,
 ): boolean {
@@ -1806,11 +1814,17 @@ export function hasCompleteSearchablePageTextForAttachment(
   if (
     !isCompletePageTextCache(cached) ||
     !cached?.pageCount ||
-    cached.pages.length !== cached.pageCount
+    cached.pages.length !== cached.pageCount ||
+    cached.normalised.length !== cached.pageCount ||
+    cached.normalised.some((page, index) => page.pageIndex !== index)
   ) {
     return false;
   }
-  return cached.normalised.every((page) => Boolean(page.normalizedText));
+  const hasText = cached.normalised.map((page) => Boolean(page.normalizedText));
+  // A blank first or last page may hide a scanned cover or appendix.
+  if (!hasText[0] || !hasText[hasText.length - 1]) return false;
+  const blankPages = hasText.filter((value) => !value).length;
+  return blankPages <= Math.ceil(hasText.length * MAX_BLANK_PAGE_FRACTION);
 }
 
 function buildHiddenQuoteLocationCacheKey(
@@ -1942,13 +1956,85 @@ function locateQuoteInCachedPageTexts(
 // Three approaches to extract per-page text, tried in priority order.
 // The first one that returns data wins.
 
+/** The parts of a `PDFWorker.getFullText` result that place text on pages. */
+export type PdfWorkerFullTextResult = {
+  text?: unknown;
+  pageChars?: unknown;
+  totalPages?: unknown;
+  extractedPages?: unknown;
+};
+
+function positivePageCount(value: unknown): number | undefined {
+  const count = Number(value);
+  return Number.isInteger(count) && count > 0 ? count : undefined;
+}
+
+/**
+ * Split PDFWorker full text into pages.
+ *
+ * Zotero 7+ returns `{ text, extractedPages, totalPages }`: pages joined by
+ * form feeds, with the whole string trimmed, so blank pages at either end
+ * leave no break behind. Older builds returned `pageChars`. Blank pages are
+ * kept as empty strings so each page keeps its own index; `totalPages` is the
+ * PDF's real page count, so trimmed pages show as missing, not as absent.
+ */
+export function splitPdfWorkerFullTextIntoPages(
+  result: PdfWorkerFullTextResult | null | undefined,
+): ExtractedPageTextIndexSource | null {
+  const fullText = typeof result?.text === "string" ? result.text : "";
+  if (!fullText) return null;
+  const totalPages = positivePageCount(result?.totalPages);
+  const rawPageChars = result?.pageChars;
+  const pageChars = Array.isArray(rawPageChars)
+    ? rawPageChars.map((value) => Number(value))
+    : null;
+
+  const pages: LivePdfPageText[] = [];
+  let pageCount: number | undefined;
+  if (pageChars?.length) {
+    let offset = 0;
+    for (let i = 0; i < pageChars.length; i++) {
+      const charCount = pageChars[i];
+      if (
+        Number.isFinite(charCount) &&
+        charCount >= 0 &&
+        offset + charCount <= fullText.length
+      ) {
+        // PDFWorker text carries no printed labels.
+        pages.push({
+          pageIndex: i,
+          text: sanitizeText(fullText.slice(offset, offset + charCount).trim()),
+        });
+      }
+      offset += Number.isFinite(charCount) ? charCount : 0;
+    }
+    pageCount = pageChars.length;
+  } else {
+    const ffPages = fullText.split("\f");
+    // Without a break the text can only be placed when the PDF has one page.
+    if (ffPages.length < 2 && totalPages !== 1) return null;
+    // More parts than pages means a break inside a page: no part can be
+    // trusted to sit on the page its position names.
+    if (totalPages && ffPages.length > totalPages) return null;
+    // Zotero trims blank pages at either end, which shifts every index when
+    // a leading page is lost. Trust the split only when the part count equals
+    // the extracted page count (a limit such as pdfMaxPages keeps indices).
+    const extractedPages = positivePageCount(result?.extractedPages);
+    if (extractedPages !== undefined && ffPages.length !== extractedPages) {
+      return null;
+    }
+    for (let i = 0; i < ffPages.length; i++) {
+      pages.push({ pageIndex: i, text: sanitizeText(ffPages[i].trim()) });
+    }
+    pageCount = totalPages ?? ffPages.length;
+  }
+  return pages.some((page) => page.text) ? { pages, pageCount } : null;
+}
+
 /**
  * Strategy 0 — Zotero PDFWorker (MOST RELIABLE)
  *
- * Uses Zotero.PDFWorker.getFullText(itemId) which returns
- * { text: string, pageChars: number[] }.  `pageChars[i]` is the
- * character count for page i, so we slice the full text into per-page
- * segments using cumulative offsets.  This requires NO iframe access
+ * Uses Zotero.PDFWorker.getFullText(itemId), which needs no iframe access
  * and is proven working in the codebase (pdfContext.ts).
  */
 async function extractPageTextsFromPdfWorkerItemId(
@@ -1969,65 +2055,39 @@ async function extractPageTextsFromPdfWorkerItemId(
       );
       return null;
     }
-
-    const fullText: string = String(result.text);
-    const pageChars: number[] | undefined = result.pageChars;
-
-    if (!Array.isArray(pageChars) || pageChars.length === 0) {
-      // Fallback: if pageChars is unavailable, try splitting by form-feed
-      const ffPages = fullText.split("\f");
-      if (ffPages.length > 1) {
-        appLogger.debug(
-          "LLM quote-locator: PDFWorker — no pageChars, using form-feed split:",
-          ffPages.length,
-          "pages",
-        );
-        const pages: LivePdfPageText[] = [];
-        for (let i = 0; i < ffPages.length; i++) {
-          const text = sanitizeText(ffPages[i].trim());
-          if (text) {
-            // PDFWorker text carries no printed labels.
-            pages.push({ pageIndex: i, text });
-          }
-        }
-        return pages.length > 0 ? { pages, pageCount: ffPages.length } : null;
-      }
+    const extracted = splitPdfWorkerFullTextIntoPages(result);
+    if (!extracted) {
       appLogger.warn(
-        "LLM quote-locator: PDFWorker — no pageChars and no form-feeds, cannot split into pages",
+        "LLM quote-locator: PDFWorker — text could not be split into pages",
       );
       return null;
     }
-
-    // Slice the full text into per-page segments using pageChars offsets
-    const pages: LivePdfPageText[] = [];
-    let offset = 0;
-    for (let i = 0; i < pageChars.length; i++) {
-      const charCount = pageChars[i];
-      if (charCount > 0 && offset + charCount <= fullText.length) {
-        const pageText = fullText.slice(offset, offset + charCount);
-        const text = sanitizeText(pageText.trim());
-        if (text) {
-          // PDFWorker text carries no printed labels.
-          pages.push({ pageIndex: i, text });
-        }
-      }
-      offset += charCount;
-    }
-
     appLogger.debug(
       "LLM quote-locator: PDFWorker extracted",
-      pages.length,
-      "pages from",
-      pageChars.length,
-      "total (text length:",
-      fullText.length,
-      ")",
+      extracted.pages.length,
+      "pages of",
+      extracted.pageCount,
     );
-    return pages.length > 0 ? { pages, pageCount: pageChars.length } : null;
+    return extracted;
   } catch (e) {
     appLogger.debug("LLM quote-locator: PDFWorker strategy failed:", e);
     return null;
   }
+}
+
+/**
+ * Strategy 0a — Zotero's own full-text cache, when it is page-complete.
+ * The file holds the text PDFWorker returned when Zotero indexed the PDF.
+ */
+async function extractPageTextsFromZoteroFulltextCache(
+  itemId: number,
+): Promise<ExtractedPageTextIndexSource | null> {
+  const cached = await readPageCompleteZoteroFulltextCache(itemId);
+  if (!cached) return null;
+  return splitPdfWorkerFullTextIntoPages({
+    text: cached.text,
+    totalPages: cached.totalPages,
+  });
 }
 
 async function extractPageTextsFromPdfWorker(
@@ -2630,7 +2690,11 @@ export async function warmPageTextCacheForAttachment(
   let task: Promise<CachedPageTextIndex | null> | null = null;
   task = (async () => {
     try {
-      let extracted = await extractPageTextsFromPdfWorkerItemId(itemId);
+      // Zotero's page-complete full-text cache holds the same text a fresh
+      // PDFWorker extraction would return, without queueing a PDF parse.
+      let extracted =
+        (await extractPageTextsFromZoteroFulltextCache(itemId)) ??
+        (await extractPageTextsFromPdfWorkerItemId(itemId));
       let coverage: PageTextCacheCoverage = "full-pdfworker";
       let sourceFingerprint: string | undefined;
       if (!extracted?.pages.length && reader) {
@@ -2688,6 +2752,60 @@ export async function warmPageTextCacheForAttachment(
     task,
     options?.yieldToMain ? promote : undefined,
   );
+  return task;
+}
+
+/**
+ * Fill the page-text cache from PDFWorker text that is already in hand, such
+ * as the text a context extraction just read, so quote checks need no second
+ * extraction. The text is split and normalised exactly as a PDFWorker warm
+ * would; an attachment that is cached or being read already is left alone.
+ */
+export async function seedPageTextCacheFromFullText(
+  contextItemId: number,
+  fullText: PdfWorkerFullTextResult,
+  options?: {
+    yieldToMain?: () => Promise<void>;
+    shouldContinue?: () => boolean;
+  },
+): Promise<CachedPageTextIndex | null> {
+  const key = getAttachmentPageTextCacheKey(contextItemId);
+  if (!key) return null;
+  const keys = [key];
+  const cached = getCachedPageTextIndex(keys);
+  if (cached) return cached;
+  const pendingTask = getCachedPageTextPromise(keys);
+  if (pendingTask) return pendingTask;
+  const extracted = splitPdfWorkerFullTextIntoPages(fullText);
+  if (!extracted) return null;
+
+  const generation = pageTextCacheGeneration;
+  let task: Promise<CachedPageTextIndex | null> | null = null;
+  task = (async () => {
+    try {
+      const result = await buildCachedPageTextIndexCooperatively(
+        extracted.pages,
+        "full-pdfworker",
+        extracted.pageCount,
+        undefined,
+        {
+          yieldToMain:
+            options?.yieldToMain ||
+            (() => new Promise<void>((resolve) => setTimeout(resolve, 0))),
+          shouldContinue: options?.shouldContinue,
+        },
+      );
+      if (!result || generation !== pageTextCacheGeneration) return null;
+      storeCachedPageTextIndex(keys, result);
+      return result;
+    } catch (e) {
+      appLogger.debug("LLM quote-locator: page text seed failed:", e);
+      return null;
+    } finally {
+      if (task) clearCachedPageTextPromise(keys, task);
+    }
+  })();
+  storeCachedPageTextPromise(keys, task);
   return task;
 }
 
