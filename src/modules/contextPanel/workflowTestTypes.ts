@@ -957,6 +957,18 @@ export type WorkflowTestApi = {
   getConversationHistoryTexts: (
     conversationKey: number,
   ) => Promise<WorkflowTestConversationHistoryTexts>;
+  /**
+   * Stores turns for an ordinary conversation without touching any panel or
+   * in-memory chat, so the conversation loads from the store when shown.
+   */
+  seedStoredConversationTurns: (
+    conversationKey: number,
+    turns: Array<{
+      role: "user" | "assistant";
+      text: string;
+      timestamp: number;
+    }>,
+  ) => Promise<void>;
   seedStandaloneUserMessage: (
     text: string,
   ) => Promise<WorkflowTestStandaloneDiagnostics>;

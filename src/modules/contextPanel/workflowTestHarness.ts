@@ -3992,6 +3992,16 @@ async function getConversationHistoryTexts(
   };
 }
 
+async function seedStoredConversationTurns(
+  conversationKey: number,
+  turns: Array<{ role: "user" | "assistant"; text: string; timestamp: number }>,
+): Promise<void> {
+  assertWorkflowTestEnabled();
+  for (const turn of turns) {
+    await appendWorkflowStoredMessage("upstream", conversationKey, turn);
+  }
+}
+
 async function seedStandaloneConversation(
   turns: Array<{ role: "user" | "assistant"; text: string } & Partial<Message>>,
 ): Promise<WorkflowTestStandaloneDiagnostics> {
@@ -6265,6 +6275,7 @@ export function installWorkflowTestHarness(targetAddon: {
     startNewStandaloneConversation,
     seedStandaloneUserMessage,
     seedStandaloneConversation,
+    seedStoredConversationTurns,
     resizeStandaloneWindow,
     captureStandaloneScreenshot,
     observeCitationNavigationFocus: async (button, options) => {
