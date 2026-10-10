@@ -52,6 +52,7 @@ import { mountPanelShell } from "./panelMount";
 import { ensureConversationLoaded, getConversationKey } from "./chat";
 import { renderShortcuts } from "./shortcuts";
 import { refreshChat } from "./chat";
+import { prewarmQuoteSourcePageText } from "./quoteValidation/scheduling";
 import {
   beginChatRenderCycle,
   claimAsyncChatRender,
@@ -611,7 +612,19 @@ export function registerReaderContextPanel() {
       // Defer content extraction so the panel becomes interactive sooner.
       const activeContextItem = getActiveContextAttachmentFromTabs();
       if (activeContextItem) {
-        void ensurePDFTextCached(activeContextItem);
+        const conversationKey = resolvedItem
+          ? getConversationKey(resolvedItem)
+          : 0;
+        // Context extraction seeds PDF page text when it reads the PDF; the
+        // prewarm then fills it from Zotero's full-text cache or PDFWorker
+        // when that read came from MinerU or an earlier cache, and re-checks
+        // this conversation's quote cards if it added the page text.
+        void ensurePDFTextCached(activeContextItem).finally(() => {
+          void prewarmQuoteSourcePageText({
+            conversationKey,
+            contextItemIds: [activeContextItem.id],
+          });
+        });
       } else if (item && (item as any).isNote?.()) {
         void ensureNoteTextCached(item);
       }
