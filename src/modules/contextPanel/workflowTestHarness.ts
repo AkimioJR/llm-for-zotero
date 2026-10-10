@@ -132,6 +132,10 @@ import { readCodexPermissionStatePref } from "../../codexAppServer/prefs";
 import { forcePendingTurnFinalizeFailuresForTests } from "./pendingDeletionWiring";
 import { forceWebChatSessionAnchorFailuresForTests } from "./webchatSessionConversation";
 import {
+  forceInPlacePaperSwitchFailuresForTests,
+  getForcedInPlacePaperSwitchFailuresForTests,
+} from "./inPlacePaperSwitch";
+import {
   pendingDeletionStore,
   PENDING_DELETIONS_TABLE,
 } from "../../core/conversations/pendingDeletionStore";
@@ -152,6 +156,7 @@ import {
 import { getAdvancedModelParamsForEntry } from "./prefHelpers";
 import { loadUsageEventsForConversation } from "../../utils/usageStore";
 import {
+  addSelectedTextContext,
   appendSelectedTextContextForItem,
   applySelectedTextPreview,
   getSelectedTextContextEntries,
@@ -3996,6 +4001,23 @@ async function getConversationHistoryTexts(
   };
 }
 
+async function seedStoredConversationTurns(
+  conversationKey: number,
+  turns: Array<{ role: "user" | "assistant"; text: string; timestamp: number }>,
+): Promise<void> {
+  assertWorkflowTestEnabled();
+  for (const turn of turns) {
+    await appendWorkflowStoredMessage("upstream", conversationKey, turn);
+  }
+  // A conversation the panel already loaded is served from memory.
+  if (loadedConversationKeys.has(conversationKey)) {
+    chatHistory.set(conversationKey, [
+      ...(chatHistory.get(conversationKey) || []),
+      ...turns,
+    ]);
+  }
+}
+
 async function seedStandaloneConversation(
   turns: Array<{ role: "user" | "assistant"; text: string } & Partial<Message>>,
 ): Promise<WorkflowTestStandaloneDiagnostics> {
@@ -6096,6 +6118,7 @@ async function reset(): Promise<void> {
   });
   forcePendingTurnFinalizeFailuresForTests(0);
   forceWebChatSessionAnchorFailuresForTests(0);
+  forceInPlacePaperSwitchFailuresForTests(0);
   // The dragged drawer height lives for the session; a case starts without it.
   resetTaskProgressDrawerHeight();
 }
@@ -6623,6 +6646,40 @@ async function failNextPendingTurnFinalizes(count: number): Promise<void> {
 async function forceWebChatSessionAnchorFailures(count: number): Promise<void> {
   assertWorkflowTestEnabled();
   forceWebChatSessionAnchorFailuresForTests(count);
+}
+
+async function failNextInPlacePaperSwitches(count: number): Promise<void> {
+  assertWorkflowTestEnabled();
+  forceInPlacePaperSwitchFailuresForTests(count);
+}
+
+async function getPendingInPlacePaperSwitchFailures(): Promise<number> {
+  assertWorkflowTestEnabled();
+  return getForcedInPlacePaperSwitchFailuresForTests();
+}
+
+// Adds a selected-text chip to the conversation a mounted Zotero pane shows,
+// or clears that conversation's chips when text is null.
+async function setMountedPanelSelectedText(
+  body: Element,
+  text: string | null,
+): Promise<number> {
+  assertWorkflowTestEnabled();
+  const root = body.querySelector("#llm-main") as HTMLElement | null;
+  const itemId = Number(root?.dataset.itemId || 0);
+  if (!(itemId > 0)) throw new Error("The panel shows no conversation");
+  if (text === null) {
+    setSelectedTextContextEntries(itemId, []);
+    applySelectedTextPreview(body, itemId);
+  } else if (
+    !addSelectedTextContext(body, itemId, text, {
+      source: "pdf",
+      focusInput: false,
+    })
+  ) {
+    throw new Error("The selected text was not added");
+  }
+  return itemId;
 }
 
 // Drive a real send through the full request pipeline with intercepting
@@ -7373,6 +7430,7 @@ export function installWorkflowTestHarness(targetAddon: {
     startNewStandaloneConversation,
     seedStandaloneUserMessage,
     seedStandaloneConversation,
+    seedStoredConversationTurns,
     resizeStandaloneWindow,
     captureStandaloneScreenshot,
     observeCitationNavigationFocus: async (button, options) => {
@@ -7510,6 +7568,9 @@ export function installWorkflowTestHarness(targetAddon: {
     isFinalRequestHeld,
     releaseFinalRequest,
     forceWebChatSessionAnchorFailures,
+    failNextInPlacePaperSwitches,
+    getPendingInPlacePaperSwitchFailures,
+    setMountedPanelSelectedText,
     askCapturingFinalRequest,
     simulateProviderContextUsage,
     setWorkflowModelInputCap,

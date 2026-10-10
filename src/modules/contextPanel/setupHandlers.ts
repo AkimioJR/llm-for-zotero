@@ -215,10 +215,13 @@ import {
   getPanelHostBinding,
   isPanelHostCompatibleWithPaper,
   isPanelOperationLeaseCurrent,
+  renderPanelOwnershipBlocked,
   requireCurrentPanelOwnership,
   resolveSelectionSurfaceForBody,
   shouldOwnershipFenceSwallowEvent,
 } from "./panelHostOwnership";
+import { clearCompletedPanelLifecycleSignature } from "./panelLifecycleSignature";
+import { runInPlacePaperSwitch } from "./inPlacePaperSwitch";
 import {
   publishPanelHandle,
   unpublishPanelHandle,
@@ -2808,7 +2811,7 @@ export function setupHandlers(
   let autoLoadedContextPanelItemKey: string | null = null;
   let autoLoadedContextSourceSnapshotIsExplicit = false;
   let autoLoadedPaperContextGeneration = 0;
-  let autoLoadedPaperContextPromise: Promise<PaperContextRef | null> | null =
+  let autoLoadedContextSourcePromise: Promise<ResolvedContextSource | null> | null =
     null;
   let requestAutoLoadedPaperContextRefresh: (() => void) | null = null;
 
@@ -2873,7 +2876,7 @@ export function setupHandlers(
     autoLoadedPaperContextContentSourceMode = null;
     autoLoadedContextPanelItemKey = null;
     autoLoadedContextSourceSnapshotIsExplicit = false;
-    autoLoadedPaperContextPromise = null;
+    autoLoadedContextSourcePromise = null;
     panelRoot.dataset.contextItemId = "";
   };
 
@@ -2978,14 +2981,11 @@ export function setupHandlers(
     return resolveAutoLoadedContextSourceSync()?.paperContext || null;
   };
 
+  // Resolves to this call's own resolution. The shared snapshot can be
+  // cleared or replaced while it awaits (the panel moving to another paper),
+  // so a send must not read the snapshot back after the await.
   const resolveAutoLoadedContextSourceAsync =
     async (): Promise<ResolvedContextSource | null> => {
-      await resolveAutoLoadedPaperContextAsync();
-      return autoLoadedContextSourceSnapshot ?? null;
-    };
-
-  const resolveAutoLoadedPaperContextAsync =
-    async (): Promise<PaperContextRef | null> => {
       if (!item) return null;
       if (isGlobalMode()) {
         panelRoot.dataset.contextItemId = "";
@@ -2994,31 +2994,38 @@ export function setupHandlers(
       if (autoLoadedContextSourceSnapshot !== undefined) {
         if (isAutoLoadedContextSnapshotCurrent()) {
           writeAutoLoadedContextItemId(autoLoadedContextSourceSnapshot);
-          return autoLoadedContextSourceSnapshot?.paperContext || null;
+          return autoLoadedContextSourceSnapshot;
         }
         clearAutoLoadedContextSnapshot();
       }
-      if (autoLoadedPaperContextPromise) return autoLoadedPaperContextPromise;
+      if (autoLoadedContextSourcePromise) return autoLoadedContextSourcePromise;
       const requestGeneration = autoLoadedPaperContextGeneration;
-      autoLoadedPaperContextPromise = (async () => {
+      const pending = (async () => {
         const panelItem = resolveAutoLoadedContextPanelItem();
         if (!panelItem) return null;
         const contextSource = await resolveContextSourceItemAsync(panelItem);
-        const paperContext = contextSource.paperContext || null;
         if (
           panelRoot.dataset.handlersAttached === thisGen &&
           requestGeneration === autoLoadedPaperContextGeneration
         ) {
           setAutoLoadedContextSnapshot(contextSource, panelItem);
         }
-        return paperContext;
+        return contextSource;
       })();
+      autoLoadedContextSourcePromise = pending;
       try {
-        return await autoLoadedPaperContextPromise;
+        return await pending;
       } finally {
-        autoLoadedPaperContextPromise = null;
+        // A newer resolution may own the slot by now; leave it in place.
+        if (autoLoadedContextSourcePromise === pending) {
+          autoLoadedContextSourcePromise = null;
+        }
       }
     };
+
+  const resolveAutoLoadedPaperContextAsync =
+    async (): Promise<PaperContextRef | null> =>
+      (await resolveAutoLoadedContextSourceAsync())?.paperContext || null;
 
   const refreshAutoLoadedPaperContextForCurrentItem = () => {
     clearAutoLoadedContextSnapshot();
@@ -4865,7 +4872,11 @@ export function setupHandlers(
       unsubscribeBatch();
     };
   })();
+  // Counts chat draws, so an in-place paper switch can tell that another
+  // conversation was drawn while it was loading.
+  let chatDrawCount = 0;
   const refreshChatPreservingScroll = () => {
+    chatDrawCount += 1;
     if (!item) {
       runWithChatScrollGuard(() => {
         refreshChat(body, item);
@@ -6496,6 +6507,9 @@ export function setupHandlers(
     setReasoningSelection: panelChoices.setCodexDirectReasoningSelection,
   });
 
+  let setupHandlersCleaned = false;
+  // Latest in-place paper switch; only it may re-enable the chat box.
+  let paperItemSwitchToken = 0;
   const panelHandle: PanelHandle = {
     refreshContextSourceForCurrentItem: () => {
       withScrollGuard(chatBox, conversationKey, () => {
@@ -6510,6 +6524,106 @@ export function setupHandlers(
       });
     },
     applyResolvedClaudeEffort: applyClaudeResolvedReasoningDisplay,
+    switchToPaperItem: (nextItem, nextBasePaperItem, rebuild) => {
+      // Only the plain paper-chat case moves in place. Notes, WebChat, the
+      // standalone window, an open inline edit, a runtime switch in flight,
+      // or a change of mode or runtime all keep the full remount.
+      if (
+        setupHandlersCleaned ||
+        isStandalonePanel ||
+        !item ||
+        !panelRoot.isConnected ||
+        panelRoot.dataset.ownershipBlocked ||
+        !isPaperMode() ||
+        isNoteSession() ||
+        isWebChatModeActive() ||
+        runtimeSystemSwitchInFlight ||
+        getInlineEditTarget(body) ||
+        resolveActiveNoteSession(nextItem) ||
+        resolveDisplayConversationKind(nextItem) !== "paper" ||
+        (resolveConversationSystemForItem(nextItem) || "upstream") !==
+          currentConversationSystem
+      ) {
+        return false;
+      }
+      const lease = capturePanelOperationLease(body);
+      if (!lease) return false;
+      persistDraftInputForCurrentConversation();
+      // The host is already bound to the next paper, so the mounted scope is
+      // written before syncConversationIdentity runs its ownership check.
+      item = nextItem;
+      basePaperItem =
+        nextBasePaperItem || resolveConversationBaseItem(nextItem);
+      const nextKey = getConversationKey(nextItem);
+      panelRoot.dataset.itemId = nextKey > 0 ? `${nextKey}` : "";
+      panelRoot.dataset.libraryId = nextItem.libraryID
+        ? `${nextItem.libraryID}`
+        : "";
+      panelRoot.dataset.conversationKind = "paper";
+      panelRoot.dataset.conversationSystem = currentConversationSystem;
+      const nextBaseId = Number(basePaperItem?.id || 0);
+      panelRoot.dataset.basePaperItemId = nextBaseId > 0 ? `${nextBaseId}` : "";
+      clearAutoLoadedContextSnapshot();
+      syncConversationIdentity();
+      // Before switchPaperConversation persists the composer as this paper's
+      // draft, the composer must hold this paper's draft, not the last one's.
+      restoreDraftInputForCurrentConversation();
+      // The composer's chips are per paper: show this paper's at once, so
+      // send and chip removal never act on chips the last paper left behind.
+      resetComposePreviewUI();
+      flushPanelStateRefreshNow();
+      syncRequestUiForCurrentConversation();
+      if (status) setStatus(status, t("Ready"), "ready");
+      // The previous paper's messages stay on screen until the next paper's
+      // chat is drawn; they must not take input meanwhile.
+      const switchToken = ++paperItemSwitchToken;
+      const chatDrawsAtSwitch = chatDrawCount;
+      chatBox?.setAttribute("inert", "");
+      void runInPlacePaperSwitch({
+        isLatest: () =>
+          switchToken === paperItemSwitchToken &&
+          !setupHandlersCleaned &&
+          body.querySelector("#llm-main") === panelRoot,
+        switchConversation: async () =>
+          (await switchPaperConversation()) === true,
+        canDrawFallback: () =>
+          item === nextItem && isPanelOperationLeaseCurrent(lease),
+        drawFallback: async () => {
+          await ensureConversationLoaded(nextItem, { body });
+          if (item !== nextItem || !isPanelOperationLeaseCurrent(lease)) {
+            return false;
+          }
+          restoreDraftInputForCurrentConversation();
+          refreshChatPreservingScroll();
+          resetComposePreviewUI();
+          return true;
+        },
+        // The user opened another conversation (history, Library chat) and
+        // it was drawn; leave it alone.
+        movedToOtherConversation: () =>
+          item !== nextItem && chatDrawCount !== chatDrawsAtSwitch,
+        // Nothing drew this paper's chat, so the last paper's messages must
+        // not stay under this paper's identity. Show the same restoring state
+        // a full rebuild starts from, then rebuild: Zotero already rendered
+        // this paper and sends no further render that would.
+        clearUndrawn: () => {
+          renderPanelOwnershipBlocked(
+            body,
+            "paper-switch-in-place",
+            "unresolved",
+          );
+          clearCompletedPanelLifecycleSignature(body);
+        },
+        rebuild,
+        release: () => {
+          chatBox?.removeAttribute("inert");
+        },
+        onError: (err) => {
+          appLogger.warn("LLM: in-place paper switch failed", err);
+        },
+      });
+      return true;
+    },
   };
   publishPanelHandle(body, panelHandle);
 
@@ -8295,7 +8409,6 @@ export function setupHandlers(
   }
 
   let disconnectObserverCleanup: (() => void) | null = null;
-  let setupHandlersCleaned = false;
   const cleanupSetupHandlers = () => {
     if (setupHandlersCleaned) return;
     setupHandlersCleaned = true;
