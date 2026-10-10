@@ -26,8 +26,6 @@ type SwitchSample = {
   visibleMs: number;
   /** Until the panel stopped changing for SETTLE_MS (last change time). */
   settledMs: number;
-  /** Longest gap between animation frames during the switch. */
-  maxFrameGapMs: number;
   /** Times a new panel root (#llm-main) was inserted. */
   panelRebuilds: number;
   /** Times the whole conversation was drawn into the chat box. */
@@ -95,7 +93,7 @@ describe("measurement: switching papers in the library side panel", function () 
     const until = async (check: () => boolean, message: string) => {
       const deadline = Date.now() + 20000;
       while (!check() && Date.now() < deadline) await Zotero.Promise.delay(20);
-      assert.isTrue(check(), message);
+      assert.isTrue(check(), `${message}; panel=${describePanel()}`);
     };
     const details = () => win.document.getElementById("zotero-item-details");
     const section = () =>
@@ -130,6 +128,34 @@ describe("measurement: switching papers in the library side panel", function () 
           Boolean(panel()?.dataset.handlersInitialized),
         "chat pane is open",
       );
+    };
+
+    const describePanel = () => {
+      const root = panel();
+      if (!root) return "none";
+      const wrappers = root.querySelectorAll(
+        "#llm-chat-box .llm-message-wrapper",
+      );
+      return JSON.stringify({
+        itemId: root.dataset.itemId,
+        basePaperItemId: root.dataset.basePaperItemId,
+        conversationKind: root.dataset.conversationKind,
+        conversationSystem: root.dataset.conversationSystem,
+        ownershipBlocked: root.dataset.ownershipBlocked,
+        wrappers: wrappers.length,
+        last: (wrappers[wrappers.length - 1]?.textContent || "").slice(0, 80),
+      });
+    };
+    // Waits until the panel is on the paper's chat, and returns its key.
+    const onPaperChat = async (fixture: WorkflowTestFixture) => {
+      await until(
+        () =>
+          panel()?.dataset.basePaperItemId === `${fixture.parentItemId}` &&
+          Number(panel()?.dataset.itemId) > 0 &&
+          !panel()?.dataset.ownershipBlocked,
+        `panel is on paper ${fixture.parentItemId}`,
+      );
+      return Number(panel()!.dataset.itemId);
     };
 
     const expectedWrappers = TURNS * 2;
@@ -177,19 +203,6 @@ describe("measurement: switching papers in the library side panel", function () 
         attributes: true,
         characterData: true,
       });
-      let maxFrameGapMs = 0;
-      let lastFrame = performance.now();
-      let framesRunning = true;
-      const onFrame = (now: number) => {
-        maxFrameGapMs = Math.max(maxFrameGapMs, now - lastFrame);
-        lastFrame = now;
-        if (framesRunning) win.requestAnimationFrame(onFrame);
-      };
-      win.requestAnimationFrame(onFrame);
-      await Zotero.Promise.delay(50);
-      lastFrame = performance.now();
-      maxFrameGapMs = 0;
-
       const startedAt = performance.now();
       lastMutationAt = startedAt;
       await win.ZoteroPane.selectItem(fixture.parentItemId);
@@ -203,7 +216,6 @@ describe("measurement: switching papers in the library side panel", function () 
       while (performance.now() - lastMutationAt < SETTLE_MS) {
         await Zotero.Promise.delay(25);
       }
-      framesRunning = false;
       observer.disconnect();
       assert.isTrue(showsPaper(fixture, marker), "still on the target paper");
       return {
@@ -212,7 +224,6 @@ describe("measurement: switching papers in the library side panel", function () 
         selectMs: Math.round(selectMs * 10) / 10,
         visibleMs: Math.round(visibleMs * 10) / 10,
         settledMs: Math.round((lastMutationAt - startedAt) * 10) / 10,
-        maxFrameGapMs: Math.round(maxFrameGapMs * 10) / 10,
         panelRebuilds,
         chatDraws,
       };
@@ -223,33 +234,37 @@ describe("measurement: switching papers in the library side panel", function () 
       Zotero.Prefs.set(layoutPref, "independent", true);
       const papers = ["Switch bench A", "Switch bench B"];
       for (const title of papers) {
-        const fixture = await api.createPaperWithPdfFixture({
-          title,
-          pdfTitle: title,
-        });
-        fixtures.push(fixture);
+        fixtures.push(
+          await api.createPaperWithPdfFixture({ title, pdfTitle: title }),
+        );
+      }
+      // Each paper's chat is opened once, then seeded under the key the
+      // panel itself resolved for it.
+      for (const [index, fixture] of fixtures.entries()) {
+        await win.ZoteroPane.selectItem(fixture.parentItemId);
+        await openChatPane();
+        const conversationKey = await onPaperChat(fixture);
         const base = Date.now() - TURNS * 10000;
         const turns = [];
         for (let turn = 1; turn <= TURNS; turn++) {
           turns.push(
             {
               role: "user" as const,
-              text: `${title} question ${turn}: what does the paper find?`,
+              text: `${papers[index]} question ${turn}: what does the paper find?`,
               timestamp: base + turn * 1000,
             },
             {
               role: "assistant" as const,
-              text: assistantText(title, turn),
+              text: assistantText(papers[index], turn),
               timestamp: base + turn * 1000 + 1,
             },
           );
         }
-        await api.seedStoredConversationTurns(fixture.parentItemId, turns);
+        await api.seedStoredConversationTurns(conversationKey, turns);
       }
       const markers = papers.map((title) => `${title} answer ${TURNS}.`);
 
       await win.ZoteroPane.selectItem(fixtures[0].parentItemId);
-      await openChatPane();
       await until(
         () => showsPaper(fixtures[0], markers[0]),
         "first paper's chat is shown",

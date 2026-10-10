@@ -99,7 +99,6 @@ for (const key of [
   "selectMs",
   "visibleMs",
   "settledMs",
-  "maxFrameGapMs",
   "panelRebuilds",
   "chatDraws",
 ]) {

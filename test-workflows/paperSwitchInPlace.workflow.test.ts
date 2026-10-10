@@ -15,7 +15,16 @@ describe("workflow: switching papers keeps the mounted library panel", function 
   async function until(check: () => boolean, message: string) {
     const deadline = Date.now() + 10000;
     while (!check() && Date.now() < deadline) await Zotero.Promise.delay(25);
-    assert.isTrue(check(), message);
+    const root = panel();
+    assert.isTrue(
+      check(),
+      `${message}; panel=${JSON.stringify({
+        itemId: root?.dataset.itemId,
+        basePaperItemId: root?.dataset.basePaperItemId,
+        ownershipBlocked: root?.dataset.ownershipBlocked,
+        messages: messageTexts(),
+      })}`,
+    );
   }
   const details = () => win.document.getElementById("zotero-item-details");
   const section = () =>
@@ -78,15 +87,6 @@ describe("workflow: switching papers keeps the mounted library panel", function 
         title: `In-place switch ${index}`,
       });
       fixtures.push(fixture);
-      const timestamp = Date.now() - 10000 + index * 10;
-      await api.seedStoredConversationTurns(fixture.parentItemId, [
-        { role: "user", text: `Question for paper ${index}`, timestamp },
-        {
-          role: "assistant",
-          text: `Answer for paper ${index}`,
-          timestamp: timestamp + 1,
-        },
-      ]);
     }
   });
 
@@ -98,6 +98,26 @@ describe("workflow: switching papers keeps the mounted library panel", function 
   });
 
   it("moves the same panel between papers and keeps each paper's draft", async function () {
+    // Open each paper's chat once and seed it under the key the panel uses.
+    for (const [index, fixture] of fixtures.entries()) {
+      await win.ZoteroPane.selectItem(fixture.parentItemId);
+      await openChatPane();
+      await until(
+        () =>
+          panel()?.dataset.basePaperItemId === `${fixture.parentItemId}` &&
+          Number(panel()?.dataset.itemId) > 0,
+        `panel is on paper ${index}`,
+      );
+      const timestamp = Date.now() - 10000 + index * 10;
+      await api.seedStoredConversationTurns(Number(panel()!.dataset.itemId), [
+        { role: "user", text: `Question for paper ${index}`, timestamp },
+        {
+          role: "assistant",
+          text: `Answer for paper ${index}`,
+          timestamp: timestamp + 1,
+        },
+      ]);
+    }
     await win.ZoteroPane.selectItem(fixtures[0].parentItemId);
     await openChatPane();
     await until(() => showsPaper(0), "first paper's chat is shown");

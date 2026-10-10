@@ -958,8 +958,8 @@ export type WorkflowTestApi = {
     conversationKey: number,
   ) => Promise<WorkflowTestConversationHistoryTexts>;
   /**
-   * Stores turns for an ordinary conversation without touching any panel or
-   * in-memory chat, so the conversation loads from the store when shown.
+   * Stores turns for an ordinary conversation, and adds them to its
+   * in-memory chat when a panel already loaded it. Draws nothing.
    */
   seedStoredConversationTurns: (
     conversationKey: number,

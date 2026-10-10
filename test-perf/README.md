@@ -102,7 +102,6 @@ Each switch records:
 - `selectMs`: how long the `selectItem` call itself blocked;
 - `visibleMs`: until the panel shows the other paper's full conversation;
 - `settledMs`: until the panel's last change (the panel then stays unchanged for 400 ms);
-- `maxFrameGapMs`: the longest gap between animation frames, which is how long the window froze;
 - `panelRebuilds`: how many times a new panel root was inserted;
 - `chatDraws`: how many times the whole conversation was drawn.
 

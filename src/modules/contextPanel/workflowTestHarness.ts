@@ -4000,6 +4000,13 @@ async function seedStoredConversationTurns(
   for (const turn of turns) {
     await appendWorkflowStoredMessage("upstream", conversationKey, turn);
   }
+  // A conversation the panel already loaded is served from memory.
+  if (loadedConversationKeys.has(conversationKey)) {
+    chatHistory.set(conversationKey, [
+      ...(chatHistory.get(conversationKey) || []),
+      ...turns,
+    ]);
+  }
 }
 
 async function seedStandaloneConversation(
