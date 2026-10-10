@@ -1028,7 +1028,9 @@ describe("citation page cache warming", function () {
     try {
       const first = warmPageTextCacheForAttachment(303);
       const second = warmPageTextCacheForAttachment(303);
-      await Promise.resolve();
+      // The warm first checks Zotero's full-text cache, so the worker call
+      // starts a few microtasks later; let it start before counting.
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       assert.equal(calls, 1);
       release();
