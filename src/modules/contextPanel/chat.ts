@@ -7,6 +7,7 @@ import { syncTaskProgressPanel } from "./taskProgress/panel";
 import { createProviderRequestScope } from "../../utils/providerTransport";
 import { renderMarkdownForNote } from "../../utils/markdown";
 import { HTML_NS } from "../../utils/domHelpers";
+import { appendSelectedTextSections } from "./selectedTextPreviewSections";
 import {
   t,
   getWelcomeHtml,
@@ -293,6 +294,7 @@ import {
   resolvePromptText,
 } from "./textUtils";
 import { sanitizeText } from "../../utils/textSanitization";
+import { joinSelectedTextQuestions } from "../../services/context/selectedTextAnchorFormatting";
 import {
   createContextIcon,
   createSelectedTextSourceIcon,
@@ -335,6 +337,7 @@ import {
   getActiveContextAttachmentFromTabs,
   resolveContextSourceItem,
   setSelectedTextContextEntries,
+  stripSelectedTextQuestionsForItem,
 } from "./contextResolution";
 import {
   resolveActiveNoteSession,
@@ -1081,6 +1084,123 @@ function collectAttachmentHashesFromStoredMessages(
 
 function getMessageSelectedTexts(message: Message): string[] {
   return normalizeSelectedTexts(message.selectedTexts, message.selectedText);
+}
+
+/**
+ * The question attached to the sent chip at `index`, if any. The structured
+ * contexts normally line up with `selectedTexts`; when they do not, the
+ * first context with the same text is used. Messages without structured
+ * contexts have no question.
+ */
+function getMessageSelectedTextQuery(
+  message: Message,
+  index: number,
+  text: string,
+): string {
+  const contexts = Array.isArray(message.selectedTextContexts)
+    ? message.selectedTextContexts
+    : [];
+  const byIndex = contexts[index];
+  const context =
+    byIndex && sanitizeText(byIndex.text || "").trim() === text
+      ? byIndex
+      : contexts.find(
+          (entry) => sanitizeText(entry?.text || "").trim() === text,
+        );
+  return typeof context?.userQuery === "string" ? context.userQuery.trim() : "";
+}
+
+function normalizeComparableQuestionText(value: string): string {
+  return sanitizeText(value).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * True when the message text is only the chip questions joined together,
+ * which happens when the composer was empty at send time. The sent bubble
+ * then shows each question under its own selection instead of the body.
+ */
+export function isMessageTextDerivedFromChipQuestions(
+  message: Pick<Message, "text" | "selectedTextContexts">,
+): boolean {
+  if (!Array.isArray(message.selectedTextContexts)) return false;
+  const joined = normalizeComparableQuestionText(
+    joinSelectedTextQuestions(message.selectedTextContexts, sanitizeText),
+  );
+  if (!joined) return false;
+  return normalizeComparableQuestionText(message.text || "") === joined;
+}
+
+/**
+ * The text a new inline edit puts in the composer. A turn whose text is only
+ * the joined chip questions starts empty, because the restored chips carry
+ * those questions.
+ */
+export function getInlineEditPrefillText(
+  message: Pick<Message, "text" | "selectedTextContexts">,
+): string {
+  return isMessageTextDerivedFromChipQuestions(message)
+    ? ""
+    : message.text || "";
+}
+
+/**
+ * The sent chips that render expanded, ascending. A chip with a question
+ * always shows its card, so for it "expanded" means the selection shows in
+ * full instead of the three-line clamp; a chip without a question shows a
+ * bar whose card is open. A stored toggle choice wins; otherwise the chips
+ * with a question are expanded only when openQuestionChips asks for it (the
+ * sent turn passes false, so they start clamped), plus the single chip that
+ * older state marked as expanded.
+ */
+export function getMessageSelectedTextExpandedIndices(
+  message: Pick<
+    Message,
+    | "selectedTextExpandedIndices"
+    | "selectedTextExpandedIndex"
+    | "selectedTextExpanded"
+  >,
+  hasQuestion: readonly boolean[],
+  options: { openQuestionChips: boolean } = { openQuestionChips: false },
+): number[] {
+  const count = hasQuestion.length;
+  const inRange = (index: number) =>
+    Number.isInteger(index) && index >= 0 && index < count;
+  if (Array.isArray(message.selectedTextExpandedIndices)) {
+    return Array.from(
+      new Set(message.selectedTextExpandedIndices.filter(inRange)),
+    ).sort((a, b) => a - b);
+  }
+  const expanded = new Set<number>();
+  if (options.openQuestionChips) {
+    hasQuestion.forEach((flag, index) => {
+      if (flag) expanded.add(index);
+    });
+  }
+  const legacyIndex = getMessageSelectedTextExpandedIndex(
+    message as Message,
+    count,
+  );
+  if (legacyIndex >= 0) expanded.add(legacyIndex);
+  return Array.from(expanded).sort((a, b) => a - b);
+}
+
+/**
+ * Toggles one sent chip. Chips with a question clamp and unclamp on their
+ * own; chips without one keep the old rule of one open at a time.
+ */
+export function toggleSelectedTextExpandedIndex(
+  expanded: readonly number[],
+  index: number,
+  hasQuestion: readonly boolean[],
+): number[] {
+  if (expanded.includes(index)) {
+    return expanded.filter((entry) => entry !== index);
+  }
+  const next = hasQuestion[index]
+    ? [...expanded]
+    : expanded.filter((entry) => hasQuestion[entry]);
+  next.push(index);
+  return Array.from(new Set(next)).sort((a, b) => a - b);
 }
 
 /**
@@ -5556,6 +5676,7 @@ export async function editLatestUserMessageAndRetry(
       ? selectedTextNoteContextsForMessage
       : undefined;
   retryPair.userMessage.selectedTextExpandedIndex = -1;
+  retryPair.userMessage.selectedTextExpandedIndices = undefined;
   retryPair.userMessage.screenshotImages = screenshotImagesForMessage.length
     ? screenshotImagesForMessage
     : undefined;
@@ -7055,6 +7176,7 @@ export async function editUserTurnAndRetry(opts: {
     ? selectedTextNoteContextsForMessage
     : undefined;
   userMsg.selectedTextExpandedIndex = -1;
+  userMsg.selectedTextExpandedIndices = undefined;
   userMsg.screenshotImages = screenshotImagesForMessage.length
     ? screenshotImagesForMessage
     : undefined;
@@ -9492,6 +9614,15 @@ function buildInlineEditWidget(
       }
       setInlineEditBorrowedInputSection(body, null, null, null);
       setInlineEditSavedDraft(body, "");
+      // The chips' questions belong to the turn that was edited; they must not
+      // ride along with the next message.
+      if (
+        stripSelectedTextQuestionsForItem(
+          editConversationKey ?? getConversationKey(item),
+        )
+      ) {
+        activeContextPanelStateSync.get(body)?.();
+      }
       if (superseded) {
         keepSupersededInlineEditText(
           body,
@@ -9979,12 +10110,21 @@ export function refreshChat(
     // the busy render. Their click handlers read this current eligibility.
     for (const wrapper of renderedWrappers) {
       if (wrapper.dataset.messageRole !== "user") continue;
+      const editable = canEditPromptAt(Number(wrapper.dataset.messageIndex));
       wrapper
         .querySelector(".llm-bubble.user")
-        ?.classList.toggle(
-          "llm-bubble-editable",
-          canEditPromptAt(Number(wrapper.dataset.messageIndex)),
-        );
+        ?.classList.toggle("llm-bubble-editable", editable);
+      // A hidden-body turn carries the edit cue on its expanded questions.
+      if (wrapper.querySelector(".llm-bubble.user")?.hasAttribute("hidden")) {
+        const questionEls = Array.from(
+          wrapper.querySelectorAll(
+            ".llm-user-selected-text-expanded .llm-selected-context-question",
+          ),
+        ) as Element[];
+        for (const questionEl of questionEls) {
+          questionEl.classList.toggle("llm-bubble-editable", editable);
+        }
+      }
     }
   }
   for (const [index, msg] of history.entries()) {
@@ -10047,6 +10187,16 @@ export function refreshChat(
         );
       const hasScreenshotContext = screenshotImages.length > 0;
       const hasSelectedTextContext = selectedTexts.length > 0;
+      const selectedTextQueries = selectedTexts.map((selectedText, index) =>
+        getMessageSelectedTextQuery(msg, index, selectedText),
+      );
+      // An empty-composer turn's text is only the chip questions; when the
+      // chip bars show every one of them, the body would repeat them.
+      const hideDerivedBodyText =
+        isMessageTextDerivedFromChipQuestions(msg) &&
+        normalizeComparableQuestionText(
+          selectedTextQueries.filter(Boolean).join("\n\n"),
+        ) === normalizeComparableQuestionText(msg.text || "");
       const selectedCollectionContexts = normalizeCollectionContexts(
         msg.selectedCollectionContexts,
       );
@@ -10619,13 +10769,23 @@ export function refreshChat(
       }
 
       if (hasSelectedTextContext) {
-        let selectedTextExpandedIndex = getMessageSelectedTextExpandedIndex(
+        const selectedTextHasQuestion = selectedTextQueries.map((query) =>
+          Boolean(query),
+        );
+        // A chip with a question shows its card at all times, and
+        // "expanded" unclamps its selection; every card starts clamped.
+        let selectedTextExpandedIndices = getMessageSelectedTextExpandedIndices(
           msg,
-          selectedTexts.length,
+          selectedTextHasQuestion,
+          { openQuestionChips: false },
         );
         const syncSelectedTextExpandedState = () => {
-          msg.selectedTextExpandedIndex = selectedTextExpandedIndex;
-          msg.selectedTextExpanded = selectedTextExpandedIndex === 0;
+          // The legacy single index tracks the open chip without a question.
+          const plainIndex = selectedTextExpandedIndices.find(
+            (index) => !selectedTextHasQuestion[index],
+          );
+          msg.selectedTextExpandedIndex = plainIndex ?? -1;
+          msg.selectedTextExpanded = plainIndex === 0;
         };
         syncSelectedTextExpandedState();
         const applySelectedTextStates: Array<() => void> = [];
@@ -10645,6 +10805,84 @@ export function refreshChat(
             selectedTextPaperContext
               ? formatPaperCitationLabel(selectedTextPaperContext)
               : "";
+          const expandedText = selectedTextPaperLabel
+            ? `${selectedTextPaperLabel}\n\n${selectedText}`
+            : selectedText;
+          const selectedTextQuery = selectedTextQueries[contextIndex];
+          const toggleSelectedTextExpanded = () => {
+            mutateChatWithScrollGuard(() => {
+              selectedTextExpandedIndices = toggleSelectedTextExpandedIndex(
+                selectedTextExpandedIndices,
+                contextIndex,
+                selectedTextHasQuestion,
+              );
+              msg.selectedTextExpandedIndices = selectedTextExpandedIndices;
+              syncSelectedTextExpandedState();
+              renderSelectedTextStates();
+            });
+          };
+
+          if (selectedTextQuery) {
+            // One card, no bar: the source icon and "Selected text" label,
+            // the clamped selection, a divider, and the question.
+            const questionCard = doc.createElement("div") as HTMLDivElement;
+            questionCard.className = "llm-user-selected-text-expanded";
+            questionCard.dataset.contextSource = selectedSource;
+            questionCard.dataset.contextIndex = String(contextIndex);
+            const cardIcon = createSelectedTextSourceIcon(
+              doc,
+              selectedSource,
+              "llm-user-selected-text-icon",
+            );
+            const selectionBlock = appendSelectedTextSections(
+              doc,
+              questionCard,
+              expandedText,
+              selectedTextQuery,
+              { leading: cardIcon },
+            );
+            const labelRow = questionCard.querySelector(
+              ".llm-selected-context-label-row",
+            ) as HTMLElement | null;
+            selectionBlock.tabIndex = 0;
+            selectionBlock.setAttribute("role", "button");
+            const applyCardState = () => {
+              const unclamped =
+                selectedTextExpandedIndices.includes(contextIndex);
+              selectionBlock.classList.toggle("is-unclamped", unclamped);
+              selectionBlock.setAttribute(
+                "aria-expanded",
+                unclamped ? "true" : "false",
+              );
+              const hint = unclamped
+                ? "Show less of the selected text"
+                : "Show all of the selected text";
+              selectionBlock.title = hint;
+              if (labelRow) labelRow.title = hint;
+            };
+            applySelectedTextStates.push(applyCardState);
+            const onToggleClick = (e: Event) => {
+              const mouse = e as MouseEvent;
+              if (mouse.button !== 0) return;
+              // A drag that selected text is a copy, not a toggle.
+              const selection = doc.defaultView?.getSelection?.();
+              if (selection && !selection.isCollapsed) return;
+              e.preventDefault();
+              e.stopPropagation();
+              toggleSelectedTextExpanded();
+            };
+            selectionBlock.addEventListener("click", onToggleClick);
+            labelRow?.addEventListener("click", onToggleClick);
+            selectionBlock.addEventListener("keydown", (e: KeyboardEvent) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              e.stopPropagation();
+              toggleSelectedTextExpanded();
+            });
+            wrapper.appendChild(questionCard);
+            return;
+          }
+
           const selectedBar = doc.createElementNS(
             HTML_NS,
             "button",
@@ -10652,6 +10890,7 @@ export function refreshChat(
           selectedBar.type = "button";
           selectedBar.className = "llm-user-selected-text";
           selectedBar.dataset.contextSource = selectedSource;
+          selectedBar.dataset.contextIndex = String(contextIndex);
 
           const selectedIcon = createSelectedTextSourceIcon(
             doc,
@@ -10667,13 +10906,12 @@ export function refreshChat(
 
           const selectedExpanded = doc.createElement("div") as HTMLDivElement;
           selectedExpanded.className = "llm-user-selected-text-expanded";
-          selectedExpanded.textContent = selectedTextPaperLabel
-            ? `${selectedTextPaperLabel}\n\n${selectedText}`
-            : selectedText;
+          selectedExpanded.dataset.contextIndex = String(contextIndex);
+          selectedExpanded.textContent = expandedText;
 
           selectedBar.append(selectedIcon, selectedContent);
           const applySelectedTextState = () => {
-            const expanded = selectedTextExpandedIndex === contextIndex;
+            const expanded = selectedTextExpandedIndices.includes(contextIndex);
             selectedBar.classList.toggle("expanded", expanded);
             selectedBar.setAttribute(
               "aria-expanded",
@@ -10684,14 +10922,6 @@ export function refreshChat(
             selectedBar.title = expanded
               ? "Collapse selected text"
               : "Expand selected text";
-          };
-          const toggleSelectedTextExpanded = () => {
-            mutateChatWithScrollGuard(() => {
-              selectedTextExpandedIndex =
-                selectedTextExpandedIndex === contextIndex ? -1 : contextIndex;
-              syncSelectedTextExpandedState();
-              renderSelectedTextStates();
-            });
           };
           applySelectedTextStates.push(applySelectedTextState);
           selectedBar.addEventListener("mousedown", (e: Event) => {
@@ -10720,6 +10950,38 @@ export function refreshChat(
       const canDeletePromptTurn = Boolean(
         hasPromptTurnPair && !assistantPairMsg?.streaming,
       );
+      const startInlineEditFromClick = (e: Event, editSurface: Element) => {
+        if (
+          !editSurface.classList.contains("llm-bubble-editable") ||
+          !item ||
+          !isPanelConversationCurrent(body, item) ||
+          chatHistory.get(conversationKey)?.some((message) => message.streaming)
+        )
+          return;
+        if ((e.target as Element | null)?.closest("a, button")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const win = body.ownerDocument?.defaultView;
+        if (!win) return;
+        try {
+          syncComposeContextForInlineEdit(body, item, msg);
+        } catch (syncErr) {
+          appLogger.warn(
+            "LLM: Failed to sync compose context for inline edit",
+            syncErr,
+          );
+        }
+        setInlineEditTarget(body, {
+          conversationKey,
+          userTimestamp: msg.timestamp,
+          assistantTimestamp: Math.floor(assistantPairMsg!.timestamp),
+          currentText: getInlineEditPrefillText(msg),
+          latestUserTimestamp: getLatestUserTurnTimestamp(
+            chatHistory.get(conversationKey) || [],
+          ),
+        });
+        win.setTimeout(() => refreshConversationPanels(body, item), 0);
+      };
       if (isInlineEditBubble) {
         inlineEditEl = buildInlineEditWidget(
           doc,
@@ -10729,49 +10991,50 @@ export function refreshChat(
           assistantPairMsg!,
           conversationKey,
         );
+      } else if (hideDerivedBodyText) {
+        // Each question already shows under its own selection above.
+        bubble.hidden = true;
+        bubble.style.display = "none";
+        // The hidden body no longer carries the edit entry; each expanded
+        // question does.
+        if (hasAssistantPair) {
+          const questionEls = Array.from(
+            wrapper.querySelectorAll(
+              ".llm-user-selected-text-expanded .llm-selected-context-question",
+            ),
+          ) as Element[];
+          for (const questionEl of questionEls) {
+            questionEl.classList.toggle(
+              "llm-bubble-editable",
+              canEditUserPrompt,
+            );
+            questionEl.addEventListener("click", (e: Event) => {
+              e.stopPropagation();
+              startInlineEditFromClick(e, questionEl);
+            });
+          }
+        }
       } else {
         renderUserBubbleContent(bubble, sanitizeText(msg.text || ""), doc);
         bubble.classList.toggle("llm-bubble-editable", canEditUserPrompt);
         if (hasAssistantPair) {
-          bubble.addEventListener("click", (e: Event) => {
-            if (
-              !bubble.classList.contains("llm-bubble-editable") ||
-              !item ||
-              !isPanelConversationCurrent(body, item) ||
-              chatHistory
-                .get(conversationKey)
-                ?.some((message) => message.streaming)
-            )
-              return;
-            if ((e.target as Element | null)?.closest("a, button")) return;
-            e.preventDefault();
-            e.stopPropagation();
-            const win = body.ownerDocument?.defaultView;
-            if (!win) return;
-            try {
-              syncComposeContextForInlineEdit(body, item, msg);
-            } catch (syncErr) {
-              appLogger.warn(
-                "LLM: Failed to sync compose context for inline edit",
-                syncErr,
-              );
-            }
-            setInlineEditTarget(body, {
-              conversationKey,
-              userTimestamp: msg.timestamp,
-              assistantTimestamp: Math.floor(assistantPairMsg!.timestamp),
-              currentText: msg.text || "",
-              latestUserTimestamp: getLatestUserTurnTimestamp(
-                chatHistory.get(conversationKey) || [],
-              ),
-            });
-            win.setTimeout(() => refreshConversationPanels(body, item), 0);
-          });
+          bubble.addEventListener("click", (e: Event) =>
+            startInlineEditFromClick(e, bubble),
+          );
         }
       }
       if (hasPromptTurnPair) {
-        bubble.addEventListener("contextmenu", (e: Event) => {
+        // A hidden body leaves the turn's chips as the prompt surface.
+        const promptMenuSurface = bubble.hidden ? wrapper : bubble;
+        promptMenuSurface.addEventListener("contextmenu", (e: Event) => {
           const me = e as MouseEvent;
+          // Keep the native menu on the quoted text and the question.
+          if (
+            (me.target as Element | null)?.closest?.(
+              ".llm-user-selected-text-expanded",
+            )
+          )
+            return;
           me.preventDefault();
           me.stopPropagation();
           if (typeof me.stopImmediatePropagation === "function") {

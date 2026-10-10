@@ -907,7 +907,10 @@ export function setupHandlers(
   let renderQueuedFollowUpInputs: () => void = () => {};
   let scheduleQueuedFollowUpDrain: () => void = () => {};
   let isQueuedFollowUpSendAvailable: () => boolean = () => false;
-  let queueFollowUpInput: (text: string) => void = () => {};
+  let queueFollowUpInput: (
+    text: string,
+    options?: { preserveInputDraft?: boolean },
+  ) => boolean = () => false;
 
   let quotaControl: ReturnType<typeof attachFooterQuotaControl> | null = null;
   let quotaPendingConversationKey: number | null = null;
@@ -4758,13 +4761,14 @@ export function setupHandlers(
   body.addEventListener(TASK_PROGRESS_REMOVE_PAPER_EVENT, (event: Event) => {
     void removeTaskProgressPaper(event);
   });
-  // "Source" on a passage the card lists: open its paper at the passage.
+  // "Source" on a passage the card lists, or a citation under its paper:
+  // open the paper at the passage.
   body.addEventListener(TASK_PROGRESS_OPEN_PASSAGE_EVENT, (event: Event) => {
     const target = (event as CustomEvent<TaskPaperPassageTarget>).detail;
     if (!target || !(Number(target.itemId) > 0)) return;
     const button =
       (event.target as Element | null)?.closest?.<HTMLButtonElement>(
-        "button.llm-task-paper-open",
+        "button.llm-task-paper-open, button.llm-task-paper-citation",
       ) || null;
     void navigateToTaskPaperPassage({ body, target, button }).catch(
       (error: unknown) => {
@@ -7186,11 +7190,14 @@ export function setupHandlers(
     );
   };
 
-  queueFollowUpInput = (text: string) => {
+  queueFollowUpInput = (text, options) => {
     const nextQueue = enqueueQueuedFollowUp(getQueuedFollowUpThreadKey(), text);
-    if (!nextQueue.length) return;
-    inputBox.value = "";
-    persistDraftInputForCurrentConversation();
+    if (!nextQueue.length) return false;
+    // Text that did not come from the composer must not erase its draft.
+    if (!options?.preserveInputDraft) {
+      inputBox.value = "";
+      persistDraftInputForCurrentConversation();
+    }
     renderQueuedFollowUpInputs();
     if (status) {
       setStatus(
@@ -7201,6 +7208,7 @@ export function setupHandlers(
         "ready",
       );
     }
+    return true;
   };
 
   syncRequestUiForCurrentConversation();
@@ -7220,7 +7228,7 @@ export function setupHandlers(
     beginRequest: beginPanelRequest,
     isRequestOwner,
     finishRequest: finishPanelRequest,
-    queueFollowUpInput: (text) => queueFollowUpInput(text),
+    queueFollowUpInput: (text, options) => queueFollowUpInput(text, options),
     resolveContextSource: resolveAutoLoadedContextSourceAsync,
     closeSlashMenu,
     closePaperPicker,
@@ -7899,6 +7907,9 @@ export function setupHandlers(
     if (ke.key === "Enter" && !ke.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
+      // A held Enter that started in an inline selection prompt lands here
+      // as auto-repeat after that box closes; it must not send the draft.
+      if (ke.repeat) return;
       void executeSend();
     }
   });

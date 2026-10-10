@@ -1036,6 +1036,92 @@ export type WorkflowTestApi = {
     pageIndex: number;
     selectedText: string;
   }) => Promise<WorkflowTestReaderPopupStandaloneRoutingDiagnostics>;
+  exerciseReaderPopupInlinePrompt: (input: {
+    panelId: string;
+    attachmentItemId: number;
+    pageIndex: number;
+    selectedText: string;
+    prompt: string;
+  }) => Promise<{
+    chipAddedBeforeEnter: boolean;
+    overlayMounted: boolean;
+    /** URL of the document the overlay mounted in (the reader UI document). */
+    overlayDocumentUrl: string;
+    /** The selection quoted above the editor, and its label. */
+    quoteText: string;
+    quoteLabel: string;
+    buttonLabel: string;
+    /** Editing keys dispatched in the overlay editor, before the prompt. */
+    editorKeys: Array<{ key: string; defaultPrevented: boolean }>;
+    /** Reader tool and annotation selection, before and after those keys. */
+    readerKeyStateBefore: string;
+    readerKeyStateAfter: string;
+    /** Whether Enter in the box sent anything within 1 s (it must not). */
+    sentOnEnter: boolean;
+    /** The chip's userQuery after Enter. */
+    attachedQuestion: string;
+    /** Chips holding the selected text after Enter. */
+    chipCount: number;
+    /** `.llm-selected-context-question` text in the panel preview, or null
+     * when the preview renders no question element. */
+    previewQuestionText: string | null;
+    /** Section labels in the panel preview card, in order. */
+    previewLabels: string[];
+    overlayRemovedAfterEnter: boolean;
+    composerAfterEnter: string;
+    statusAfterEnter: string;
+    /** The later main Send with an empty composer: the model-facing
+     * question, the user turn as shown in the chat, and the chip texts. */
+    sentQuestion: string;
+    sentDisplayQuestion: string;
+    sentSelectedTexts: string[];
+    /** The sent user bubble once rendered: its visible body text ("" when
+     * hidden or absent), the questions inside its shown chip cards, and the
+     * number of bars drawn for chips that have a question (one card and no
+     * bar each, so 0). */
+    sentBubbleBodyText: string;
+    sentBubbleChipQuestions: string[];
+    sentBubbleBarCount: number;
+  }>;
+  exerciseReaderPopupDuplicateAttach: (input: {
+    panelId: string;
+    attachmentItemId: number;
+    pageIndex: number;
+    selectedText: string;
+    firstPrompt: string;
+    secondPrompt: string;
+  }) => Promise<{
+    firstMounted: boolean;
+    /** The chip question after the first add and Enter. */
+    firstQuestion: string;
+    /** The second Add Text on the same selection reopened the box. */
+    secondMounted: boolean;
+    secondQuoteText: string;
+    statusBeforeSecondEnter: string;
+    secondOverlayRemovedAfterEnter: boolean;
+    chipCount: number;
+    finalQuestion: string;
+    sent: boolean;
+  }>;
+  exerciseReaderPopupPromptDismissal: (input: {
+    panelId: string;
+    attachmentItemId: number;
+    pageIndex: number;
+    firstSelectedText: string;
+    secondSelectedText: string;
+  }) => Promise<{
+    firstMounted: boolean;
+    escapeClosed: boolean;
+    firstChipsAfterEscape: number;
+    secondMounted: boolean;
+    /** The box lives in reader.html; the page click lands in viewer.html. */
+    overlayAndPageInDifferentDocuments: boolean;
+    pageClickClosed: boolean;
+    secondChipsAfterPageClick: number;
+    /** Chips that carry a question; dismissal attaches none. */
+    chipsWithQuestion: number;
+    sent: boolean;
+  }>;
   exerciseHighlightAwareContextRetrieval: (input: {
     panelId: string;
     attachmentItemId: number;
@@ -1044,6 +1130,70 @@ export type WorkflowTestApi = {
     question: string;
     trigger: "popup" | "action-bar";
   }) => Promise<WorkflowTestHighlightAwareRetrievalDiagnostics>;
+  exerciseAssistantSelectionInlinePrompt: (input: {
+    panelId: string;
+    assistantText: string;
+    selectedText: string;
+    prompt: string;
+  }) => Promise<{
+    popupVisible: boolean;
+    promptExpandedAfterQuote: boolean;
+    chipAddedBeforeAttach: boolean;
+    /** The section label and the quoted selection shown above the input. */
+    boxSelectedTextLabel: string;
+    boxSelectedText: string;
+    hintText: string;
+    /** Whether the send interceptor fired within 1 s of Enter in the box. */
+    sentWithinOneSecond: boolean;
+    /** The chip's userQuery after Enter. */
+    attachedQuestion: string;
+    /** Chips holding the selected text after Enter. */
+    chipCount: number;
+    /** `.llm-selected-context-question` text in the panel's chip preview. */
+    previewQuestionText: string;
+    previewLabels: string[];
+    popupHiddenAfterAttach: boolean;
+    composerAfterAttach: string;
+    statusAfterAttach: string;
+    composerFocusedAfterAttach: boolean;
+    /** The model-facing question of the main Send with an empty composer. */
+    sentQuestion: string;
+    /** The user turn as shown in the chat (displayQuestion). */
+    sentDisplayQuestion: string;
+    sentSelectedTexts: string[];
+    /** The sent user bubble once rendered: its visible body text ("" when
+     * hidden or absent), the questions inside its shown chip cards, and the
+     * number of bars drawn for chips that have a question (one card and no
+     * bar each, so 0). */
+    sentBubbleBodyText: string;
+    sentBubbleChipQuestions: string[];
+    sentBubbleBarCount: number;
+  }>;
+  exerciseAssistantSelectionPromptDismissal: (input: {
+    panelId: string;
+    assistantText: string;
+    firstSelectedText: string;
+    secondSelectedText: string;
+    /** Typed into the box that a duplicate quote of the first text opens. */
+    duplicatePrompt: string;
+  }) => Promise<{
+    firstExpanded: boolean;
+    escapeClosed: boolean;
+    firstChipsAfterEscape: number;
+    firstQuestionAfterEscape: string;
+    /** Quoting the same text again opens the box for the existing chip. */
+    duplicateExpanded: boolean;
+    duplicateStatus: string;
+    firstChipsAfterDuplicate: number;
+    duplicateAttachClosed: boolean;
+    firstChipsAfterDuplicateAttach: number;
+    firstQuestionAfterDuplicateAttach: string;
+    secondExpanded: boolean;
+    emptyEnterClosed: boolean;
+    secondChipsAfterEmptyEnter: number;
+    secondQuestionAfterEmptyEnter: string;
+    sent: boolean;
+  }>;
   cleanupFixture: (
     fixture:
       | WorkflowTestFixture

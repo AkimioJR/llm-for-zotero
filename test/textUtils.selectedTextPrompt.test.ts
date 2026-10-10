@@ -1,8 +1,11 @@
 import { assert } from "chai";
 import {
   buildQuestionWithSelectedTextContexts,
+  DEFAULT_SELECTED_TEXT_PROMPT,
+  resolvePromptText,
   setTokenUsage,
 } from "../src/modules/contextPanel/textUtils";
+import type { SelectedTextContext } from "../src/shared/types";
 import { initI18n } from "../src/utils/i18n";
 
 describe("textUtils selected text prompt composition", function () {
@@ -66,6 +69,79 @@ describe("textUtils selected text prompt composition", function () {
     assert.include(prompt, "Selected text from a Zotero note:");
     assert.notInclude(prompt, "editing focus");
     assert.include(prompt, "User question:\nUse this for context.");
+  });
+
+  it("puts a chip's question under its closing quotes in every prompt shape", function () {
+    const shapes: Array<[SelectedTextContext["source"], string]> = [
+      ["pdf", "Selected text from the PDF reader:"],
+      ["note-edit", "Selected text from the current Zotero note editor"],
+      ["note", "Selected text from a Zotero note:"],
+    ];
+    for (const [source, heading] of shapes) {
+      const prompt = buildQuestionWithSelectedTextContexts(
+        ["Quoted words."],
+        [source],
+        "Composer text",
+        {
+          selectedTextContexts: [
+            { text: "Quoted words.", source, userQuery: "Why this?" },
+          ],
+        },
+      );
+      assert.include(prompt, heading, source);
+      assert.include(
+        prompt,
+        '"""\nQuoted words.\n"""\nQuestion about this text:\nWhy this?',
+        source,
+      );
+      assert.include(prompt, "User question:\nComposer text", source);
+    }
+
+    const multi = buildQuestionWithSelectedTextContexts(
+      ["First quote.", "Second quote."],
+      ["pdf", "model"],
+      "Compare them.",
+      {
+        selectedTextContexts: [
+          { text: "First quote.", source: "pdf", userQuery: "Is it new?" },
+          { text: "Second quote.", source: "model" },
+        ],
+      },
+    );
+    assert.include(
+      multi,
+      'Text Context 1 [source=pdf_reader]:\n"""\nFirst quote.\n"""\nQuestion about this text:\nIs it new?\n\nText Context 2',
+    );
+    assert.include(
+      multi,
+      'Text Context 2 [source=model_response]:\n"""\nSecond quote.\n"""\n\nUser question:\nCompare them.',
+    );
+    assert.equal(multi.split("Question about this text:").length, 2);
+  });
+
+  it("uses the chip questions as the prompt when the composer is empty", function () {
+    const contexts: SelectedTextContext[] = [
+      { text: "First quote.", source: "pdf", userQuery: "First question?" },
+      { text: "Plain quote.", source: "pdf" },
+      { text: "Third quote.", source: "model", userQuery: "Third question?" },
+    ];
+
+    assert.equal(
+      resolvePromptText("  ", "First quote.", false, contexts),
+      "First question?\n\nThird question?",
+    );
+    assert.equal(
+      resolvePromptText("Typed text", "First quote.", false, contexts),
+      "Typed text",
+    );
+    assert.equal(
+      resolvePromptText("", "Plain quote.", false, [contexts[1]!]),
+      DEFAULT_SELECTED_TEXT_PROMPT,
+    );
+    assert.equal(
+      resolvePromptText("", "Plain quote.", false),
+      DEFAULT_SELECTED_TEXT_PROMPT,
+    );
   });
 
   it("labels token usage as estimated active context pressure", function () {

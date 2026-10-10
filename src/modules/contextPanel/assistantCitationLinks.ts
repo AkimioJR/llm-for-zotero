@@ -98,7 +98,7 @@ import {
 import type { Message, PaperContextRef, QuoteCitation } from "./types";
 import {
   buildTaskPaperPassageSearchTexts,
-  taskPaperPassagePageLabel,
+  taskPaperPassageTargetPageLabel,
   type TaskPaperPassageTarget,
 } from "./taskProgress/passageSource";
 
@@ -2792,7 +2792,7 @@ export async function navigateToTaskPaperPassage(params: {
       target.cleanedSnippet,
       target.rawSnippet,
     );
-    const pageLabel = taskPaperPassagePageLabel(target.label);
+    const pageLabel = taskPaperPassageTargetPageLabel(target);
     const displayLabel = target.label || "Task progress passage";
 
     if (searchTexts.length) {
