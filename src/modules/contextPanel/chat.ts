@@ -21,6 +21,7 @@ import {
   pruneConversation,
   updateLatestUserMessage as updateStoredLatestUserMessage,
   updateLatestAssistantMessage as updateStoredLatestAssistantMessage,
+  updateAssistantMessageQuoteLocations as updateStoredAssistantMessageQuoteLocations,
   StoredChatMessage,
   type UpdateLatestAssistantMessageOptions,
   type UpdateLatestUserMessageOptions,
@@ -34,9 +35,11 @@ import {
   appendCodexMessage,
   clearCodexConversationSessionMetadata,
   pruneCodexConversation,
+  updateCodexAssistantMessageQuoteLocations,
   updateLatestCodexAssistantMessage,
   updateLatestCodexUserMessage,
 } from "../../codexAppServer/store";
+import { updateClaudeAssistantMessageQuoteLocations } from "../../claudeCode/store";
 import { archiveCodexAppServerThread } from "../../codexAppServer/nativeClient";
 import {
   enqueueConversationCleanupJob,
@@ -355,9 +358,14 @@ import { renderAgentTrace, disposeAgentTrace } from "./agentTrace/render";
 import {
   conversationHasStreamingMessage,
   finalizeAssistantMessageQuoteCitations,
+  prewarmQuoteSourcePageText,
   resetAssistantQuoteDisplay,
   validateLoadedConversationQuoteMessages,
 } from "./quoteValidation/scheduling";
+import {
+  reconcilePersistedQuoteLocations,
+  type QuoteLocationWriteRequest,
+} from "./quoteValidation/locationWriteBack";
 import { applyStableAnimationPhase } from "./stableAnimationPhase";
 import { stripReceiptStatusForDisplay } from "../../agent/contracts/actionEvaluation";
 import { renderRenderedMarkdownInto } from "./renderedMarkdown";
@@ -2025,6 +2033,59 @@ async function updateStoredLatestAssistantMessageByConversation(
   );
 }
 
+/**
+ * Saves quote locations the display gate verified into one stored assistant
+ * row, through the conversation's own store. Only that row's quote citations
+ * change. Nothing is written when the conversation's write generation moved
+ * since the gate pass, when its writes are frozen, or when it is being
+ * deleted. Returns whether a row was written.
+ */
+export async function updateStoredAssistantQuoteLocations(
+  request: QuoteLocationWriteRequest,
+): Promise<boolean> {
+  const conversationKey = Math.floor(Number(request.conversationKey));
+  if (!Number.isFinite(conversationKey) || conversationKey <= 0) return false;
+  if (!request.writes.length) return false;
+  return withConversationWriteLock(conversationKey, async () => {
+    if (
+      !isConversationWriteGenerationCurrent(
+        conversationKey,
+        request.expectedGeneration,
+      ) ||
+      areConversationWritesFrozen(conversationKey) ||
+      pendingDeletionStore.isConversationPendingDeletion(conversationKey) ||
+      isConversationKeyRetiredInMemory(conversationKey)
+    ) {
+      return false;
+    }
+    const storageSystem = resolveConversationStorageSystem({
+      conversationKey,
+    });
+    if (!storageSystem) return false;
+    const target = {
+      timestamp: request.timestamp,
+      messageId: request.messageId,
+    };
+    return storageSystem === "claude_code"
+      ? updateClaudeAssistantMessageQuoteLocations(
+          conversationKey,
+          target,
+          request.writes,
+        )
+      : storageSystem === "codex"
+        ? updateCodexAssistantMessageQuoteLocations(
+            conversationKey,
+            target,
+            request.writes,
+          )
+        : updateStoredAssistantMessageQuoteLocations(
+            conversationKey,
+            target,
+            request.writes,
+          );
+  });
+}
+
 /** Whether the conversation's store holds an assistant row at `timestamp`. */
 async function isAssistantRowStored(
   conversationKey: number,
@@ -2538,6 +2599,9 @@ export async function ensureConversationLoaded(
             sourceMessageTimestamp: Math.floor(storedMessage.timestamp),
           })) || undefined;
       }
+      // A saved quote location holds only while its PDF is the file it was
+      // found in; drop the others in memory so the gate checks them again.
+      await reconcilePersistedQuoteLocations(storedMessages);
       // Recover the application-level document outbox after a crash between
       // durable message insertion and publication evidence/event delivery.
       for (const storedMessage of storedMessages) {
@@ -7708,15 +7772,30 @@ function buildAgentEngineDeps(
       ensureConversationLoaded(targetItem, { body: panelBody }),
     getConversationKey,
     buildLLMHistoryMessages,
-    buildAgentRuntimeRequest: (requestParams) =>
-      buildAgentRuntimeRequest(
+    buildAgentRuntimeRequest: async (requestParams) => {
+      const runtimeRequest = await buildAgentRuntimeRequest(
         panelBody && !requestParams.surface
           ? {
               ...requestParams,
               surface: resolveSelectionSurfaceForBody(panelBody),
             }
           : requestParams,
-      ),
+      );
+      // The agent turn's papers are final here: read their PDF page text
+      // while the agent works, so its quote cards can be checked at the end.
+      void prewarmQuoteSourcePageText({
+        conversationKey: runtimeRequest.conversationKey,
+        paperContexts: [
+          runtimeRequest.selectedTextPaperContexts?.filter(
+            (paper): paper is PaperContextRef => Boolean(paper),
+          ),
+          runtimeRequest.selectedPaperContexts,
+          runtimeRequest.fullTextPaperContexts,
+          runtimeRequest.citationPaperContexts,
+        ],
+      });
+      return runtimeRequest;
+    },
     resolveLocalPdfResources: (paperContexts) =>
       createLocalPdfResourceResolver().resolve(paperContexts),
     preflightLocalPdfCapability: async () => {
@@ -9088,6 +9167,19 @@ export async function sendQuestion(
       userMessage.selectedTextPaperContexts,
       contextPlan.citationPaperContexts,
     );
+    // The turn's papers are final: read their PDF page text while the model
+    // answers, so its quote cards can be checked the moment it ends.
+    void prewarmQuoteSourcePageText({
+      conversationKey,
+      paperContexts: [
+        userMessage.selectedTextPaperContexts?.filter(
+          (paper): paper is PaperContextRef => Boolean(paper),
+        ),
+        contextPlan.paperContexts,
+        contextPlan.fullTextPaperContexts,
+        userMessage.citationPaperContexts,
+      ],
+    });
     await updateStoredLatestUserMessageByConversation(
       conversationKey,
       toStoredUserRowPatch(userMessage, { conversationGeneration }),
