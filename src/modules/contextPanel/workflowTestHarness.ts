@@ -4958,6 +4958,118 @@ function installRecordingSendInterceptor(): void {
 }
 
 /**
+ * Lets the next send run through the real sendQuestion, so the user turn is
+ * rendered, and stops it at the provider boundary (no network). Returns the
+ * restore step for the final-request interceptor.
+ */
+function installRenderingSendInterceptor(): () => void {
+  const previousFinalRequestInterceptor =
+    getWorkflowTestFinalRequestInterceptor();
+  lastSend = null;
+  lastFinalRequest = null;
+  setWorkflowTestSendInterceptor((opts) => {
+    opts.apiBase = "http://127.0.0.1:9/v1";
+    opts.apiKey = "workflow-test-key";
+    opts.authMode = "api_key";
+    lastSend = opts;
+    return true;
+  });
+  setWorkflowTestFinalRequestInterceptor((snapshot) => {
+    lastFinalRequest = snapshot;
+    return true;
+  });
+  return () =>
+    setWorkflowTestFinalRequestInterceptor(previousFinalRequestInterceptor);
+}
+
+/**
+ * Waits for the newest user turn that shows `selectedText` as a chip, then
+ * reads its visible body text and the questions in its expanded chip bars.
+ */
+async function readSentUserBubble(
+  body: Element,
+  selectedText: string,
+  timeoutMs = 5000,
+): Promise<{
+  sentBubbleBodyText: string;
+  sentBubbleChipQuestions: string[];
+  sentBubbleBarCount: number;
+}> {
+  const win = body.ownerDocument?.defaultView;
+  const isShown = (element: Element | null): element is HTMLElement => {
+    if (!element) return false;
+    const html = element as HTMLElement;
+    if (html.hidden) return false;
+    return win?.getComputedStyle(html)?.display !== "none";
+  };
+  const findWrapper = (): HTMLElement | null => {
+    const wrappers = Array.from(
+      body.querySelectorAll("#llm-chat-box .llm-message-wrapper.user"),
+    ) as HTMLElement[];
+    for (const wrapper of wrappers.reverse()) {
+      // A chip without a question shows a bar; one with a question shows
+      // only its card.
+      const chipTexts = Array.from(
+        wrapper.querySelectorAll(
+          ".llm-user-selected-text-content, .llm-user-selected-text-expanded .llm-selected-context-text",
+        ),
+      );
+      if (
+        chipTexts.some((node) =>
+          (node?.textContent || "").includes(selectedText),
+        )
+      ) {
+        return wrapper;
+      }
+    }
+    return null;
+  };
+  const startedAt = Date.now();
+  let wrapper = findWrapper();
+  while (!wrapper && Date.now() - startedAt <= timeoutMs) {
+    await Zotero.Promise.delay(25);
+    wrapper = findWrapper();
+  }
+  if (!wrapper) {
+    throw new Error("The sent user turn with the chip was not rendered");
+  }
+  const bubble = wrapper.querySelector(".llm-bubble.user");
+  // Bars that belong to a chip whose card carries a question; one card per
+  // such chip means none.
+  const questionChipIndices = new Set(
+    (
+      Array.from(
+        wrapper.querySelectorAll(".llm-user-selected-text-expanded"),
+      ) as HTMLElement[]
+    )
+      .filter((card) => card.querySelector(".llm-selected-context-question"))
+      .map((card) => card.dataset.contextIndex),
+  );
+  const sentBubbleBarCount = (
+    Array.from(
+      wrapper.querySelectorAll(".llm-user-selected-text"),
+    ) as HTMLElement[]
+  ).filter((bar) => questionChipIndices.has(bar.dataset.contextIndex)).length;
+  return {
+    sentBubbleBarCount,
+    sentBubbleBodyText: isShown(bubble)
+      ? (bubble.textContent || "").trim()
+      : "",
+    sentBubbleChipQuestions: (
+      Array.from(
+        wrapper.querySelectorAll(".llm-user-selected-text-expanded"),
+      ) as HTMLElement[]
+    )
+      .filter((expanded) => isShown(expanded))
+      .flatMap((expanded) =>
+        Array.from(
+          expanded.querySelectorAll(".llm-selected-context-question"),
+        ).map((node) => (node?.textContent || "").trim()),
+      ),
+  };
+}
+
+/**
  * Reader Add Text opens the inline box with the selection quoted above the
  * editor. Enter attaches the typed text to the new chip as its question and
  * sends nothing; the composer draft stays. A later send with an empty
@@ -5031,6 +5143,9 @@ async function exerciseReaderPopupInlinePrompt(
         sentQuestion: "",
         sentDisplayQuestion: "",
         sentSelectedTexts: [],
+        sentBubbleBodyText: "",
+        sentBubbleChipQuestions: [],
+        sentBubbleBarCount: 0,
       };
     }
     const box = readReaderPromptBox(popupDoc);
@@ -5091,8 +5206,17 @@ async function exerciseReaderPopupInlinePrompt(
         panel.body.querySelector("#llm-status")?.textContent?.trim() || "",
     };
 
-    // The main Send with an empty composer carries the chip question.
-    const send = await ask(input.panelId, "");
+    // The main Send with an empty composer carries the chip question; it
+    // runs into the real send so the user turn renders.
+    const restoreFinalRequest = installRenderingSendInterceptor();
+    let send: SendQuestionOptions;
+    let sentBubble: Awaited<ReturnType<typeof readSentUserBubble>>;
+    try {
+      send = await ask(input.panelId, "");
+      sentBubble = await readSentUserBubble(panel.body, input.selectedText);
+    } finally {
+      restoreFinalRequest();
+    }
     return {
       chipAddedBeforeEnter,
       overlayMounted: true,
@@ -5106,6 +5230,7 @@ async function exerciseReaderPopupInlinePrompt(
       sentQuestion: send.question ?? "",
       sentDisplayQuestion: send.displayQuestion ?? "",
       sentSelectedTexts: send.selectedTexts ?? [],
+      ...sentBubble,
     };
   } finally {
     setWorkflowTestSendInterceptor(previousInterceptor);
@@ -5528,6 +5653,7 @@ async function exerciseAssistantSelectionInlinePrompt(input: {
     throw new Error("selectedText must occur inside assistantText");
   }
   const previousInterceptor = getWorkflowTestSendInterceptor();
+  let restoreFinalRequest: (() => void) | null = null;
   // Same shape as the assistant bubbles the chat renders, so the popup
   // controller's `.llm-bubble.assistant` lookup accepts the selection.
   const bubble = doc.createElement("div") as HTMLDivElement;
@@ -5647,8 +5773,9 @@ async function exerciseAssistantSelectionInlinePrompt(input: {
       panel.body.querySelector("#llm-status")?.textContent?.trim() || "";
     const composerFocusedAfterAttach = doc.activeElement === composer;
 
-    // The main Send with an empty composer sends the chip's question.
-    lastSend = null;
+    // The main Send with an empty composer sends the chip's question; it
+    // runs into the real send so the user turn renders.
+    restoreFinalRequest = installRenderingSendInterceptor();
     const sendSettledSequenceBefore = getWorkflowTestSendSettledSequence();
     composer.value = "";
     composer.dispatchEvent(new EventCtor("input", { bubbles: true }));
@@ -5665,6 +5792,7 @@ async function exerciseAssistantSelectionInlinePrompt(input: {
     ) {
       await Zotero.Promise.delay(10);
     }
+    const sentBubble = await readSentUserBubble(panel.body, input.selectedText);
     return {
       popupVisible,
       promptExpandedAfterQuote,
@@ -5684,8 +5812,10 @@ async function exerciseAssistantSelectionInlinePrompt(input: {
       sentQuestion: send.question,
       sentDisplayQuestion: send.displayQuestion ?? "",
       sentSelectedTexts: send.selectedTexts ?? [],
+      ...sentBubble,
     };
   } finally {
+    restoreFinalRequest?.();
     setWorkflowTestSendInterceptor(previousInterceptor);
     win.getSelection()?.removeAllRanges();
     bubble.remove();

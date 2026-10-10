@@ -123,6 +123,61 @@ describe("selected-text chip preview sections", function () {
     assert.include(collectFakeText(container), "Why does it divide?");
   });
 
+  it("puts a leading node and the label text on one row of the first label", function () {
+    const container = new FakeElement("div");
+    const icon = new FakeElement("span");
+    icon.className = "llm-user-selected-text-icon";
+    const textBlock = appendSelectedTextSections(
+      fakeDocument,
+      container as unknown as Element,
+      "The cell divides.",
+      "Why does it divide?",
+      { leading: icon as unknown as Node },
+    );
+    const labels = container.findAllByClass("llm-selected-context-label");
+    assert.lengthOf(labels, 2);
+    const [selectedLabel, questionLabel] = labels;
+    assert.isTrue(
+      selectedLabel.classList.contains("llm-selected-context-label-row"),
+    );
+    assert.deepEqual(
+      selectedLabel.children.map((child) => child.className),
+      ["llm-user-selected-text-icon", "llm-selected-context-label-text"],
+    );
+    assert.strictEqual(selectedLabel.children[0], icon);
+    assert.equal(selectedLabel.children[1].textContent, "Selected text");
+    // Only the first label gains the leading node.
+    assert.isFalse(
+      questionLabel.classList.contains("llm-selected-context-label-row"),
+    );
+    assert.equal(questionLabel.textContent, "Your question");
+    assert.lengthOf(questionLabel.children, 0);
+    // The returned block is still the selected text.
+    assert.equal(textBlock.className, "llm-selected-context-text");
+    assert.equal(
+      (textBlock as unknown as FakeElement).textContent,
+      "The cell divides.",
+    );
+  });
+
+  it("keeps a plain first label without a leading node", function () {
+    const container = new FakeElement("div");
+    appendSelectedTextSections(
+      fakeDocument,
+      container as unknown as Element,
+      "The cell divides.",
+      "Why does it divide?",
+    );
+    const [selectedLabel] = container.findAllByClass(
+      "llm-selected-context-label",
+    );
+    assert.equal(selectedLabel.textContent, "Selected text");
+    assert.lengthOf(selectedLabel.children, 0);
+    assert.isFalse(
+      selectedLabel.classList.contains("llm-selected-context-label-row"),
+    );
+  });
+
   it("omits the question section for a blank question", function () {
     const container = new FakeElement("div");
     appendSelectedTextSections(

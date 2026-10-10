@@ -363,6 +363,11 @@ describe("workflow: Add Text lifecycle", function () {
     );
     assert.equal(result.sentDisplayQuestion, prompt, message);
     assert.include(result.sentSelectedTexts, selectedText, message);
+    // The sent bubble shows the question under its own selection only.
+    assert.equal(result.sentBubbleBodyText, "", message);
+    assert.deepEqual(result.sentBubbleChipQuestions, [prompt], message);
+    // The chip with a question is one card; no bar repeats the selection.
+    assert.strictEqual(result.sentBubbleBarCount, 0, message);
   });
 
   it("reopens the inline prompt for a duplicate Add Text and updates the same chip", async function () {

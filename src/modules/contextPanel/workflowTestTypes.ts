@@ -1075,6 +1075,13 @@ export type WorkflowTestApi = {
     sentQuestion: string;
     sentDisplayQuestion: string;
     sentSelectedTexts: string[];
+    /** The sent user bubble once rendered: its visible body text ("" when
+     * hidden or absent), the questions inside its shown chip cards, and the
+     * number of bars drawn for chips that have a question (one card and no
+     * bar each, so 0). */
+    sentBubbleBodyText: string;
+    sentBubbleChipQuestions: string[];
+    sentBubbleBarCount: number;
   }>;
   exerciseReaderPopupDuplicateAttach: (input: {
     panelId: string;
@@ -1154,6 +1161,13 @@ export type WorkflowTestApi = {
     /** The user turn as shown in the chat (displayQuestion). */
     sentDisplayQuestion: string;
     sentSelectedTexts: string[];
+    /** The sent user bubble once rendered: its visible body text ("" when
+     * hidden or absent), the questions inside its shown chip cards, and the
+     * number of bars drawn for chips that have a question (one card and no
+     * bar each, so 0). */
+    sentBubbleBodyText: string;
+    sentBubbleChipQuestions: string[];
+    sentBubbleBarCount: number;
   }>;
   exerciseAssistantSelectionPromptDismissal: (input: {
     panelId: string;

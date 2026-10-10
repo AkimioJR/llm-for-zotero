@@ -4734,6 +4734,31 @@
   margin: 8px 0;
 }
 
+/* The sent card's first row: the chip's source icon, then "Selected text". */
+.llm-selected-context-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.llm-selected-context-label-row > .llm-user-selected-text-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.llm-user-selected-text-expanded
+  .llm-selected-context-text:not(.llm-note-context-text) {
+  cursor: pointer;
+}
+
+/* A click on the sent card's selection shows it in full. */
+.llm-user-selected-text-expanded .llm-selected-context-text.is-unclamped {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
 .llm-user-context-badges {
   align-self: flex-end;
   display: flex;

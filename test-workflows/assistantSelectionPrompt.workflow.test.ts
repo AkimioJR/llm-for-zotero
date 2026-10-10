@@ -81,6 +81,11 @@ describe("workflow: assistant selection inline prompt", function () {
     );
     assert.equal(result.sentDisplayQuestion, prompt, message);
     assert.include(result.sentSelectedTexts, "powerhouse of the cell", message);
+    // The sent bubble shows the question under its own selection only.
+    assert.equal(result.sentBubbleBodyText, "", message);
+    assert.deepEqual(result.sentBubbleChipQuestions, [prompt], message);
+    // The chip with a question is one card; no bar repeats the selection.
+    assert.strictEqual(result.sentBubbleBarCount, 0, message);
   });
 
   it("Escape and an empty Enter keep the chip without a question, and a duplicate quote reopens the box for the same chip", async function () {

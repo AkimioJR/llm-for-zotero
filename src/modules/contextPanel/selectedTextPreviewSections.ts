@@ -5,31 +5,48 @@ import { t } from "../../utils/i18n";
  * selected text (dimmed, clamped), then, when the chip carries a question, a
  * divider, a "Your question" label and the question in the primary text
  * color. The composer chip preview and the sent message's chip
- * bar share this layout. The question block has its own class, so lookups of
- * `.llm-selected-context-text` find the chip text only. Returns the
- * selected-text block.
+ * card share this layout. The question block has its own class, so lookups of
+ * `.llm-selected-context-text` find the chip text only. An optional leading
+ * node (the sent card's source icon) goes before the "Selected text" label
+ * text on one row. Returns the selected-text block.
  */
 export function appendSelectedTextSections(
   doc: Document,
   container: Element,
   text: string,
   userQuery?: string | null,
+  options: { leading?: Node } = {},
 ): HTMLElement {
   // A label and its text travel as one section, so the pair stays tight
   // while the card's own gap separates the sections and the divider.
-  const createSection = (label: string, block: HTMLElement): HTMLElement => {
+  const createSection = (
+    label: string,
+    block: HTMLElement,
+    leading?: Node,
+  ): HTMLElement => {
     const section = doc.createElement("div") as HTMLElement;
     section.className = "llm-selected-context-section";
     const labelNode = doc.createElement("div") as HTMLElement;
-    labelNode.className = "llm-selected-context-label";
-    labelNode.textContent = label;
+    if (leading) {
+      labelNode.className =
+        "llm-selected-context-label llm-selected-context-label-row";
+      const labelText = doc.createElement("span") as HTMLElement;
+      labelText.className = "llm-selected-context-label-text";
+      labelText.textContent = label;
+      labelNode.append(leading, labelText);
+    } else {
+      labelNode.className = "llm-selected-context-label";
+      labelNode.textContent = label;
+    }
     section.append(labelNode, block);
     return section;
   };
   const textBlock = doc.createElement("div") as HTMLElement;
   textBlock.className = "llm-selected-context-text";
   textBlock.textContent = text;
-  container.append(createSection(t("Selected text"), textBlock));
+  container.append(
+    createSection(t("Selected text"), textBlock, options.leading),
+  );
 
   const question = (userQuery || "").trim();
   if (question) {
