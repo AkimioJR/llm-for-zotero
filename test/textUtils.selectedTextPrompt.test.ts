@@ -6,6 +6,7 @@ import {
   setTokenUsage,
 } from "../src/modules/contextPanel/textUtils";
 import type { SelectedTextContext } from "../src/shared/types";
+import { SELECTED_TEXT_QUESTIONS_INSTRUCTION } from "../src/services/context/selectedTextAnchorFormatting";
 import { initI18n } from "../src/utils/i18n";
 
 describe("textUtils selected text prompt composition", function () {
@@ -142,6 +143,82 @@ describe("textUtils selected text prompt composition", function () {
       resolvePromptText("", "Plain quote.", false),
       DEFAULT_SELECTED_TEXT_PROMPT,
     );
+  });
+
+  it("prints each chip question once when the composer is empty", function () {
+    const count = (haystack: string, needle: string) =>
+      haystack.split(needle).length - 1;
+    const single = (source: SelectedTextContext["source"]) => [
+      { text: "Quoted words.", source, userQuery: "Why this?" },
+    ];
+    const multi: SelectedTextContext[] = [
+      { text: "First quote.", source: "pdf", userQuery: "Is it new?" },
+      { text: "Plain quote.", source: "pdf" },
+      { text: "Third quote.", source: "model", userQuery: "Why here?" },
+    ];
+    const cases: Array<[string, SelectedTextContext[], object]> = [
+      ["pdf", single("pdf"), {}],
+      ["note-edit", single("note-edit"), {}],
+      ["note", single("note"), {}],
+      ["multi", multi, {}],
+      ["webchat", multi, { includeAnchorContext: true }],
+      [
+        "attributed",
+        [
+          {
+            ...single("pdf")[0]!,
+            paperContext: { itemId: 1, contextItemId: 2, title: "Paper" },
+          },
+        ],
+        { includePaperAttribution: true },
+      ],
+    ];
+    for (const [label, contexts, options] of cases) {
+      const promptText = resolvePromptText(
+        "",
+        contexts[0]!.text,
+        false,
+        contexts,
+      );
+      const prompt = buildQuestionWithSelectedTextContexts(
+        contexts.map((context) => context.text),
+        contexts.map((context) => context.source),
+        promptText,
+        {
+          selectedTextContexts: contexts,
+          selectedTextPaperContexts: contexts.map(
+            (context) => context.paperContext,
+          ),
+          ...options,
+        },
+      );
+      for (const context of contexts) {
+        if (!context.userQuery) continue;
+        assert.equal(count(prompt, context.userQuery), 1, label);
+        assert.include(
+          prompt,
+          `"""\n${context.text}\n"""\nQuestion about this text:\n${context.userQuery}`,
+          label,
+        );
+      }
+      assert.notInclude(prompt, "User question:", label);
+      assert.equal(
+        count(prompt, SELECTED_TEXT_QUESTIONS_INSTRUCTION),
+        1,
+        label,
+      );
+    }
+
+    // Typed composer text keeps its "User question:" block.
+    const typed = buildQuestionWithSelectedTextContexts(
+      ["Quoted words."],
+      ["note"],
+      "Composer text",
+      { selectedTextContexts: single("note") },
+    );
+    assert.equal(count(typed, "Why this?"), 1);
+    assert.include(typed, "User question:\nComposer text");
+    assert.notInclude(typed, SELECTED_TEXT_QUESTIONS_INSTRUCTION);
   });
 
   it("labels token usage as estimated active context pressure", function () {

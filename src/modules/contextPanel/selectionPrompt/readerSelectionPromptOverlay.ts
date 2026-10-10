@@ -20,6 +20,8 @@ export type ReaderSelectionPromptOverlayInput = {
   anchor: ReaderSelectionPromptAnchor;
   /** The selection the box asks about, shown above the editor. */
   selectedText: string;
+  /** Editor text at open (the chip's current question), caret at the end. */
+  initialText?: string;
   labels: {
     placeholder: string;
     hint: string;
@@ -278,6 +280,25 @@ export function openReaderSelectionPromptOverlay(
   const syncPlaceholder = () => {
     placeholder.style.display = editor.textContent ? "none" : "";
   };
+  if (input.initialText) {
+    editor.textContent = input.initialText;
+    syncPlaceholder();
+  }
+  // Puts the caret after the prefilled text, so typing extends the question.
+  const placeCaretAtEnd = () => {
+    if (!editor.textContent) return;
+    try {
+      const range = doc.createRange?.();
+      const selection = doc.defaultView?.getSelection?.();
+      if (!range || !selection) return;
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } catch {
+      // Focus alone still lets the user edit the question.
+    }
+  };
   const onPaste = (e: Event) => {
     // Rich paste would put markup into the box; keep it plain text.
     const text = (e as ClipboardEvent).clipboardData?.getData("text/plain");
@@ -386,7 +407,9 @@ export function openReaderSelectionPromptOverlay(
   // Deferred so focus lands after the Add Text handler finishes.
   const schedule = view ? view.setTimeout.bind(view) : setTimeout;
   schedule(() => {
-    if (!closed) editor.focus({ preventScroll: true });
+    if (closed) return;
+    editor.focus({ preventScroll: true });
+    placeCaretAtEnd();
   }, 0);
   return handle;
 }
@@ -415,8 +438,9 @@ export function countOpenReaderSelectionPromptOverlays(): number {
 
 /**
  * Opens the reader prompt for the chip that Add Text just made, or for the
- * chip that already held this text (a duplicate add). Enter attaches the
- * typed text to that chip as its question; it never sends. `attach` returns
+ * chip that already held this text (a duplicate add). The box starts with
+ * that chip's question, if any. Enter attaches the typed text to that chip
+ * as its question; it never sends. `attach` returns
  * false when no chip took the text, and the box then stays open.
  */
 export function openReaderSelectionPromptForChip(input: {
@@ -425,6 +449,8 @@ export function openReaderSelectionPromptForChip(input: {
   outcome: IncludeReaderSelectedTextOutcome | null | undefined;
   /** The normalized chip text (IncludeReaderSelectedTextResult.selectedText). */
   selectedText: string;
+  /** The chip's current question; the box opens with it to edit. */
+  existingQuestion?: string;
   labels: ReaderSelectionPromptOverlayInput["labels"];
   attach: (text: string) => boolean;
 }): ReaderSelectionPromptOverlayHandle | null {
@@ -434,6 +460,7 @@ export function openReaderSelectionPromptForChip(input: {
     doc: input.doc,
     anchor: input.anchor,
     selectedText: input.selectedText,
+    initialText: input.existingQuestion,
     labels: input.labels,
     onSubmit: (text) => input.attach(text),
     onClose: () => {},

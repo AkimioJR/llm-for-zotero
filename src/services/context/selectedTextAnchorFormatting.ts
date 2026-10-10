@@ -47,6 +47,27 @@ export function joinSelectedTextQuestions(
     .join("\n\n");
 }
 
+/**
+ * Closing line of a model prompt whose user prompt is only the chip
+ * questions (an empty-composer send): each question already follows its own
+ * quote, so the prompt does not repeat them.
+ */
+export const SELECTED_TEXT_QUESTIONS_INSTRUCTION =
+  "Answer the question attached to each selected text above.";
+
+/**
+ * True when `prompt` is exactly the chip questions as joined by
+ * joinSelectedTextQuestions, i.e. resolvePromptText's empty-composer result.
+ */
+export function isPromptOnlySelectedTextQuestions(
+  prompt: string,
+  contexts: readonly Pick<SelectedTextContext, "userQuery">[] | undefined,
+  sanitize?: (value: string) => string,
+): boolean {
+  const questions = joinSelectedTextQuestions(contexts, sanitize);
+  return Boolean(questions) && prompt.trim() === questions;
+}
+
 export function formatSelectedTextLocator(
   context: SelectedTextContext,
   anchor?: ResolvedSelectedTextAnchor,

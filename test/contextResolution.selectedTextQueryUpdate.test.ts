@@ -5,6 +5,7 @@ import {
   appendSelectedTextContextForItemDetailed,
   findSelectedTextContextIndexForItem,
   getSelectedTextContextEntries,
+  getSelectedTextContextQueryForItem,
   setSelectedTextContextEntries,
   stripSelectedTextQuestionsForItem,
   updateSelectedTextContextLocationForItem,
@@ -191,6 +192,59 @@ describe("selected text chip questions", function () {
       );
       for (const entry of entries) assert.notProperty(entry, "userQuery");
       assert.isFalse(stripSelectedTextQuestionsForItem(conversationKey));
+    });
+  });
+
+  describe("getSelectedTextContextQueryForItem", function () {
+    it("reads the question of the chip that holds the text", function () {
+      appendSelectedTextContextForItem(
+        conversationKey,
+        "quoted claim",
+        "pdf",
+        paperContext,
+        { contextItemId: 77, pageIndex: 3 },
+      );
+      appendSelectedTextContextForItem(conversationKey, "model words", "model");
+      updateSelectedTextContextQueryForItem(
+        conversationKey,
+        "quoted claim",
+        "pdf",
+        paperContext,
+        "Line one\nline two",
+        77,
+        3,
+      );
+
+      assert.equal(
+        getSelectedTextContextQueryForItem(
+          conversationKey,
+          "quoted   claim",
+          "pdf",
+          paperContext,
+          77,
+          3,
+        ),
+        "Line one\nline two",
+      );
+      // A chip without a question, and no chip at all, read as "".
+      assert.equal(
+        getSelectedTextContextQueryForItem(
+          conversationKey,
+          "model words",
+          "model",
+          null,
+        ),
+        "",
+      );
+      assert.equal(
+        getSelectedTextContextQueryForItem(
+          conversationKey,
+          "missing",
+          "pdf",
+          paperContext,
+        ),
+        "",
+      );
     });
   });
 

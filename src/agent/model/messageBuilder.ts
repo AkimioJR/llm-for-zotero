@@ -51,7 +51,9 @@ import { synthesizeSelectedTextContexts } from "../../services/context/normalize
 import {
   formatSelectedTextLocator,
   formatSelectedTextQuestionSuffix,
+  isPromptOnlySelectedTextQuestions,
   renderSelectedTextAnchorContext,
+  SELECTED_TEXT_QUESTIONS_INSTRUCTION,
 } from "../../services/context/selectedTextAnchorFormatting";
 import {
   buildInstructionInventory,
@@ -327,9 +329,17 @@ function buildFullUserMessage(
     contextLines.push(options.turnGuidanceBlock);
   }
 
+  // A request that is only the chip questions (empty composer) already shows
+  // each question under its selection above; do not repeat them here.
+  const userRequestText = isPromptOnlySelectedTextQuestions(
+    request.userText,
+    selectedTextContexts,
+  )
+    ? SELECTED_TEXT_QUESTIONS_INSTRUCTION
+    : request.userText;
   const promptText = `${
     contextLines.length ? `${contextLines.join("\n")}\n\n` : ""
-  }User request:\n${request.userText}`;
+  }User request:\n${userRequestText}`;
   const screenshots = Array.isArray(request.screenshots)
     ? request.screenshots.filter((entry) => Boolean(entry))
     : [];

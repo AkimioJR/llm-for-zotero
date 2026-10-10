@@ -481,7 +481,10 @@ import {
   type SendFlowOptions,
 } from "./setupHandlers/controllers/sendFlowController";
 import { cancelVisiblePendingConfirmationCards } from "./setupHandlers/controllers/cancelPendingConfirmationController";
-import { buildInlineEditRetryContextSnapshot } from "./setupHandlers/controllers/inlineEditRetryController";
+import {
+  buildInlineEditRetryContextSnapshot,
+  resolveInlineEditSubmitText,
+} from "./setupHandlers/controllers/inlineEditRetryController";
 import {
   endInlineEdit,
   getInlineEditTarget,
@@ -7386,7 +7389,17 @@ export function setupHandlers(
     if (panelEditTarget && item) {
       const currentItem = item;
       const editTarget = panelEditTarget;
-      const newText = inputBox?.value.trim() ?? "";
+      const composerText = inputBox?.value.trim() ?? "";
+      // Read the chips now: endInlineEdit strips their questions below.
+      const textContextKey = getTextContextConversationKey();
+      const selectedContexts = textContextKey
+        ? getSelectedTextContextEntries(textContextKey)
+        : [];
+      // An empty composer still edits the turn when the chips carry questions.
+      const newText = resolveInlineEditSubmitText(
+        composerText,
+        selectedContexts,
+      );
       if (!newText && isRequestPending(getConversationKey(currentItem))) return;
       const inlineRequest = newText
         ? beginPanelRequest(body, currentItem, "Preparing edited retry...")
@@ -7423,15 +7436,17 @@ export function setupHandlers(
           );
         }
         if (!providerDispatchStarted) {
-          inputBox.value = newText;
+          inputBox.value = composerText;
           persistDraftInputForCurrentConversation();
           resetComposerInputHeight();
+          // A refused chip-question edit gets its questions back: endInlineEdit
+          // stripped them, and the composer holds nothing to retry with.
+          if (!composerText && textContextKey) {
+            setSelectedTextContextEntries(textContextKey, selectedContexts);
+            updateSelectedTextPreviewPreservingScroll();
+          }
         }
       };
-      const textContextKey = getTextContextConversationKey();
-      const selectedContexts = textContextKey
-        ? getSelectedTextContextEntries(textContextKey)
-        : [];
       const {
         selectedTexts,
         selectedTextSources,
