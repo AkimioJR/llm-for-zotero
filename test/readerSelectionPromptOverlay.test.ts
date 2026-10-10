@@ -918,6 +918,93 @@ describe("openReaderSelectionPromptForChip", function () {
     assert.isFalse(overlay!.root.isConnected);
   });
 
+  it("prefills the chip's existing question with the caret at the end", function () {
+    const doc = makeFakeDoc();
+    const ranges: any[] = [];
+    doc.createRange = () => {
+      const range: any = {
+        node: null,
+        collapsedToStart: null,
+        selectNodeContents(node: any) {
+          range.node = node;
+        },
+        collapse(toStart: boolean) {
+          range.collapsedToStart = toStart;
+        },
+      };
+      return range;
+    };
+    doc.defaultView.getSelection = () => ({
+      removeAllRanges() {
+        ranges.length = 0;
+      },
+      addRange(range: any) {
+        ranges.push(range);
+      },
+    });
+    const attached: string[] = [];
+    const overlay = openReaderSelectionPromptForChip({
+      doc,
+      anchor,
+      outcome: "duplicate",
+      selectedText,
+      existingQuestion: "Old question?",
+      labels,
+      attach: (text) => {
+        attached.push(text);
+        return true;
+      },
+    });
+    const editor = editorOf(doc);
+    assert.equal(editor.textContent, "Old question?");
+    assert.isTrue(editor.focused);
+    const placeholder = doc.body.querySelector(
+      '[data-llm-reader-selection-prompt-placeholder="true"]',
+    );
+    assert.equal(placeholder.style.display, "none");
+    assert.lengthOf(ranges, 1);
+    assert.strictEqual(ranges[0].node, editor);
+    assert.isFalse(ranges[0].collapsedToStart);
+
+    // Enter replaces the question with the edited text.
+    pressEnter(doc, "New question?");
+    assert.deepEqual(attached, ["New question?"]);
+    assert.isFalse(overlay!.root.isConnected);
+  });
+
+  it("empty Enter on a prefilled box closes and leaves the question alone", function () {
+    const doc = makeFakeDoc();
+    const overlay = openReaderSelectionPromptForChip({
+      doc,
+      anchor,
+      outcome: "duplicate",
+      selectedText,
+      existingQuestion: "Old question?",
+      labels,
+      attach: () => assert.fail("no attach"),
+    });
+    pressEnter(doc, "  ");
+    assert.isFalse(overlay!.root.isConnected);
+  });
+
+  it("opens empty when the chip has no question", function () {
+    const doc = makeFakeDoc();
+    openReaderSelectionPromptForChip({
+      doc,
+      anchor,
+      outcome: "duplicate",
+      selectedText,
+      existingQuestion: "",
+      labels,
+      attach: () => true,
+    });
+    assert.equal(editorOf(doc).textContent, "");
+    const placeholder = doc.body.querySelector(
+      '[data-llm-reader-selection-prompt-placeholder="true"]',
+    );
+    assert.notEqual(placeholder.style.display, "none");
+  });
+
   it("does not open when the add failed, had no result, or has no text", function () {
     for (const [label, outcome, text] of [
       ["not-added", "not-added", selectedText],

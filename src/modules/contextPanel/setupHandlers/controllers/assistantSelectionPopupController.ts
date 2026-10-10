@@ -3,6 +3,7 @@ import { t } from "../../../../utils/i18n";
 import {
   addSelectedTextContext,
   type AppendSelectedTextOutcome,
+  getSelectedTextContextQueryForItem,
   updateSelectedTextContextQueryForItem,
 } from "../../contextResolution";
 import {
@@ -73,7 +74,7 @@ export function attachAssistantSelectionPopup(
     {
       type: "button",
       textContent: "❞ " + t("Quote"),
-      title: "Quote selected text",
+      title: t("Quote selected text"),
     },
   );
   const promptWrap = createElement(
@@ -173,13 +174,18 @@ export function attachAssistantSelectionPopup(
     selectionPopup.style.left = `${Math.round(left)}px`;
     selectionPopup.style.top = `${Math.round(top)}px`;
   };
-  const expandPrompt = (conversationKey: number, selectedText: string) => {
+  // existingQuestion prefills the box when the chip already has a question.
+  const expandPrompt = (
+    conversationKey: number,
+    selectedText: string,
+    existingQuestion = "",
+  ) => {
     promptExpanded = true;
     promptConversationKey = conversationKey;
     promptSelectedText = selectedText;
     promptQuote.textContent = selectedText;
     promptHint.textContent = promptHintText;
-    promptInput.value = "";
+    promptInput.value = existingQuestion;
     promptInput.style.height = "";
     promptInput.style.overflowY = "";
     if (chatBox) {
@@ -188,10 +194,13 @@ export function attachAssistantSelectionPopup(
         available > 0 ? `${Math.min(360, available)}px` : "";
     }
     selectionPopup.classList.add("is-expanded");
+    if (existingQuestion) resizeTextareaToContent(promptInput);
     fitExpandedPopupIntoChat();
     panelWin?.setTimeout(() => {
       if (!promptExpanded) return;
       promptInput.focus({ preventScroll: true });
+      const end = promptInput.value.length;
+      promptInput.setSelectionRange(end, end);
     }, 0);
   };
 
@@ -356,7 +365,11 @@ export function attachAssistantSelectionPopup(
       hideSelectionPopup();
       return;
     }
-    expandPrompt(activeItemId, selected);
+    expandPrompt(
+      activeItemId,
+      selected,
+      getSelectedTextContextQueryForItem(activeItemId, selected, "model", null),
+    );
   };
 
   /**

@@ -1246,7 +1246,9 @@ describe("sendFlowController", function () {
       lastSentQuestion,
       '"""\nA quoted sentence.\n"""\nQuestion about this text:\nWhat does this imply?',
     );
-    assert.include(lastSentQuestion, "User question:\nWhat does this imply?");
+    // The question follows its quote once; it is not repeated at the end.
+    assert.notInclude(lastSentQuestion, "User question:");
+    assert.equal(lastSentQuestion.split("What does this imply?").length - 1, 1);
     assert.notInclude(lastSentQuestion, "Please explain this selected text.");
     assert.equal(lastSentDisplayQuestion, "What does this imply?");
   });

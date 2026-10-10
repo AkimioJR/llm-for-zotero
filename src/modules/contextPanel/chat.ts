@@ -11087,8 +11087,8 @@ export function refreshChat(
                 unclamped ? "true" : "false",
               );
               const hint = unclamped
-                ? "Show less of the selected text"
-                : "Show all of the selected text";
+                ? t("Show less of the selected text")
+                : t("Show all of the selected text");
               selectionBlock.title = hint;
               if (labelRow) labelRow.title = hint;
             };

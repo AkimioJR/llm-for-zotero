@@ -67,6 +67,7 @@ import {
   resolvePanelContextLifecycleState,
   applySelectedTextPreview,
   getSelectedTextContextEntries,
+  getSelectedTextContextQueryForItem,
   updateSelectedTextContextQueryForItem,
   type SelectedTextPageLocation,
 } from "./contextResolution";
@@ -984,6 +985,15 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
                     anchor,
                     outcome: result.outcome,
                     selectedText: result.selectedText,
+                    // A duplicate add reopens the box with the chip's question.
+                    existingQuestion: getSelectedTextContextQueryForItem(
+                      conversationKey,
+                      result.selectedText,
+                      "pdf",
+                      paperContext,
+                      result.location?.contextItemId,
+                      result.location?.pageIndex,
+                    ),
                     labels: {
                       placeholder: t("Ask about this selection…"),
                       hint: t(

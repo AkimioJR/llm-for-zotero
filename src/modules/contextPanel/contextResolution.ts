@@ -1137,6 +1137,30 @@ export function findSelectedTextContextIndexForItem(
 }
 
 /**
+ * The question on the chip found by `findSelectedTextContextIndexForItem`;
+ * "" when that chip has none or no chip matches.
+ */
+export function getSelectedTextContextQueryForItem(
+  itemId: number,
+  text: string,
+  source: SelectedTextSource,
+  paperContext: PaperContextRef | null | undefined,
+  contextItemId?: number | null,
+  pageIndex?: number | null,
+): string {
+  const index = findSelectedTextContextIndexForItem(
+    itemId,
+    text,
+    source,
+    paperContext,
+    contextItemId,
+    pageIndex,
+  );
+  if (index < 0) return "";
+  return getSelectedTextContextEntries(itemId)[index]?.userQuery || "";
+}
+
+/**
  * Sets the question on the chip found by `findSelectedTextContextIndexForItem`.
  * The query is normalized like chip text (D1); an empty query removes it.
  * Returns true when a matching chip was found (it now carries this query,

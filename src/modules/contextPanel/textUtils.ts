@@ -19,8 +19,10 @@ import {
 import {
   formatSelectedTextLocator,
   formatSelectedTextQuestionSuffix,
+  isPromptOnlySelectedTextQuestions,
   joinSelectedTextQuestions,
   renderSelectedTextAnchorContext,
+  SELECTED_TEXT_QUESTIONS_INSTRUCTION,
 } from "../../services/context/selectedTextAnchorFormatting";
 import { t } from "../../utils/i18n";
 import { sanitizeText } from "../../utils/textSanitization";
@@ -28,6 +30,24 @@ import { sanitizeText } from "../../utils/textSanitization";
 export const DEFAULT_SELECTED_TEXT_PROMPT =
   "Please explain this selected text.";
 export const DEFAULT_FILE_ANALYSIS_PROMPT = "Please analyze attached files.";
+
+/**
+ * The block that closes a selected-text prompt. When the prompt is only the
+ * chip questions (empty composer), each question already follows its quote,
+ * so a short instruction replaces the repeated "User question:" block.
+ */
+function formatUserQuestionBlock(
+  normalizedPrompt: string,
+  contexts: readonly Pick<SelectedTextContext, "userQuery">[],
+): string {
+  return isPromptOnlySelectedTextQuestions(
+    normalizedPrompt,
+    contexts,
+    sanitizeText,
+  )
+    ? SELECTED_TEXT_QUESTIONS_INSTRUCTION
+    : `User question:\n${normalizedPrompt}`;
+}
 
 function buildQuestionWithSelectedNoteText(
   selectedText: string,
@@ -39,7 +59,7 @@ function buildQuestionWithSelectedNoteText(
     "Selected text from a Zotero note:",
     `"""\n${selectedText}\n"""${formatSelectedTextQuestionSuffix(userQuery)}`,
     "",
-    `User question:\n${normalizedPrompt}`,
+    formatUserQuestionBlock(normalizedPrompt, [{ userQuery }]),
   ].join("\n");
 }
 
@@ -54,7 +74,7 @@ function buildQuestionWithNoteEditingText(
     `"""\n${selectedText}\n"""${formatSelectedTextQuestionSuffix(userQuery)}`,
     "The user selected this snippet inside the active note and wants help editing it in place.",
     "",
-    `User question:\n${normalizedPrompt}`,
+    formatUserQuestionBlock(normalizedPrompt, [{ userQuery }]),
   ].join("\n");
 }
 
@@ -142,7 +162,7 @@ export function buildQuestionWithSelectedText(
   userQuery?: string,
 ): string {
   const normalizedPrompt = userPrompt.trim() || DEFAULT_SELECTED_TEXT_PROMPT;
-  return `Selected text from the PDF reader:\n"""\n${selectedText}\n"""${formatSelectedTextQuestionSuffix(userQuery)}\n\nUser question:\n${normalizedPrompt}`;
+  return `Selected text from the PDF reader:\n"""\n${selectedText}\n"""${formatSelectedTextQuestionSuffix(userQuery)}\n\n${formatUserQuestionBlock(normalizedPrompt, [{ userQuery }])}`;
 }
 
 export function buildQuestionWithSelectedTextContexts(
@@ -270,7 +290,7 @@ export function buildQuestionWithSelectedTextContexts(
     : "";
   const question = `Selected text contexts with explicit sources:\n${guidance}${contextBlocks.join(
     "\n\n",
-  )}\n\nUser question:\n${normalizedPrompt}`;
+  )}\n\n${formatUserQuestionBlock(normalizedPrompt, contexts)}`;
   return anchorContext ? `${question}\n\n${anchorContext}` : question;
 }
 

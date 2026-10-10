@@ -32,6 +32,16 @@ describe("classifySelectionPromptKey", function () {
     ));
   it("Escape closes", () =>
     assert.equal(classifySelectionPromptKey(key({ key: "Escape" })), "close"));
+  it("Escape during IME composition is ignored", () =>
+    assert.equal(
+      classifySelectionPromptKey(key({ key: "Escape", isComposing: true })),
+      "other",
+    ));
+  it("Escape with keyCode 229 (IME) is ignored", () =>
+    assert.equal(
+      classifySelectionPromptKey(key({ key: "Escape", keyCode: 229 })),
+      "other",
+    ));
   it("auto-repeated Enter and Escape are ignored", () => {
     assert.equal(
       classifySelectionPromptKey(key({ key: "Enter", repeat: true })),
