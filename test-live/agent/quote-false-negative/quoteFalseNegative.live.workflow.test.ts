@@ -5,8 +5,9 @@
  * plasticity". A body paragraph of Section 2.3 ("Across days we find a
  * distribution of changes that is centered around zero ...") once received no
  * passage ID, so the model invented IDs (Q_20_dummy) or wrote bare blockquotes
- * that rendered as amber "not source" cards. This test flies the user's two
- * real questions and asserts the invariants that the fix restores.
+ * that rendered as amber "not source" cards. This test asks two questions of
+ * the same shape as the reported ones and asserts the invariants that the fix
+ * restores.
  *
  * Run (the worktree has no .env; copy <main-checkout>/.env
  * into it first):
@@ -108,9 +109,9 @@ const TARGET_PHRASE =
   "Across days we find a distribution of changes that is centered around zero";
 
 const TURN_1 =
-  "I am actually not sure why in this paper, they claim that the recurrent + FF model of excitability change can achieve a stable decoder. In their experiment, they trained general decoder by many days to have a stable decoder, which sounds like a cheating to me: we all know it will be the case. and If they are claiming that drift is in the null space, it is not clear to me how it was supported by experimental data: if train on day 1 and then test on other days, the decoder performance drop. The conclusion here is contradictory and i would like you to help me understand how exactly they made statement about it";
+  "This paper claims that a recurrent plus feedforward model of excitability changes keeps a decoder stable across days. Their decoder is trained on many days at once, and a decoder trained on one day loses accuracy on later days. How do the experimental data support the claim that drift lies in the null space of the readout? Please show where the paper makes this argument.";
 const TURN_2 =
-  "can you elaborate on this part? So, do animal data support the claim that tuning drift will be bounded? I am not sure that's true either.";
+  "Can you elaborate on this part? Do the animal data support the claim that tuning drift stays bounded?";
 
 const MIN_BLOCKQUOTE_CHARS = 24;
 const GATE_MAX_WAIT_MS = 90_000;
