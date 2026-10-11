@@ -17,6 +17,7 @@ export type ModelCapabilityProvider =
   | "qwen"
   | "kimi"
   | "mimo"
+  | "siliconflow"
   | "copilot"
   /**
    * A model served by a local runtime whose name matches no hosted family.

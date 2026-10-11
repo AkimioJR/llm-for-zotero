@@ -11,6 +11,7 @@ export type SupportedProviderPresetId =
   | "qwen"
   | "kimi"
   | "mimo"
+  | "siliconflow"
   | "opencode"
   | "copilot"
   | "ollama"
@@ -252,6 +253,13 @@ const KIMI_PATHS = [
   "/coding/v1/chat/completions",
 ];
 const MIMO_PATHS = ["/", "/v1", "/v1/chat/completions"];
+const SILICONFLOW_PATHS = [
+  "/",
+  "/v1",
+  "/v1/chat/completions",
+  "/v1/models",
+  "/v1/embeddings",
+];
 // Zen serves the same catalog on two tiers: /zen/v1 and the cheaper /zen/go/v1
 // the reporter of #439 uses. Everything else on opencode.ai is the website and
 // the agent's own server, so the host alone must not claim the preset.
@@ -422,6 +430,19 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     supportedProtocols: ["openai_chat_compat"],
     helperText: "Preset uses Xiaomi MiMo's OpenAI-compatible API base (v1).",
     matches: makeHostAndPathMatcher(["api.xiaomimimo.com"], MIMO_PATHS),
+    supportsEmbeddings: false,
+  },
+  {
+    id: "siliconflow",
+    label: "SiliconFlow",
+    defaultApiBase: "https://api.siliconflow.cn/v1",
+    defaultProtocol: "openai_chat_compat",
+    supportedProtocols: ["openai_chat_compat"],
+    helperText: "Preset uses SiliconFlow's OpenAI-compatible API base (v1).",
+    matches: makeHostAndPathMatcher(
+      ["api.siliconflow.cn", "api.siliconflow.com"],
+      SILICONFLOW_PATHS,
+    ),
     supportsEmbeddings: false,
   },
   {

@@ -1810,7 +1810,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           if (preset.id === "copilot") continue;
           const option = el(doc, "option") as HTMLOptionElement;
           option.value = preset.id;
-          option.textContent = preset.label;
+          option.textContent = t(preset.label);
           option.selected = preset.id === selectedPresetId;
           providerPresetSelect.appendChild(option);
         }
@@ -1865,6 +1865,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         group.authMode !== "codex_app_server" &&
         group.authMode !== "copilot_auth" &&
         !isCustomizedPreset &&
+        selectedPresetId !== "siliconflow" &&
         // Local presets ship a default host and port, but the server may run on
         // another port or another machine on the LAN, so the URL stays editable.
         presetRequiresApiKey;

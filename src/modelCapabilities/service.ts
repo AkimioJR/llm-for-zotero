@@ -131,7 +131,12 @@ function providerFromIdentity(
   identity: ModelCapabilityIdentity,
 ): ModelCapabilityProvider {
   const explicit = normalize(identity.provider);
-  if (explicit && explicit !== "customized" && explicit !== "unknown") {
+  if (
+    explicit &&
+    explicit !== "customized" &&
+    explicit !== "unknown" &&
+    explicit !== "siliconflow"
+  ) {
     return explicit as ModelCapabilityProvider;
   }
   if (
@@ -150,6 +155,7 @@ function providerFromIdentity(
     // provider for the same model, and a mismatch would key the live catalog
     // snapshot under one name while the capability lookup reads another.
     (isLocalModelApiBase(identity.apiBase || "") ? "local" : null) ??
+    (explicit === "siliconflow" ? "siliconflow" : null) ??
     "unknown"
   );
 }
@@ -265,6 +271,21 @@ function getCatalogSnapshot(
   for (const [snapshotKey, snapshot] of catalogSnapshots) {
     if (snapshotKey.split("\u0000").slice(0, 4).join("\u0000") === baseKey) {
       return snapshot;
+    }
+  }
+  const normalizedBase = normalize(identity.apiBase);
+  if (normalizedBase) {
+    const endpointTail = [
+      normalizedBase,
+      normalize(identity.protocol),
+      normalize(identity.authMode),
+    ].join("\u0000");
+    for (const [snapshotKey, snapshot] of catalogSnapshots) {
+      if (
+        snapshotKey.split("\u0000").slice(1, 4).join("\u0000") === endpointTail
+      ) {
+        return snapshot;
+      }
     }
   }
   return undefined;
@@ -874,6 +895,68 @@ function getAnthropicCompatCatalogEndpoint(
   return base.includes("anthropic") ? override : null;
 }
 
+function isSiliconFlowCatalogIdentity(identity: ModelCatalogIdentity): boolean {
+  if (normalize(identity.provider) === "siliconflow") return true;
+  if (!identity.apiBase) return false;
+  try {
+    const host = new URL(identity.apiBase).hostname.trim().toLowerCase();
+    return host === "api.siliconflow.cn" || host === "api.siliconflow.com";
+  } catch {
+    return false;
+  }
+}
+
+const NON_CHAT_MODEL_TYPES = new Set([
+  "embedding",
+  "embeddings",
+  "rerank",
+  "reranker",
+  "image",
+  "text-to-image",
+  "image-to-image",
+  "audio",
+  "speech",
+  "speech-to-text",
+  "text-to-speech",
+  "tts",
+  "asr",
+  "video",
+  "text-to-video",
+  "image-to-video",
+  "moderation",
+]);
+
+const NON_CHAT_MODEL_ID_PATTERN =
+  /(?:^|[/:_-])(?:embedding|embeddings|rerank|reranker|bge-(?:large|base|small|m3|reranker)|bce-(?:embedding|reranker)|flux\.1|stable-diffusion|sdxl|kolors|cosyvoice\d*|sensevoice\w*|fish-speech|chattts|whisper|paraformer|wan2\.\d+-[ti]2v|hunyuanvideo|mochi-1|cogvideox|ltx-video)(?:$|[/:_-])/i;
+
+function isDiscoveredChatModel(
+  row: Record<string, unknown>,
+  id: string,
+): boolean {
+  const subType =
+    typeof row.sub_type === "string"
+      ? row.sub_type.trim().toLowerCase()
+      : typeof row.subType === "string"
+        ? row.subType.trim().toLowerCase()
+        : "";
+  if (subType) {
+    return subType === "chat";
+  }
+  const modelType =
+    typeof row.type === "string"
+      ? row.type.trim().toLowerCase()
+      : typeof row.model_type === "string"
+        ? row.model_type.trim().toLowerCase()
+        : "";
+  if (modelType && NON_CHAT_MODEL_TYPES.has(modelType)) {
+    return false;
+  }
+  if (NON_CHAT_MODEL_ID_PATTERN.test(id)) {
+    return false;
+  }
+  return true;
+}
+
 function getCatalogEndpoint(identity: ModelCatalogIdentity): string | null {
   if (!identity.apiBase) return null;
   try {
@@ -885,21 +968,32 @@ function getCatalogEndpoint(identity: ModelCatalogIdentity): string | null {
       ).replace(/\/\/+/g, "/");
       return url.toString();
     }
-    if (path.endsWith("/models")) return url.toString();
-    const marker = ["/chat/completions", "/responses", "/embeddings"].find(
-      (suffix) => path.endsWith(suffix),
-    );
-    url.pathname = `${marker ? path.slice(0, -marker.length) : path}/models`
-      .replace(/\/\/+/g, "/")
-      .replace("https:/", "https://")
-      .replace("http:/", "http://");
+    if (!path.endsWith("/models")) {
+      const marker = ["/chat/completions", "/responses", "/embeddings"].find(
+        (suffix) => path.endsWith(suffix),
+      );
+      url.pathname = `${marker ? path.slice(0, -marker.length) : path}/models`
+        .replace(/\/\/+/g, "/")
+        .replace("https:/", "https://")
+        .replace("http:/", "http://");
+    }
+    if (
+      isSiliconFlowCatalogIdentity(identity) &&
+      !url.searchParams.has("sub_type") &&
+      !url.searchParams.has("type")
+    ) {
+      url.searchParams.set("sub_type", "chat");
+    }
     return url.toString();
   } catch {
     return null;
   }
 }
 
-function parseDiscoveredModels(value: unknown): DiscoveredModel[] {
+function parseDiscoveredModels(
+  value: unknown,
+  options?: { filterChatModels?: boolean },
+): DiscoveredModel[] {
   const rawModels =
     value &&
     typeof value === "object" &&
@@ -919,6 +1013,7 @@ function parseDiscoveredModels(value: unknown): DiscoveredModel[] {
     if (!id && typeof row.name === "string")
       id = row.name.trim().replace(/^models\//, "");
     if (!id || id.length > 256) continue;
+    if (options?.filterChatModels && !isDiscoveredChatModel(row, id)) continue;
     // Local servers each name the context window differently:
     // LM Studio uses max_context_length / loaded_context_length, vLLM uses
     // max_model_len, and llama.cpp nests n_ctx / n_ctx_train under `meta`.
@@ -1093,7 +1188,9 @@ async function fetchModelCatalog(
     });
     if (!response.ok)
       throw new Error(`catalog request failed: ${response.status}`);
-    const models = parseDiscoveredModels(await response.json());
+    const models = parseDiscoveredModels(await response.json(), {
+      filterChatModels: isSiliconFlowCatalogIdentity(identity),
+    });
     catalogSnapshots.set(key, { models, fetchedAt: now(), stale: false });
     notify();
     return models;

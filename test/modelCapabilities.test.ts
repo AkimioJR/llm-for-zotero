@@ -623,4 +623,99 @@ describe("model capability service", function () {
       "coding-endpoint alias kimi-for-coding covered",
     );
   });
+
+  it("fetches SiliconFlow chat models with Bearer auth, preserves full model IDs, and filters out non-chat models", async function () {
+    const requests: Array<{ url: string; headers: Record<string, string> }> =
+      [];
+    configureModelCapabilityRuntime({
+      environment: "test",
+      fetch: (async (
+        url: string,
+        init?: { headers?: Record<string, string> },
+      ) => {
+        requests.push({ url, headers: init?.headers || {} });
+        return {
+          ok: true,
+          json: async () => ({
+            object: "list",
+            data: [
+              {
+                id: "Qwen/Qwen2.5-72B-Instruct",
+                object: "model",
+                sub_type: "chat",
+              },
+              {
+                id: "deepseek-ai/DeepSeek-V3",
+                object: "model",
+              },
+              {
+                id: "Pro/deepseek-ai/DeepSeek-R1",
+                object: "model",
+              },
+              {
+                id: "BAAI/bge-large-zh-v1.5",
+                object: "model",
+                sub_type: "embedding",
+              },
+              {
+                id: "BAAI/bge-reranker-v2-m3",
+                object: "model",
+                sub_type: "reranker",
+              },
+              {
+                id: "black-forest-labs/FLUX.1-schnell",
+                object: "model",
+                type: "image",
+                sub_type: "text-to-image",
+              },
+              {
+                id: "FunAudioLLM/SenseVoiceSmall",
+                object: "model",
+                type: "audio",
+              },
+              {
+                id: "Qwen/Qwen3-Embedding-8B",
+                object: "model",
+              },
+            ],
+          }),
+        };
+      }) as unknown as typeof fetch,
+    });
+
+    const models = await refreshModelCatalog({
+      provider: "siliconflow",
+      model: "",
+      apiBase: "https://api.siliconflow.cn/v1",
+      protocol: "openai_chat_compat",
+      authMode: "api_key",
+      apiKey: "sf-test-key",
+      scope: "group-sf",
+    });
+
+    assert.lengthOf(requests, 1);
+    assert.equal(
+      requests[0].url,
+      "https://api.siliconflow.cn/v1/models?sub_type=chat",
+    );
+    assert.equal(requests[0].headers.Authorization, "Bearer sf-test-key");
+    assert.deepEqual(
+      models.map((m) => m.id),
+      [
+        "Qwen/Qwen2.5-72B-Instruct",
+        "deepseek-ai/DeepSeek-V3",
+        "Pro/deepseek-ai/DeepSeek-R1",
+      ],
+    );
+
+    const deepseekCaps = getModelCapabilities({
+      provider: "siliconflow",
+      model: "deepseek-ai/DeepSeek-V3",
+      apiBase: "https://api.siliconflow.cn/v1",
+      protocol: "openai_chat_compat",
+      authMode: "api_key",
+      scope: "group-sf",
+    });
+    assert.equal(deepseekCaps.provider, "deepseek");
+  });
 });
