@@ -882,7 +882,7 @@ PR.
 
 ### Maintenance and logging regression tests
 
-Run `LLM_FOR_ZOTERO_TEST_ENTRIES=test-maintenance npm run test:workflow` with the repository's native Zotero test environment configured.
+Run `LLM_FOR_ZOTERO_TEST_ENTRIES=test-isolated/maintenance npm run test:workflow` with the repository's native Zotero test environment configured.
 This suite measures idle maintenance first in a fresh disposable scaffold profile, then checks live diagnostic levels against Zotero's debug output.
 Keep it separate from deletion workflows, which intentionally leave pending cleanup and retry work.
 

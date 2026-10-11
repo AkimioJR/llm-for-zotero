@@ -65,7 +65,7 @@ for (let run = 1; run <= Number(count); run++) {
     env: {
       ...process.env,
       ZOTERO_PLUGIN_KILL_COMMAND: "true",
-      LLM_FOR_ZOTERO_TEST_ENTRIES: "test-perf/paperSwitch",
+      LLM_FOR_ZOTERO_TEST_ENTRIES: "test-isolated/perf/paperSwitch",
       LLM_FOR_ZOTERO_PAPER_SWITCH_BENCH: "1",
       LLM_FOR_ZOTERO_PAPER_SWITCH_BENCH_SWITCHES: switches,
       LLM_FOR_ZOTERO_PAPER_SWITCH_BENCH_TURNS: turns,
