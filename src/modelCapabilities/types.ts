@@ -181,6 +181,14 @@ export type ModelCatalogIdentity = ModelCapabilityIdentity & {
   apiKey?: string;
 };
 
+export type ModelCatalogStatus = {
+  models: DiscoveredModel[];
+  fetchedAt: number;
+  stale: boolean;
+  error?: string;
+  errorCode?: string;
+};
+
 export type ModelCapabilityRefreshOptions = {
   force?: boolean;
   timeoutMs?: number;

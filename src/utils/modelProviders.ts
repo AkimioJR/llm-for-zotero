@@ -21,6 +21,7 @@ import type { ProviderPresetId } from "./providerPresets";
 import type { ModelInputMode, OutputTokenLimitSetting } from "../shared/types";
 import {
   CATALOG_EXCLUDED_AUTH_MODES,
+  hasModelDiscoveryAdapter,
   refreshConfiguredModelCatalogs,
 } from "../modelCapabilities";
 import { normalizeProfileOverride } from "../modelCapabilities";
@@ -1112,7 +1113,16 @@ export async function refreshConfiguredProviderModelCatalogs(options?: {
     groups
       // Copilot and codex tokens need dedicated exchanges and webchat has no
       // HTTP catalog; the generic /models fetch would fail (or 401-spam) them.
-      .filter((group) => !CATALOG_EXCLUDED_AUTH_MODES.has(group.authMode))
+      // On-demand ModelDiscovery providers (e.g. SiliconFlow) only fetch when
+      // the user opens the preferences model selector or clicks Refresh.
+      .filter(
+        (group) =>
+          !CATALOG_EXCLUDED_AUTH_MODES.has(group.authMode) &&
+          !hasModelDiscoveryAdapter({
+            provider: resolveProviderPresetId(group),
+            apiBase: group.apiBase,
+          }),
+      )
       .map((group) => buildProviderCatalogIdentity(group)),
     options,
   );

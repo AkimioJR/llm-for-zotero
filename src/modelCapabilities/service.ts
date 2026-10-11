@@ -27,7 +27,10 @@ import {
   usesOllamaCatalog,
 } from "./localCatalog";
 import { getAbortController } from "../utils/apiHelpers";
-import { isLocalModelApiBase } from "../utils/providerPresets";
+import {
+  detectProviderPreset,
+  isLocalModelApiBase,
+} from "../utils/providerPresets";
 import {
   normalizeProfileOverride,
   profileOverrideAppliesTo,
@@ -44,6 +47,14 @@ import {
   validateRegistry,
   validateReasoning,
 } from "./registry";
+import {
+  classifyModelDiscoveryHttpError,
+  getModelDiscoveryAdapter,
+  hasModelDiscoveryAdapter,
+  isDiscoveredChatModel,
+  MODEL_DISCOVERY_CACHE_TTL_MS,
+  type ModelDiscoveryErrorCode,
+} from "./modelDiscovery";
 import type {
   CapabilitySource,
   DiscoveredModel,
@@ -52,6 +63,7 @@ import type {
   ModelCapabilityProvider,
   ModelCapabilityRefreshOptions,
   ModelCatalogIdentity,
+  ModelCatalogStatus,
   ModelControlPatch,
   ModelReasoningCapability,
   ModelReasoningSelection,
@@ -61,16 +73,11 @@ import type {
 } from "./types";
 
 const REGISTRY_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const PROVIDER_CATALOG_TTL_MS = 60 * 1000;
+const PROVIDER_CATALOG_TTL_MS = MODEL_DISCOVERY_CACHE_TTL_MS;
 const DEFAULT_REFRESH_TIMEOUT_MS = 10_000;
 const FIRST_USE_PREFLIGHT_TIMEOUT_MS = 5_000;
 
-type CatalogSnapshot = {
-  models: DiscoveredModel[];
-  fetchedAt: number;
-  stale: boolean;
-  error?: string;
-};
+type CatalogSnapshot = ModelCatalogStatus;
 
 type CapabilityRuntime = {
   fetch?: typeof fetch;
@@ -87,6 +94,7 @@ let registryFetchedAt = 0;
 let registryRefreshTask: Promise<boolean> | null = null;
 const capabilityPreflightTasks = new Map<string, Promise<void>>();
 const catalogRefreshTasks = new Map<string, Promise<DiscoveredModel[]>>();
+const catalogFetchGenerations = new Map<string, number>();
 const catalogSnapshots = new Map<string, CatalogSnapshot>();
 const capabilityListeners = new Set<() => void>();
 
@@ -155,9 +163,22 @@ function providerFromIdentity(
     // provider for the same model, and a mismatch would key the live catalog
     // snapshot under one name while the capability lookup reads another.
     (isLocalModelApiBase(identity.apiBase || "") ? "local" : null) ??
-    (explicit === "siliconflow" ? "siliconflow" : null) ??
+    (explicit === "siliconflow" ||
+    detectProviderPreset(identity.apiBase || "") === "siliconflow"
+      ? "siliconflow"
+      : null) ??
     "unknown"
   );
+}
+
+function catalogProviderFromIdentity(
+  identity: ModelCapabilityIdentity,
+): ModelCapabilityProvider {
+  const discoveryAdapter = getModelDiscoveryAdapter(identity);
+  if (discoveryAdapter) {
+    return discoveryAdapter.providerId as ModelCapabilityProvider;
+  }
+  return providerFromIdentity(identity);
 }
 
 /**
@@ -243,19 +264,24 @@ function legacyReasoningProfiles(
   if (provider === "mimo") getMimoReasoningProfileForModel(model);
 }
 
-function buildCatalogKey(identity: ModelCapabilityIdentity): string {
+function normalizeApiKey(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function buildCatalogKey(identity: ModelCatalogIdentity): string {
   return [
-    providerFromIdentity(identity),
+    catalogProviderFromIdentity(identity),
     normalize(identity.apiBase),
     normalize(identity.protocol),
     normalize(identity.authMode),
     normalize(identity.scope),
+    normalizeApiKey(identity.apiKey),
   ].join("\u0000");
 }
 
 function buildCatalogBaseKey(identity: ModelCapabilityIdentity): string {
   return [
-    providerFromIdentity(identity),
+    catalogProviderFromIdentity(identity),
     normalize(identity.apiBase),
     normalize(identity.protocol),
     normalize(identity.authMode),
@@ -263,12 +289,28 @@ function buildCatalogBaseKey(identity: ModelCapabilityIdentity): string {
 }
 
 function getCatalogSnapshot(
-  identity: ModelCapabilityIdentity,
+  identity: ModelCatalogIdentity,
 ): CatalogSnapshot | undefined {
   const exact = catalogSnapshots.get(buildCatalogKey(identity));
   if (exact) return exact;
+  const hasExplicitApiKey = identity.apiKey !== undefined;
+  const reqApiKey = normalizeApiKey(identity.apiKey);
+  const reqScope = normalize(identity.scope);
+  const matchesSnapshotKey = (snapshotKey: string): boolean => {
+    const parts = snapshotKey.split("\u0000");
+    const snapshotScope = parts[4] || "";
+    const snapshotApiKey = parts[5] || "";
+    if (hasExplicitApiKey) {
+      if (snapshotApiKey !== reqApiKey) return false;
+      if (reqScope && snapshotScope && snapshotScope !== reqScope) {
+        return false;
+      }
+    }
+    return true;
+  };
   const baseKey = buildCatalogBaseKey(identity);
   for (const [snapshotKey, snapshot] of catalogSnapshots) {
+    if (!matchesSnapshotKey(snapshotKey)) continue;
     if (snapshotKey.split("\u0000").slice(0, 4).join("\u0000") === baseKey) {
       return snapshot;
     }
@@ -281,6 +323,7 @@ function getCatalogSnapshot(
       normalize(identity.authMode),
     ].join("\u0000");
     for (const [snapshotKey, snapshot] of catalogSnapshots) {
+      if (!matchesSnapshotKey(snapshotKey)) continue;
       if (
         snapshotKey.split("\u0000").slice(1, 4).join("\u0000") === endpointTail
       ) {
@@ -509,10 +552,13 @@ export async function ensureModelCapabilities(
         providerFromIdentity(identity),
         identity.model,
       );
-      await Promise.allSettled([
+      const preflightTasks: Array<Promise<unknown>> = [
         refreshModelCapabilityRegistry({ timeoutMs, force: registryProbe }),
-        refreshModelCatalog(identity, { timeoutMs }),
-      ]);
+      ];
+      if (!hasModelDiscoveryAdapter(identity)) {
+        preflightTasks.push(refreshModelCatalog(identity, { timeoutMs }));
+      }
+      await Promise.allSettled(preflightTasks);
     })();
     capabilityPreflightTasks.set(key, task);
     void task.then(
@@ -895,69 +941,24 @@ function getAnthropicCompatCatalogEndpoint(
   return base.includes("anthropic") ? override : null;
 }
 
-function isSiliconFlowCatalogIdentity(identity: ModelCatalogIdentity): boolean {
-  if (normalize(identity.provider) === "siliconflow") return true;
-  if (!identity.apiBase) return false;
-  try {
-    const host = new URL(identity.apiBase).hostname.trim().toLowerCase();
-    return host === "api.siliconflow.cn" || host === "api.siliconflow.com";
-  } catch {
-    return false;
-  }
-}
+class CatalogFetchError extends Error {
+  readonly code: ModelDiscoveryErrorCode;
 
-const NON_CHAT_MODEL_TYPES = new Set([
-  "embedding",
-  "embeddings",
-  "rerank",
-  "reranker",
-  "image",
-  "text-to-image",
-  "image-to-image",
-  "audio",
-  "speech",
-  "speech-to-text",
-  "text-to-speech",
-  "tts",
-  "asr",
-  "video",
-  "text-to-video",
-  "image-to-video",
-  "moderation",
-]);
-
-const NON_CHAT_MODEL_ID_PATTERN =
-  /(?:^|[/:_-])(?:embedding|embeddings|rerank|reranker|bge-(?:large|base|small|m3|reranker)|bce-(?:embedding|reranker)|flux\.1|stable-diffusion|sdxl|kolors|cosyvoice\d*|sensevoice\w*|fish-speech|chattts|whisper|paraformer|wan2\.\d+-[ti]2v|hunyuanvideo|mochi-1|cogvideox|ltx-video)(?:$|[/:_-])/i;
-
-function isDiscoveredChatModel(
-  row: Record<string, unknown>,
-  id: string,
-): boolean {
-  const subType =
-    typeof row.sub_type === "string"
-      ? row.sub_type.trim().toLowerCase()
-      : typeof row.subType === "string"
-        ? row.subType.trim().toLowerCase()
-        : "";
-  if (subType) {
-    return subType === "chat";
+  constructor(code: ModelDiscoveryErrorCode, message: string) {
+    super(message);
+    this.code = code;
   }
-  const modelType =
-    typeof row.type === "string"
-      ? row.type.trim().toLowerCase()
-      : typeof row.model_type === "string"
-        ? row.model_type.trim().toLowerCase()
-        : "";
-  if (modelType && NON_CHAT_MODEL_TYPES.has(modelType)) {
-    return false;
-  }
-  if (NON_CHAT_MODEL_ID_PATTERN.test(id)) {
-    return false;
-  }
-  return true;
 }
 
 function getCatalogEndpoint(identity: ModelCatalogIdentity): string | null {
+  const discoveryAdapter = getModelDiscoveryAdapter(identity);
+  if (discoveryAdapter) {
+    try {
+      return discoveryAdapter.buildEndpoint(identity.apiBase || "");
+    } catch {
+      return null;
+    }
+  }
   if (!identity.apiBase) return null;
   try {
     const url = new URL(identity.apiBase);
@@ -976,13 +977,6 @@ function getCatalogEndpoint(identity: ModelCatalogIdentity): string | null {
         .replace(/\/\/+/g, "/")
         .replace("https:/", "https://")
         .replace("http:/", "http://");
-    }
-    if (
-      isSiliconFlowCatalogIdentity(identity) &&
-      !url.searchParams.has("sub_type") &&
-      !url.searchParams.has("type")
-    ) {
-      url.searchParams.set("sub_type", "chat");
     }
     return url.toString();
   } catch {
@@ -1005,6 +999,7 @@ function parseDiscoveredModels(
         ? (value as { models: unknown[] }).models
         : [];
   const models: DiscoveredModel[] = [];
+  const seen = new Set<string>();
   for (const raw of rawModels) {
     if (models.length >= 4096) break;
     if (!raw || typeof raw !== "object") continue;
@@ -1012,8 +1007,9 @@ function parseDiscoveredModels(
     let id = typeof row.id === "string" ? row.id.trim() : "";
     if (!id && typeof row.name === "string")
       id = row.name.trim().replace(/^models\//, "");
-    if (!id || id.length > 256) continue;
+    if (!id || id.length > 256 || seen.has(id)) continue;
     if (options?.filterChatModels && !isDiscoveredChatModel(row, id)) continue;
+    seen.add(id);
     // Local servers each name the context window differently:
     // LM Studio uses max_context_length / loaded_context_length, vLLM uses
     // max_model_len, and llama.cpp nests n_ctx / n_ctx_train under `meta`.
@@ -1103,6 +1099,7 @@ export async function refreshModelCatalog(
   if (
     cached &&
     !options.force &&
+    !cached.stale &&
     now() - cached.fetchedAt < PROVIDER_CATALOG_TTL_MS
   ) {
     return cached.models;
@@ -1126,6 +1123,11 @@ async function fetchModelCatalog(
   key: string,
   cached: CatalogSnapshot | undefined,
 ): Promise<DiscoveredModel[]> {
+  const generation = (catalogFetchGenerations.get(key) || 0) + 1;
+  catalogFetchGenerations.set(key, generation);
+  const isCurrentGeneration = () =>
+    catalogFetchGenerations.get(key) === generation;
+
   const fetchFn = getFetch();
   // Ollama's native metadata endpoints report the real context window plus
   // vision/tools/thinking, none of which its /v1/models mirror exposes.
@@ -1138,8 +1140,10 @@ async function fetchModelCatalog(
         detailModel: identity.model,
         timeoutMs: options.timeoutMs || DEFAULT_REFRESH_TIMEOUT_MS,
       });
-      catalogSnapshots.set(key, { models, fetchedAt: now(), stale: false });
-      notify();
+      if (isCurrentGeneration()) {
+        catalogSnapshots.set(key, { models, fetchedAt: now(), stale: false });
+        notify();
+      }
       return models;
     } catch (error) {
       const snapshot: CatalogSnapshot = {
@@ -1148,76 +1152,183 @@ async function fetchModelCatalog(
         stale: true,
         error: error instanceof Error ? error.message : String(error),
       };
-      catalogSnapshots.set(key, snapshot);
+      if (isCurrentGeneration()) {
+        catalogSnapshots.set(key, snapshot);
+      }
       return snapshot.models;
     }
   }
-  const compatEndpoint = getAnthropicCompatCatalogEndpoint(identity);
-  const endpoint = compatEndpoint || getCatalogEndpoint(identity);
-  if (!endpoint || !fetchFn) return cached?.models || [];
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    const AbortControllerCtor = getAbortController();
-    const controller = AbortControllerCtor
-      ? new AbortControllerCtor()
-      : undefined;
-    timer = controller
-      ? setTimeout(
-          () => controller.abort(),
-          options.timeoutMs || DEFAULT_REFRESH_TIMEOUT_MS,
-        )
-      : null;
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (identity.apiKey && identity.authMode !== "codex_auth") {
-      if (identity.protocol === "gemini_native") {
-        // Header auth keeps the key out of URLs (and any proxy/server logs).
-        headers["x-goog-api-key"] = identity.apiKey;
-      } else if (
-        identity.protocol === "anthropic_messages" &&
-        !compatEndpoint
-      ) {
-        headers["x-api-key"] = identity.apiKey;
-        headers["anthropic-version"] = "2023-06-01";
-      } else {
-        headers.Authorization = `Bearer ${identity.apiKey}`;
-      }
-    }
-    const response = await fetchFn(endpoint, {
-      headers,
-      signal: controller?.signal,
-    });
-    if (!response.ok)
-      throw new Error(`catalog request failed: ${response.status}`);
-    const models = parseDiscoveredModels(await response.json(), {
-      filterChatModels: isSiliconFlowCatalogIdentity(identity),
-    });
-    catalogSnapshots.set(key, { models, fetchedAt: now(), stale: false });
-    notify();
-    return models;
-  } catch (error) {
+  const discoveryAdapter = getModelDiscoveryAdapter(identity);
+  if (discoveryAdapter && !normalizeApiKey(identity.apiKey)) {
     const snapshot: CatalogSnapshot = {
       models: cached?.models || [],
       fetchedAt: cached?.fetchedAt || 0,
       stale: true,
-      error: error instanceof Error ? error.message : String(error),
+      errorCode: "missing_api_key",
+      error: "Enter the API key above to fetch this provider's models.",
     };
-    catalogSnapshots.set(key, snapshot);
+    if (isCurrentGeneration()) {
+      catalogSnapshots.set(key, snapshot);
+      notify();
+    }
     return snapshot.models;
+  }
+  const compatEndpoint = getAnthropicCompatCatalogEndpoint(identity);
+  const endpoint = compatEndpoint || getCatalogEndpoint(identity);
+  if (!endpoint) {
+    if (discoveryAdapter) {
+      const snapshot: CatalogSnapshot = {
+        models: cached?.models || [],
+        fetchedAt: cached?.fetchedAt || 0,
+        stale: true,
+        errorCode: "network_error",
+        error: "Invalid API URL for models endpoint.",
+      };
+      if (isCurrentGeneration()) {
+        catalogSnapshots.set(key, snapshot);
+        notify();
+      }
+      return snapshot.models;
+    }
+    return cached?.models || [];
+  }
+  if (!fetchFn) return cached?.models || [];
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+  let controller: AbortController | undefined;
+  try {
+    const AbortControllerCtor = getAbortController();
+    controller = AbortControllerCtor ? new AbortControllerCtor() : undefined;
+    const timeoutMs = options.timeoutMs || DEFAULT_REFRESH_TIMEOUT_MS;
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (identity.apiKey && identity.authMode !== "codex_auth") {
+      if (identity.protocol === "gemini_native") {
+        // Header auth keeps the key out of URLs (and any proxy/server logs).
+        headers["x-goog-api-key"] = identity.apiKey.trim();
+      } else if (
+        identity.protocol === "anthropic_messages" &&
+        !compatEndpoint
+      ) {
+        headers["x-api-key"] = identity.apiKey.trim();
+        headers["anthropic-version"] = "2023-06-01";
+      } else {
+        headers.Authorization = `Bearer ${identity.apiKey.trim()}`;
+      }
+    }
+    const response = await new Promise<Response>((resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller?.abort();
+        const abortErr = new Error("Request timed out while fetching models.");
+        abortErr.name = "AbortError";
+        reject(abortErr);
+      }, timeoutMs);
+      fetchFn(endpoint, {
+        headers,
+        signal: controller?.signal,
+      }).then(resolve, reject);
+    });
+    if (!response.ok) {
+      const classified = classifyModelDiscoveryHttpError(response.status);
+      throw new CatalogFetchError(classified.code, classified.message);
+    }
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new CatalogFetchError(
+        "invalid_json",
+        "Invalid JSON response from models endpoint.",
+      );
+    }
+    if (
+      discoveryAdapter &&
+      (!payload ||
+        typeof payload !== "object" ||
+        !Array.isArray((payload as { data?: unknown }).data))
+    ) {
+      throw new CatalogFetchError(
+        "invalid_json",
+        "Invalid JSON response from models endpoint.",
+      );
+    }
+    const parsedModels = parseDiscoveredModels(payload, {
+      filterChatModels: Boolean(discoveryAdapter),
+    });
+    const models = discoveryAdapter
+      ? discoveryAdapter.filterAndSortModels(parsedModels)
+      : parsedModels;
+    if (discoveryAdapter && models.length === 0) {
+      const emptySnapshot: CatalogSnapshot = {
+        models: [],
+        fetchedAt: 0,
+        stale: true,
+        errorCode: "empty_list",
+        error: "No available chat models returned by provider.",
+      };
+      if (isCurrentGeneration()) {
+        catalogSnapshots.set(key, emptySnapshot);
+        notify();
+        return [];
+      }
+      return catalogSnapshots.get(key)?.models || [];
+    }
+    if (isCurrentGeneration()) {
+      catalogSnapshots.set(key, { models, fetchedAt: now(), stale: false });
+      notify();
+      return models;
+    }
+    return catalogSnapshots.get(key)?.models || models;
+  } catch (error) {
+    const isTimeout =
+      timedOut ||
+      Boolean(controller?.signal?.aborted) ||
+      (error instanceof Error &&
+        (error.name === "AbortError" ||
+          /abort|timed?\s*out/i.test(error.message)));
+    const errorCode: ModelDiscoveryErrorCode = isTimeout
+      ? "timeout"
+      : error instanceof CatalogFetchError
+        ? error.code
+        : "network_error";
+    const errorMessage = isTimeout
+      ? "Request timed out while fetching models."
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    const snapshot: CatalogSnapshot = {
+      models: cached?.models || [],
+      fetchedAt: cached?.fetchedAt || 0,
+      stale: true,
+      errorCode,
+      error: errorMessage,
+    };
+    if (isCurrentGeneration()) {
+      catalogSnapshots.set(key, snapshot);
+      notify();
+      return snapshot.models;
+    }
+    return catalogSnapshots.get(key)?.models || snapshot.models;
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
 }
 
 export function getDiscoveredModels(
-  identity: ModelCapabilityIdentity,
+  identity: ModelCatalogIdentity,
 ): DiscoveredModel[] {
-  return clone(catalogSnapshots.get(buildCatalogKey(identity))?.models || []);
+  const snapshot =
+    catalogSnapshots.get(buildCatalogKey(identity)) ??
+    getCatalogSnapshot(identity);
+  return clone(snapshot?.models || []);
 }
 
 export function getModelCatalogStatus(
-  identity: ModelCapabilityIdentity,
+  identity: ModelCatalogIdentity,
 ): CatalogSnapshot | null {
-  const snapshot = catalogSnapshots.get(buildCatalogKey(identity));
+  const snapshot =
+    catalogSnapshots.get(buildCatalogKey(identity)) ??
+    getCatalogSnapshot(identity);
   return snapshot ? clone(snapshot) : null;
 }
 
@@ -1238,6 +1349,7 @@ export function resetModelCapabilityStateForTests(): void {
   registryRefreshTask = null;
   capabilityPreflightTasks.clear();
   catalogRefreshTasks.clear();
+  catalogFetchGenerations.clear();
   catalogSnapshots.clear();
   runtime = {};
 }

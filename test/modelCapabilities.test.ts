@@ -702,9 +702,9 @@ describe("model capability service", function () {
     assert.deepEqual(
       models.map((m) => m.id),
       [
-        "Qwen/Qwen2.5-72B-Instruct",
         "deepseek-ai/DeepSeek-V3",
         "Pro/deepseek-ai/DeepSeek-R1",
+        "Qwen/Qwen2.5-72B-Instruct",
       ],
     );
 

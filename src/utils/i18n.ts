@@ -787,6 +787,21 @@ const zhCN: Record<string, string> = {
   "Couldn't fetch models:": "无法获取模型列表：",
   "Couldn't fetch the model list.": "无法获取模型列表。",
   "The provider returned no models.": "该服务商未返回任何模型。",
+  "Refresh models": "刷新模型列表",
+  "API key is invalid or unauthorized (HTTP 401).":
+    "API 密钥无效或未授权 (HTTP 401)。",
+  "Access forbidden for this API key (HTTP 403).":
+    "当前 API 密钥无访问权限 (HTTP 403)。",
+  "Rate limit exceeded when fetching models (HTTP 429).":
+    "获取模型列表请求过于频繁 (HTTP 429)。",
+  "Request timed out while fetching models.": "获取模型列表请求超时。",
+  "Invalid JSON response from models endpoint.":
+    "模型列表接口返回了无效的 JSON 响应。",
+  "No available chat models returned by provider.":
+    "服务商未返回可用的对话模型。",
+  "Invalid API URL for models endpoint.": "模型列表接口的 API URL 无效。",
+  "Failed to fetch models. You can still enter a model ID manually.":
+    "获取模型列表失败，你仍可手动输入模型 ID。",
   "Select a model…": "请选择模型…",
   "Customized…": "自定义…",
   "Loading Codex models…": "正在加载 Codex 模型…",
