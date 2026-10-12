@@ -86,6 +86,18 @@ describe("providerPresets", function () {
       "mimo",
     );
     assert.equal(detectProviderPreset("https://api.xiaomimimo.com/v1"), "mimo");
+    assert.equal(
+      detectProviderPreset("https://api.siliconflow.cn/v1"),
+      "siliconflow",
+    );
+    assert.equal(
+      detectProviderPreset("https://api.siliconflow.cn/v1/chat/completions"),
+      "siliconflow",
+    );
+    assert.equal(
+      detectProviderPreset("https://api.siliconflow.com/v1"),
+      "siliconflow",
+    );
   });
 
   it("falls back to customized for unknown URLs", function () {
@@ -130,6 +142,10 @@ describe("providerPresets", function () {
       getProviderPreset("mimo").defaultApiBase,
       "https://api.xiaomimimo.com/v1",
     );
+    assert.equal(
+      getProviderPreset("siliconflow").defaultApiBase,
+      "https://api.siliconflow.cn/v1",
+    );
   });
 
   it("stores default protocols per preset", function () {
@@ -173,6 +189,13 @@ describe("providerPresets", function () {
     assert.deepEqual(getProviderPreset("mimo").supportedProtocols, [
       "openai_chat_compat",
     ]);
+    assert.equal(
+      getProviderPreset("siliconflow").defaultProtocol,
+      "openai_chat_compat",
+    );
+    assert.deepEqual(getProviderPreset("siliconflow").supportedProtocols, [
+      "openai_chat_compat",
+    ]);
   });
 
   it("offers advanced protocol options beyond preset defaults", function () {
@@ -182,6 +205,11 @@ describe("providerPresets", function () {
       "anthropic_messages",
     ]);
     assert.deepEqual(getProviderPresetProtocolOptions("mimo"), [
+      "openai_chat_compat",
+      "responses_api",
+      "anthropic_messages",
+    ]);
+    assert.deepEqual(getProviderPresetProtocolOptions("siliconflow"), [
       "openai_chat_compat",
       "responses_api",
       "anthropic_messages",
@@ -218,6 +246,12 @@ describe("providerPresets", function () {
   it("does not advertise MiMo as Responses-capable", function () {
     assert.isFalse(
       providerSupportsResponsesEndpoint("https://api.xiaomimimo.com/v1"),
+    );
+  });
+
+  it("does not advertise SiliconFlow as Responses-capable", function () {
+    assert.isFalse(
+      providerSupportsResponsesEndpoint("https://api.siliconflow.cn/v1"),
     );
   });
 });

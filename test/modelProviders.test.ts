@@ -78,6 +78,10 @@ describe("modelProviders", function () {
       "Xiaomi MiMo",
     );
     assert.equal(
+      deriveProviderLabel("https://api.siliconflow.cn/v1"),
+      "SiliconFlow",
+    );
+    assert.equal(
       deriveProviderLabel("https://api.minimax.io/anthropic"),
       "MiniMax",
     );

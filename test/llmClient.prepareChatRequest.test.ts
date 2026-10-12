@@ -1324,4 +1324,103 @@ describe("llmClient prepareChatRequest", function () {
     assert.isAtLeast(writes.length, 1);
     assert.include(writes[writes.length - 1], "new-access");
   });
+
+  it("executes SiliconFlow chat, PDF context Q&A, multi-turn streaming, and cancellation via openai_chat_compat", async function () {
+    let lastUrl = "";
+    let lastHeaders: Record<string, string> = {};
+    let lastBody: Record<string, unknown> = {};
+
+    mockFetch(async (url, init) => {
+      lastUrl = url;
+      lastHeaders = (init?.headers as Record<string, string>) || {};
+      lastBody = JSON.parse(String(init?.body || "{}")) as Record<
+        string,
+        unknown
+      >;
+      if (init?.signal?.aborted) {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
+      if (lastBody.stream) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          body: makeSseStream([
+            'data: {"choices":[{"delta":{"content":"Silicon"}}]}\n\n',
+            'data: {"choices":[{"delta":{"content":"Flow"},"finish_reason":"stop"}]}\n\n',
+            "data: [DONE]\n\n",
+          ]),
+          json: async () => ({}),
+          text: async () => "",
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({
+          choices: [
+            {
+              message: { content: "Answer from SiliconFlow" },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+        text: async () => "",
+      };
+    });
+
+    // 1. Plain chat & PDF selected context Q&A
+    const nonStream = await callLLM({
+      prompt: "Explain this paragraph.",
+      context: "Selected PDF text about transformer attention.",
+      model: "Qwen/Qwen2.5-72B-Instruct",
+      apiBase: "https://api.siliconflow.cn/v1",
+      apiKey: "sf-key-123",
+      providerProtocol: "openai_chat_compat",
+    });
+    assert.equal(lastUrl, "https://api.siliconflow.cn/v1/chat/completions");
+    assert.equal(lastHeaders.Authorization, "Bearer sf-key-123");
+    assert.equal(lastBody.model, "Qwen/Qwen2.5-72B-Instruct");
+    assert.equal(nonStream.text, "Answer from SiliconFlow");
+
+    // 2. Streaming + multi-turn history
+    const deltas: string[] = [];
+    const streamed = await callLLMStream(
+      {
+        prompt: "Follow-up question",
+        history: [
+          { role: "user", content: "First question" },
+          { role: "assistant", content: "First answer" },
+        ],
+        model: "deepseek-ai/DeepSeek-V3",
+        apiBase: "https://api.siliconflow.cn/v1",
+        apiKey: "sf-key-123",
+        providerProtocol: "openai_chat_compat",
+      },
+      (delta) => deltas.push(delta),
+    );
+    assert.equal(lastUrl, "https://api.siliconflow.cn/v1/chat/completions");
+    assert.equal(lastBody.model, "deepseek-ai/DeepSeek-V3");
+    assert.deepEqual(deltas, ["Silicon", "Flow"]);
+    assert.equal(streamed.text, "SiliconFlow");
+
+    // 3. Cancellation via AbortController
+    const abortController = new AbortController();
+    abortController.abort();
+    let aborted = false;
+    try {
+      await callLLM({
+        prompt: "Should abort",
+        model: "Qwen/Qwen2.5-72B-Instruct",
+        apiBase: "https://api.siliconflow.cn/v1",
+        apiKey: "sf-key-123",
+        providerProtocol: "openai_chat_compat",
+        signal: abortController.signal,
+      });
+    } catch {
+      aborted = true;
+    }
+    assert.isTrue(aborted, "aborted signal cancels the request");
+  });
 });
