@@ -16,6 +16,7 @@ describe("Claude bridge MCP scope token", function () {
     Zotero?: Record<string, unknown>;
   };
   const originalZotero = globalScope.Zotero;
+  const originalFetch = globalThis.fetch;
   const conversationKey = CLAUDE_GLOBAL_CONVERSATION_KEY_BASE + 73;
   const otherConversationKey = CLAUDE_GLOBAL_CONVERSATION_KEY_BASE + 74;
 
@@ -25,12 +26,18 @@ describe("Claude bridge MCP scope token", function () {
       Prefs: { get: () => "" },
       DB: { queryAsync: async () => [] },
     };
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ invalidated: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
   });
 
   afterEach(function () {
     resetConversationWriteFenceForTests();
     resetClaudeBridgeRuntime();
     globalScope.Zotero = originalZotero;
+    globalThis.fetch = originalFetch;
   });
 
   it("keeps the bridge turn scope token stable for one conversation", function () {
