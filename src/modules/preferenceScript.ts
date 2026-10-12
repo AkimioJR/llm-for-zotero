@@ -47,6 +47,7 @@ import {
   CUSTOMIZED_MODEL_OPTION_VALUE,
   buildProviderModelSelectRows,
   canFetchProviderModels,
+  formatModelDiscoveryStatusHint,
   providerGroupRequiresApiKey,
   createSelectRebuildGate,
   resolveModelEntryMode,
@@ -69,6 +70,9 @@ import { registerUsagePreferencePanel } from "./preferences/usagePanel";
 import {
   getModelCapabilities,
   getModelCatalogStatus,
+  hasModelDiscoveryAdapter,
+  invalidateModelCatalog,
+  isModelCatalogExpired,
   refreshModelCatalog,
   subscribeModelCapabilities,
   type ModelProfileOverride,
@@ -398,7 +402,11 @@ function getPresetSelectHelperText(presetId: ProviderPresetId): string {
   if (presetId === "customized") {
     return t(CUSTOMIZED_API_HELPER_TEXT);
   }
-  return `${t(getProviderPreset(presetId).helperText)} ${t("Switch to Customized to edit the URL manually.")}`;
+  const helper = t(getProviderPreset(presetId).helperText);
+  if (presetId === "siliconflow") {
+    return helper;
+  }
+  return `${helper} ${t("Switch to Customized to edit the URL manually.")}`;
 }
 
 function getProtocolOptions(
@@ -519,13 +527,20 @@ function registerLiveProfileEditor(entry: LiveProfileEditor) {
  *
  * Returns the row container and the status line to place under the row.
  */
-function attachProviderModelSelect(args: {
+export function attachProviderModelSelect(args: {
   doc: Document;
   input: HTMLInputElement;
   group: Exclude<ModelProviderGroup, WebChatProviderGroup>;
   modelEntry: ModelProviderModel;
   onModelPicked: (modelId: string) => void;
-}): { container: HTMLElement; statusEl: HTMLElement; refresh: () => void } {
+  onCatalogRefreshed?: () => void;
+}): {
+  container: HTMLElement;
+  refreshBtn?: HTMLButtonElement;
+  statusEl: HTMLElement;
+  refresh: (options?: { force?: boolean }) => void;
+  sync: () => void;
+} {
   const { doc, input, group, modelEntry } = args;
 
   const container = createElement(doc, "div", PROVIDER_MODEL_SLOT_CLASS);
@@ -539,28 +554,64 @@ function attachProviderModelSelect(args: {
   let loading = false;
   let fetchToken = 0;
 
+  const isOnDemandDiscovery = () =>
+    hasModelDiscoveryAdapter({
+      provider: resolveProviderPresetId(group),
+      apiBase: group.apiBase,
+    });
+
+  const usesOnDemandDiscovery = isOnDemandDiscovery();
+  const refreshBtn = usesOnDemandDiscovery
+    ? (doc.createElementNS(HTML_NS, "button") as HTMLButtonElement)
+    : undefined;
+  if (refreshBtn) {
+    refreshBtn.className =
+      "llm-pref-button llm-pref-btn llm-pref-btn--ghost llm-pref-model-refresh";
+    refreshBtn.type = "button";
+    refreshBtn.textContent = t("Refresh");
+    refreshBtn.title = t("Refresh models");
+  }
+
   const readSnapshot = () =>
     getModelCatalogStatus(buildProviderCatalogIdentity(group));
 
-  const requiresApiKey = providerGroupRequiresApiKey(group);
+  const credentialKey = () =>
+    `${group.apiBase.trim().replace(/\/+$/, "")}\u0000${group.apiKey.trim()}`;
+  let lastSyncedCredentialKey = credentialKey();
+  let autoFetchedCredentialKey = readSnapshot() ? lastSyncedCredentialKey : "";
+
+  const requiresApiKey = () => providerGroupRequiresApiKey(group);
 
   const currentStatus = () =>
     resolveProviderModelFetchStatus({
       apiKey: group.apiKey,
       loading,
       snapshot: readSnapshot(),
-      requiresApiKey,
+      requiresApiKey: requiresApiKey(),
     });
 
   // The manual text input takes over while the catalog is unavailable, while
   // "Customized…" is explicitly active, and while the input has focus; the
   // dropdown returns once a catalog exists and the input is idle.
-  const currentMode = () =>
-    resolveModelEntryMode({
+  // For on-demand discovery providers before the first fetch attempt
+  // (readSnapshot() === null), keep the dropdown visible so focusing/clicking
+  // it triggers the on-demand catalog request.
+  const currentMode = () => {
+    const snapshot = readSnapshot();
+    if (
+      isOnDemandDiscovery() &&
+      snapshot === null &&
+      !userCustomized &&
+      doc.activeElement !== input
+    ) {
+      return "select";
+    }
+    return resolveModelEntryMode({
       status: currentStatus(),
       userCustomized,
       inputFocused: doc.activeElement === input,
     });
+  };
 
   const syncModes = () => {
     const manual = currentMode() === "manual";
@@ -606,13 +657,42 @@ function attachProviderModelSelect(args: {
     }
     select.value = desiredValue;
   };
-  // Rewriting the options while the native popup is open crashes Gecko's
-  // popup helper (SelectChild "this.element is null"), so rebuilds triggered
-  // by an async catalog refresh wait until the popup is provably closed.
-  const rebuildGate = createSelectRebuildGate(rewriteOptions);
+  // Rewriting the options or hiding the select while the native popup is open
+  // crashes Gecko's popup helper (SelectChild "this.element is null"), so
+  // rebuilds and mode switches triggered by an async catalog refresh wait
+  // until the popup is provably closed.
+  const rebuildGate = createSelectRebuildGate(() => {
+    syncModes();
+    rewriteOptions();
+  });
   const rebuildOptions = rebuildGate.requestRebuild;
 
   const updateStatus = () => {
+    const needsKey = requiresApiKey();
+    if (refreshBtn) {
+      refreshBtn.disabled = loading || (needsKey && !group.apiKey.trim());
+    }
+    if (isOnDemandDiscovery()) {
+      const hint = formatModelDiscoveryStatusHint({
+        apiKey: group.apiKey,
+        requiresApiKey: needsKey,
+        loading,
+        snapshot: readSnapshot(),
+      });
+      if (hint) {
+        statusEl.textContent = t(hint.text);
+        statusEl.style.color = hint.isError
+          ? "var(--color-error, #d93025)"
+          : "var(--fill-secondary, #888)";
+        statusEl.dataset.error = hint.isError ? "true" : "false";
+        statusEl.style.display = "block";
+      } else {
+        delete statusEl.dataset.error;
+        statusEl.style.display = "none";
+      }
+      rebuildOptions();
+      return;
+    }
     const status = currentStatus();
     if (status.kind === "needs_api_key") {
       statusEl.textContent = t(
@@ -629,11 +709,11 @@ function attachProviderModelSelect(args: {
       // the plain text input, so an error line would only add noise.
       statusEl.style.display = "none";
     }
-    syncModes();
+    rebuildOptions();
   };
 
-  const refreshCatalog = async () => {
-    if (requiresApiKey && !group.apiKey.trim()) {
+  const refreshCatalog = async (options?: { force?: boolean }) => {
+    if (requiresApiKey() && !group.apiKey.trim()) {
       updateStatus();
       return;
     }
@@ -641,13 +721,53 @@ function attachProviderModelSelect(args: {
     loading = true;
     updateStatus();
     try {
-      await refreshModelCatalog(buildProviderCatalogIdentity(group));
+      await refreshModelCatalog(buildProviderCatalogIdentity(group), {
+        force: options?.force,
+      });
     } finally {
       if (token === fetchToken) {
         loading = false;
         rebuildOptions();
         updateStatus();
+        args.onCatalogRefreshed?.();
       }
+    }
+  };
+
+  refreshBtn?.addEventListener("click", () => {
+    void refreshCatalog({ force: true });
+  });
+
+  const triggerSelectorEntryFetch = () => {
+    if (!isOnDemandDiscovery()) {
+      void refreshCatalog();
+      return;
+    }
+    if (loading) return;
+    if (requiresApiKey() && !group.apiKey.trim()) {
+      updateStatus();
+      return;
+    }
+    const currentCredKey = credentialKey();
+    const identity = buildProviderCatalogIdentity(group);
+    const snapshot = readSnapshot();
+    if (
+      snapshot &&
+      !snapshot.stale &&
+      snapshot.models.length > 0 &&
+      !isModelCatalogExpired(identity)
+    ) {
+      autoFetchedCredentialKey = currentCredKey;
+      sync();
+      return;
+    }
+    if (
+      snapshot === null ||
+      !snapshot.error ||
+      autoFetchedCredentialKey !== currentCredKey
+    ) {
+      autoFetchedCredentialKey = currentCredKey;
+      void refreshCatalog();
     }
   };
 
@@ -658,7 +778,12 @@ function attachProviderModelSelect(args: {
   attachCodexDirectCatalogInteractions({
     target: select,
     popupMayOpen: () => rebuildGate.popupMayOpen(),
-    refreshCatalog: () => void refreshCatalog(),
+    refreshCatalog: () => triggerSelectorEntryFetch(),
+  });
+  input.addEventListener("focus", () => {
+    if (isOnDemandDiscovery() && !userCustomized) {
+      triggerSelectorEntryFetch();
+    }
   });
   select.addEventListener("blur", () => rebuildGate.popupClosed());
   const applyModelChoice = (chosenValue: string) => {
@@ -698,15 +823,35 @@ function attachProviderModelSelect(args: {
     if ((event as KeyboardEvent).key === "Enter") input.blur();
   });
 
-  syncModes();
-  rebuildOptions();
-  updateStatus();
-  void refreshCatalog();
+  const sync = () => {
+    const currentCredKey = credentialKey();
+    if (currentCredKey !== lastSyncedCredentialKey) {
+      lastSyncedCredentialKey = currentCredKey;
+      if (loading) {
+        fetchToken += 1;
+        loading = false;
+      }
+      invalidateModelCatalog(buildProviderCatalogIdentity(group));
+    }
+    if (doc.activeElement !== select) {
+      rebuildGate.popupClosed();
+    }
+    syncModes();
+    rebuildOptions();
+    updateStatus();
+  };
+
+  sync();
+  if (!usesOnDemandDiscovery) {
+    void refreshCatalog();
+  }
 
   return {
     container,
+    refreshBtn,
     statusEl,
-    refresh: () => void refreshCatalog(),
+    refresh: (options?: { force?: boolean }) => void refreshCatalog(options),
+    sync,
   };
 }
 
@@ -1810,7 +1955,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           if (preset.id === "copilot") continue;
           const option = el(doc, "option") as HTMLOptionElement;
           option.value = preset.id;
-          option.textContent = preset.label;
+          option.textContent = t(preset.label);
           option.selected = preset.id === selectedPresetId;
           providerPresetSelect.appendChild(option);
         }
@@ -1865,6 +2010,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         group.authMode !== "codex_app_server" &&
         group.authMode !== "copilot_auth" &&
         !isCustomizedPreset &&
+        selectedPresetId !== "siliconflow" &&
         // Local presets ship a default host and port, but the server may run on
         // another port or another machine on the LAN, so the URL stays editable.
         presetRequiresApiKey;
@@ -1874,11 +2020,17 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       apiUrlInput.title = apiUrlInput.readOnly
         ? t("Switch Provider to Customized to edit this URL manually.")
         : "";
+      const modelPickerRefreshers: Array<() => void> = [];
+      const modelPickerSyncers: Array<() => void> = [];
       apiUrlInput.addEventListener("input", () => {
         if (group.authMode === "webchat") return;
+        if (selectedPresetId !== "customized" && !group.presetIdOverride) {
+          group.presetIdOverride = selectedPresetId;
+        }
         group.apiBase = apiUrlInput.value;
         persistGroups(groups);
         syncAddProviderBtn();
+        for (const sync of modelPickerSyncers) sync();
       });
       const apiUrlHelper = prefHint(
         doc,
@@ -1909,13 +2061,21 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       apiKeyInput.value = group.apiKey || "";
       // Model dropdowns register here so a freshly pasted key refetches their
       // catalogs without reopening the pane. Debounced to sit out keystrokes.
-      const modelPickerRefreshers: Array<() => void> = [];
       let modelPickerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
       apiKeyInput.addEventListener("input", () => {
         if (group.authMode === "webchat") return;
         group.apiKey = apiKeyInput.value;
         persistGroups(groups);
         syncAddProviderBtn();
+        for (const sync of modelPickerSyncers) sync();
+        if (
+          hasModelDiscoveryAdapter({
+            provider: resolveProviderPresetId(group),
+            apiBase: group.apiBase,
+          })
+        ) {
+          return;
+        }
         if (modelPickerRefreshTimer !== null)
           clearTimeout(modelPickerRefreshTimer);
         modelPickerRefreshTimer = setTimeout(() => {
@@ -2398,10 +2558,19 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
               syncAddProviderBtn();
               syncAdvAvailability();
             },
+            onCatalogRefreshed: () => {
+              for (const sync of modelPickerSyncers) sync();
+            },
           });
           pickerStatusEl = picker.statusEl;
           modelPickerRefreshers.push(picker.refresh);
-          mainRow.append(picker.container, testBtn, advGearBtn);
+          modelPickerSyncers.push(picker.sync);
+          mainRow.append(
+            picker.container,
+            ...(picker.refreshBtn ? [picker.refreshBtn] : []),
+            testBtn,
+            advGearBtn,
+          );
         } else {
           mainRow.append(modelInput, testBtn, advGearBtn);
         }
@@ -2457,6 +2626,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         );
         const resolveDetectedProfile = () =>
           getModelCapabilities({
+            provider:
+              selectedPresetId === "customized" ? undefined : selectedPresetId,
             model: modelEntry.model,
             apiBase: group.apiBase,
             protocol: resolveModelSelectedProtocol(

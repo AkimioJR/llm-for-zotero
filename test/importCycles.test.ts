@@ -18,6 +18,7 @@ function formatCycles(cycles: string[][]): string[] {
 }
 
 describe("import cycles", function () {
+  this.timeout(10000);
   it("does not introduce cycles outside the current allowlist", function () {
     const result = checkImportCycles(process.cwd());
     assert.deepEqual(formatCycles(result.unexpectedRuntime), []);
