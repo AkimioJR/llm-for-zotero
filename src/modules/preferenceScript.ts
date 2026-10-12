@@ -71,6 +71,7 @@ import {
   getModelCapabilities,
   getModelCatalogStatus,
   hasModelDiscoveryAdapter,
+  invalidateModelCatalog,
   isModelCatalogExpired,
   refreshModelCatalog,
   subscribeModelCapabilities,
@@ -532,6 +533,7 @@ export function attachProviderModelSelect(args: {
   group: Exclude<ModelProviderGroup, WebChatProviderGroup>;
   modelEntry: ModelProviderModel;
   onModelPicked: (modelId: string) => void;
+  onCatalogRefreshed?: () => void;
 }): {
   container: HTMLElement;
   refreshBtn?: HTMLButtonElement;
@@ -551,7 +553,6 @@ export function attachProviderModelSelect(args: {
   let userCustomized = false;
   let loading = false;
   let fetchToken = 0;
-  let autoFetchedCredentialKey = "";
 
   const isOnDemandDiscovery = () =>
     hasModelDiscoveryAdapter({
@@ -574,14 +575,19 @@ export function attachProviderModelSelect(args: {
   const readSnapshot = () =>
     getModelCatalogStatus(buildProviderCatalogIdentity(group));
 
-  const requiresApiKey = providerGroupRequiresApiKey(group);
+  const credentialKey = () =>
+    `${group.apiBase.trim().replace(/\/+$/, "")}\u0000${group.apiKey.trim()}`;
+  let lastSyncedCredentialKey = credentialKey();
+  let autoFetchedCredentialKey = readSnapshot() ? lastSyncedCredentialKey : "";
+
+  const requiresApiKey = () => providerGroupRequiresApiKey(group);
 
   const currentStatus = () =>
     resolveProviderModelFetchStatus({
       apiKey: group.apiKey,
       loading,
       snapshot: readSnapshot(),
-      requiresApiKey,
+      requiresApiKey: requiresApiKey(),
     });
 
   // The manual text input takes over while the catalog is unavailable, while
@@ -662,13 +668,14 @@ export function attachProviderModelSelect(args: {
   const rebuildOptions = rebuildGate.requestRebuild;
 
   const updateStatus = () => {
+    const needsKey = requiresApiKey();
     if (refreshBtn) {
-      refreshBtn.disabled = loading || (requiresApiKey && !group.apiKey.trim());
+      refreshBtn.disabled = loading || (needsKey && !group.apiKey.trim());
     }
     if (isOnDemandDiscovery()) {
       const hint = formatModelDiscoveryStatusHint({
         apiKey: group.apiKey,
-        requiresApiKey,
+        requiresApiKey: needsKey,
         loading,
         snapshot: readSnapshot(),
       });
@@ -706,7 +713,7 @@ export function attachProviderModelSelect(args: {
   };
 
   const refreshCatalog = async (options?: { force?: boolean }) => {
-    if (requiresApiKey && !group.apiKey.trim()) {
+    if (requiresApiKey() && !group.apiKey.trim()) {
       updateStatus();
       return;
     }
@@ -722,6 +729,7 @@ export function attachProviderModelSelect(args: {
         loading = false;
         rebuildOptions();
         updateStatus();
+        args.onCatalogRefreshed?.();
       }
     }
   };
@@ -730,17 +738,13 @@ export function attachProviderModelSelect(args: {
     void refreshCatalog({ force: true });
   });
 
-  const credentialKey = () =>
-    `${group.apiBase.trim()}\u0000${group.apiKey.trim()}`;
-  let lastSyncedCredentialKey = credentialKey();
-
   const triggerSelectorEntryFetch = () => {
     if (!isOnDemandDiscovery()) {
       void refreshCatalog();
       return;
     }
     if (loading) return;
-    if (requiresApiKey && !group.apiKey.trim()) {
+    if (requiresApiKey() && !group.apiKey.trim()) {
       updateStatus();
       return;
     }
@@ -775,9 +779,6 @@ export function attachProviderModelSelect(args: {
     target: select,
     popupMayOpen: () => rebuildGate.popupMayOpen(),
     refreshCatalog: () => triggerSelectorEntryFetch(),
-  });
-  select.addEventListener("focus", () => {
-    if (isOnDemandDiscovery()) triggerSelectorEntryFetch();
   });
   input.addEventListener("focus", () => {
     if (isOnDemandDiscovery() && !userCustomized) {
@@ -830,6 +831,7 @@ export function attachProviderModelSelect(args: {
         fetchToken += 1;
         loading = false;
       }
+      invalidateModelCatalog(buildProviderCatalogIdentity(group));
     }
     if (doc.activeElement !== select) {
       rebuildGate.popupClosed();
@@ -2022,6 +2024,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       const modelPickerSyncers: Array<() => void> = [];
       apiUrlInput.addEventListener("input", () => {
         if (group.authMode === "webchat") return;
+        if (selectedPresetId !== "customized" && !group.presetIdOverride) {
+          group.presetIdOverride = selectedPresetId;
+        }
         group.apiBase = apiUrlInput.value;
         persistGroups(groups);
         syncAddProviderBtn();
@@ -2553,6 +2558,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
               syncAddProviderBtn();
               syncAdvAvailability();
             },
+            onCatalogRefreshed: () => {
+              for (const sync of modelPickerSyncers) sync();
+            },
           });
           pickerStatusEl = picker.statusEl;
           modelPickerRefreshers.push(picker.refresh);
@@ -2618,6 +2626,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         );
         const resolveDetectedProfile = () =>
           getModelCapabilities({
+            provider:
+              selectedPresetId === "customized" ? undefined : selectedPresetId,
             model: modelEntry.model,
             apiBase: group.apiBase,
             protocol: resolveModelSelectedProtocol(

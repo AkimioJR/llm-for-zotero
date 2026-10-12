@@ -101,6 +101,7 @@ let registryRefreshTask: Promise<boolean> | null = null;
 const capabilityPreflightTasks = new Map<string, Promise<void>>();
 const catalogRefreshTasks = new Map<string, Promise<DiscoveredModel[]>>();
 const catalogFetchGenerations = new Map<string, number>();
+let nextCatalogFetchGeneration = 0;
 const catalogSnapshots = new Map<string, CatalogSnapshot>();
 const capabilityListeners = new Set<() => void>();
 
@@ -110,6 +111,10 @@ function now(): number {
 
 function normalize(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeApiBase(value: unknown): string {
+  return normalize(value).replace(/\/+$/, "");
 }
 
 function getFetch(): typeof fetch | undefined {
@@ -277,7 +282,7 @@ function normalizeApiKey(value: unknown): string {
 function buildCatalogKey(identity: ModelCatalogIdentity): string {
   return [
     catalogProviderFromIdentity(identity),
-    normalize(identity.apiBase),
+    normalizeApiBase(identity.apiBase),
     normalize(identity.protocol),
     normalize(identity.authMode),
     normalize(identity.scope),
@@ -288,19 +293,27 @@ function buildCatalogKey(identity: ModelCatalogIdentity): string {
 function buildCatalogBaseKey(identity: ModelCapabilityIdentity): string {
   return [
     catalogProviderFromIdentity(identity),
-    normalize(identity.apiBase),
+    normalizeApiBase(identity.apiBase),
     normalize(identity.protocol),
     normalize(identity.authMode),
   ].join("\u0000");
 }
 
-function setCatalogSnapshot(
-  key: string,
+function isSameCatalogConfiguration(
+  existingKey: string,
   identity: ModelCatalogIdentity,
-  snapshot: CatalogSnapshot,
-): void {
+): boolean {
+  const parts = existingKey.split("\u0000");
+  const reqScope = normalize(identity.scope);
+  const existingScope = parts[4] || "";
+  if (existingScope !== reqScope) {
+    return false;
+  }
+  if (reqScope) {
+    return true;
+  }
   const baseKey = buildCatalogBaseKey(identity);
-  const normalizedBase = normalize(identity.apiBase);
+  const normalizedBase = normalizeApiBase(identity.apiBase);
   const endpointTail = normalizedBase
     ? [
         normalizedBase,
@@ -308,20 +321,22 @@ function setCatalogSnapshot(
         normalize(identity.authMode),
       ].join("\u0000")
     : "";
-  const reqScope = normalize(identity.scope);
+  const existingBaseKey = parts.slice(0, 4).join("\u0000");
+  const existingEndpointTail = parts.slice(1, 4).join("\u0000");
+  return (
+    existingBaseKey === baseKey ||
+    Boolean(endpointTail && existingEndpointTail === endpointTail)
+  );
+}
+
+function setCatalogSnapshot(
+  key: string,
+  identity: ModelCatalogIdentity,
+  snapshot: CatalogSnapshot,
+): void {
   for (const existingKey of Array.from(catalogSnapshots.keys())) {
     if (existingKey === key) continue;
-    const parts = existingKey.split("\u0000");
-    const existingScope = parts[4] || "";
-    if (reqScope && existingScope && existingScope !== reqScope) {
-      continue;
-    }
-    const existingBaseKey = parts.slice(0, 4).join("\u0000");
-    const existingEndpointTail = parts.slice(1, 4).join("\u0000");
-    if (
-      existingBaseKey === baseKey ||
-      (endpointTail && existingEndpointTail === endpointTail)
-    ) {
+    if (isSameCatalogConfiguration(existingKey, identity)) {
       catalogSnapshots.delete(existingKey);
     }
   }
@@ -333,13 +348,23 @@ function getCatalogSnapshot(
 ): CatalogSnapshot | undefined {
   const exact = catalogSnapshots.get(buildCatalogKey(identity));
   if (exact) return exact;
+  const reqProtocol = normalize(identity.protocol);
+  const reqAuthMode = normalize(identity.authMode);
+  const reqScope = normalize(identity.scope);
   const hasExplicitApiKey = identity.apiKey !== undefined;
   const reqApiKey = normalizeApiKey(identity.apiKey);
-  const reqScope = normalize(identity.scope);
   const matchesSnapshotKey = (snapshotKey: string): boolean => {
     const parts = snapshotKey.split("\u0000");
+    const snapshotProtocol = parts[2] || "";
+    const snapshotAuthMode = parts[3] || "";
     const snapshotScope = parts[4] || "";
     const snapshotApiKey = parts[5] || "";
+    if (reqProtocol && snapshotProtocol && snapshotProtocol !== reqProtocol) {
+      return false;
+    }
+    if (reqAuthMode && snapshotAuthMode && snapshotAuthMode !== reqAuthMode) {
+      return false;
+    }
     if (reqScope && snapshotScope && snapshotScope !== reqScope) {
       return false;
     }
@@ -356,18 +381,20 @@ function getCatalogSnapshot(
       return snapshot;
     }
   }
-  const normalizedBase = normalize(identity.apiBase);
+  const catalogProvider = catalogProviderFromIdentity(identity);
+  const normalizedBase = normalizeApiBase(identity.apiBase);
+  for (const [snapshotKey, snapshot] of entriesNewestFirst) {
+    if (!matchesSnapshotKey(snapshotKey)) continue;
+    const parts = snapshotKey.split("\u0000");
+    if (parts[0] === catalogProvider && parts[1] === normalizedBase) {
+      return snapshot;
+    }
+  }
   if (normalizedBase) {
-    const endpointTail = [
-      normalizedBase,
-      normalize(identity.protocol),
-      normalize(identity.authMode),
-    ].join("\u0000");
     for (const [snapshotKey, snapshot] of entriesNewestFirst) {
       if (!matchesSnapshotKey(snapshotKey)) continue;
-      if (
-        snapshotKey.split("\u0000").slice(1, 4).join("\u0000") === endpointTail
-      ) {
+      const parts = snapshotKey.split("\u0000");
+      if (parts[1] === normalizedBase) {
         return snapshot;
       }
     }
@@ -1165,7 +1192,15 @@ async function fetchModelCatalog(
   key: string,
   cached: CatalogSnapshot | undefined,
 ): Promise<DiscoveredModel[]> {
-  const generation = (catalogFetchGenerations.get(key) || 0) + 1;
+  const generation = ++nextCatalogFetchGeneration;
+  for (const existingKey of Array.from(catalogFetchGenerations.keys())) {
+    if (
+      existingKey === key ||
+      isSameCatalogConfiguration(existingKey, identity)
+    ) {
+      catalogFetchGenerations.set(existingKey, generation);
+    }
+  }
   catalogFetchGenerations.set(key, generation);
   const isCurrentGeneration = () =>
     catalogFetchGenerations.get(key) === generation;
@@ -1364,6 +1399,25 @@ async function fetchModelCatalog(
   }
 }
 
+export function invalidateModelCatalog(identity: ModelCatalogIdentity): void {
+  const invalidationGeneration = ++nextCatalogFetchGeneration;
+  for (const existingKey of Array.from(catalogFetchGenerations.keys())) {
+    if (isSameCatalogConfiguration(existingKey, identity)) {
+      catalogFetchGenerations.set(existingKey, invalidationGeneration);
+    }
+  }
+  let removed = false;
+  for (const existingKey of Array.from(catalogSnapshots.keys())) {
+    if (isSameCatalogConfiguration(existingKey, identity)) {
+      catalogSnapshots.delete(existingKey);
+      removed = true;
+    }
+  }
+  if (removed) {
+    notify();
+  }
+}
+
 export function getDiscoveredModels(
   identity: ModelCatalogIdentity,
 ): DiscoveredModel[] {
@@ -1408,6 +1462,7 @@ export function resetModelCapabilityStateForTests(): void {
   capabilityPreflightTasks.clear();
   catalogRefreshTasks.clear();
   catalogFetchGenerations.clear();
+  nextCatalogFetchGeneration = 0;
   catalogSnapshots.clear();
   runtime = {};
 }

@@ -74,8 +74,8 @@ export function isDiscoveredChatModel(
       : typeof row.subType === "string"
         ? row.subType.trim().toLowerCase()
         : "";
-  if (subType) {
-    return subType === "chat";
+  if (subType && subType !== "chat") {
+    return false;
   }
   const modelType =
     typeof row.type === "string"
@@ -127,6 +127,9 @@ export class SiliconFlowModelDiscoveryAdapter implements ModelDiscoveryAdapter {
   buildEndpoint(apiBase: string): string {
     const rawBase = apiBase.trim() || DEFAULT_SILICONFLOW_API_BASE;
     const url = new URL(rawBase);
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      throw new Error(`Unsupported protocol: ${url.protocol}`);
+    }
     let path = url.pathname.replace(/\/+$/, "");
     if (!path) {
       path = "/v1";

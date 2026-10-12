@@ -8,6 +8,7 @@ import {
   getModelCatalogStatus,
   getModelDiscoveryAdapter,
   hasModelDiscoveryAdapter,
+  invalidateModelCatalog,
   isModelCatalogExpired,
   listModelDiscoveryProviders,
   MODEL_DISCOVERY_CACHE_TTL_MS,
@@ -924,6 +925,15 @@ describe("ModelDiscovery architecture & SiliconFlow implementation", function ()
         getModelCapabilities(baseConfig).limits.contextWindowTokens,
         32768,
       );
+      // Also works when caller omits authMode or includes a trailing slash on apiBase
+      assert.equal(
+        getModelCapabilities({
+          model: "Qwen/Qwen2.5-72B-Instruct",
+          apiBase: "https://api.siliconflow.cn/v1/",
+          protocol: "openai_chat_compat",
+        }).limits.contextWindowTokens,
+        32768,
+      );
 
       // Change API key and force refresh; callers of getModelCapabilities() do NOT pass apiKey
       await refreshModelCatalog(
@@ -933,6 +943,77 @@ describe("ModelDiscovery architecture & SiliconFlow implementation", function ()
       const updatedCaps = getModelCapabilities(baseConfig);
       assert.equal(updatedCaps.limits.contextWindowTokens, 8192);
       assert.equal(updatedCaps.limits.inputTokens, 8192);
+
+      // If the user edits or clears the API key in Preferences before refreshing,
+      // invalidateModelCatalog immediately evicts the old key's live catalog
+      invalidateModelCatalog({ ...baseConfig, apiKey: "sk-key-3" });
+      assert.notEqual(
+        getModelCapabilities(baseConfig).source,
+        "live",
+        "invalidated catalog must no longer resolve live limits from the previous API key",
+      );
+    });
+
+    it("prevents a slow in-flight request from an older API key from overwriting a newer API key's snapshot", async function () {
+      let resolveOldKey!: (res: Response) => void;
+      let resolveNewKey!: (res: Response) => void;
+
+      configureModelCapabilityRuntime({
+        environment: "test",
+        fetch: (async (
+          _url: string,
+          init?: { headers?: Record<string, string> },
+        ) => {
+          const auth = init?.headers?.Authorization || "";
+          if (auth.includes("sk-old")) {
+            return new Promise<Response>((resolve) => {
+              resolveOldKey = resolve;
+            });
+          }
+          return new Promise<Response>((resolve) => {
+            resolveNewKey = resolve;
+          });
+        }) as unknown as typeof fetch,
+      });
+
+      const baseCard = {
+        provider: "siliconflow",
+        model: "Qwen/Qwen2.5-72B-Instruct",
+        apiBase: "https://api.siliconflow.cn/v1",
+        protocol: "openai_chat_compat",
+        authMode: "api_key",
+        scope: "group-sf-cross-key-race",
+      };
+
+      const pOld = refreshModelCatalog({ ...baseCard, apiKey: "sk-old" });
+      const pNew = refreshModelCatalog({ ...baseCard, apiKey: "sk-new" });
+
+      resolveNewKey({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [{ id: "Qwen/Qwen2.5-72B-Instruct", context_length: 8192 }],
+        }),
+      } as Response);
+      await pNew;
+
+      resolveOldKey({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [{ id: "Qwen/Qwen2.5-72B-Instruct", context_length: 32768 }],
+        }),
+      } as Response);
+      await pOld;
+
+      assert.equal(
+        getModelCapabilities(baseCard).limits.contextWindowTokens,
+        8192,
+        "slow response for sk-old must not overwrite sk-new's snapshot",
+      );
+      assert.isNotNull(
+        getModelCatalogStatus({ ...baseCard, apiKey: "sk-new" }),
+      );
     });
 
     it("refreshes the SiliconFlow selector when reopened after the 30-minute cache expires", async function () {

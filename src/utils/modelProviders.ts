@@ -313,6 +313,7 @@ export function deriveProviderLabel(
   if (lowerHost.includes("dashscope") || lowerHost.includes("aliyuncs.com")) {
     return "Qwen";
   }
+  if (lowerHost.includes("siliconflow.")) return "SiliconFlow";
 
   return host;
 }
