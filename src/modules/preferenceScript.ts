@@ -71,6 +71,7 @@ import {
   getModelCapabilities,
   getModelCatalogStatus,
   hasModelDiscoveryAdapter,
+  isModelCatalogExpired,
   refreshModelCatalog,
   subscribeModelCapabilities,
   type ModelProfileOverride,
@@ -525,7 +526,7 @@ function registerLiveProfileEditor(entry: LiveProfileEditor) {
  *
  * Returns the row container and the status line to place under the row.
  */
-function attachProviderModelSelect(args: {
+export function attachProviderModelSelect(args: {
   doc: Document;
   input: HTMLInputElement;
   group: Exclude<ModelProviderGroup, WebChatProviderGroup>;
@@ -738,20 +739,27 @@ function attachProviderModelSelect(args: {
       void refreshCatalog();
       return;
     }
+    if (loading) return;
     if (requiresApiKey && !group.apiKey.trim()) {
       updateStatus();
       return;
     }
     const currentCredKey = credentialKey();
+    const identity = buildProviderCatalogIdentity(group);
     const snapshot = readSnapshot();
-    if (snapshot && !snapshot.stale && snapshot.models.length > 0) {
+    if (
+      snapshot &&
+      !snapshot.stale &&
+      snapshot.models.length > 0 &&
+      !isModelCatalogExpired(identity)
+    ) {
       autoFetchedCredentialKey = currentCredKey;
       sync();
       return;
     }
     if (
       snapshot === null ||
-      (snapshot.stale && !snapshot.error) ||
+      !snapshot.error ||
       autoFetchedCredentialKey !== currentCredKey
     ) {
       autoFetchedCredentialKey = currentCredKey;

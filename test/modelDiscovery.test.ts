@@ -4,14 +4,17 @@ import {
   configureModelCapabilityRuntime,
   ensureModelCapabilities,
   getDiscoveredModels,
+  getModelCapabilities,
   getModelCatalogStatus,
   getModelDiscoveryAdapter,
   hasModelDiscoveryAdapter,
+  isModelCatalogExpired,
   listModelDiscoveryProviders,
   MODEL_DISCOVERY_CACHE_TTL_MS,
   refreshModelCatalog,
   resetModelCapabilityStateForTests,
 } from "../src/modelCapabilities";
+import { attachProviderModelSelect } from "../src/modules/preferenceScript";
 import {
   buildProviderCatalogIdentity,
   createProviderModelEntry,
@@ -28,6 +31,7 @@ import {
   resolveProviderModelFetchStatus,
   sortModelOptions,
 } from "../src/utils/providerModelPicker";
+import { FakePrefDocument, flushAsync } from "./helpers/fakePreferencesDom";
 
 let originalZotero: typeof Zotero | undefined;
 
@@ -881,6 +885,211 @@ describe("ModelDiscovery architecture & SiliconFlow implementation", function ()
       assert.lengthOf(runtimeEntries, 1);
       assert.equal(runtimeEntries[0].model, "Pro/deepseek-ai/DeepSeek-R1");
       assert.equal(runtimeEntries[0].providerLabel, "SiliconFlow");
+    });
+
+    it("invalidates superseded snapshots for the same configuration so getModelCapabilities() uses the current API key's catalog", async function () {
+      configureModelCapabilityRuntime({
+        environment: "test",
+        fetch: (async (
+          _url: string,
+          init?: { headers?: Record<string, string> },
+        ) => {
+          const auth = init?.headers?.Authorization || "";
+          const contextLen = auth.includes("sk-key-2") ? 8192 : 32768;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: [
+                {
+                  id: "Qwen/Qwen2.5-72B-Instruct",
+                  context_length: contextLen,
+                },
+              ],
+            }),
+          } as Response;
+        }) as unknown as typeof fetch,
+      });
+
+      const baseConfig = {
+        provider: "siliconflow",
+        model: "Qwen/Qwen2.5-72B-Instruct",
+        apiBase: "https://api.siliconflow.cn/v1",
+        protocol: "openai_chat_compat",
+        authMode: "api_key",
+      };
+
+      await refreshModelCatalog({ ...baseConfig, apiKey: "sk-key-1" });
+      assert.equal(
+        getModelCapabilities(baseConfig).limits.contextWindowTokens,
+        32768,
+      );
+
+      // Change API key and force refresh; callers of getModelCapabilities() do NOT pass apiKey
+      await refreshModelCatalog(
+        { ...baseConfig, apiKey: "sk-key-2" },
+        { force: true },
+      );
+      const updatedCaps = getModelCapabilities(baseConfig);
+      assert.equal(updatedCaps.limits.contextWindowTokens, 8192);
+      assert.equal(updatedCaps.limits.inputTokens, 8192);
+    });
+
+    it("refreshes the SiliconFlow selector when reopened after the 30-minute cache expires", async function () {
+      let currentTime = 1_700_000_000_000;
+      let fetchCalls = 0;
+
+      configureModelCapabilityRuntime({
+        environment: "test",
+        now: () => currentTime,
+        fetch: (async () => {
+          fetchCalls += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: [
+                {
+                  id:
+                    fetchCalls === 1
+                      ? "Qwen/Qwen2.5-72B-Instruct"
+                      : "deepseek-ai/DeepSeek-V3",
+                },
+              ],
+            }),
+          } as Response;
+        }) as unknown as typeof fetch,
+      });
+
+      const doc = new FakePrefDocument();
+      const inputEl = doc.createElement("input");
+      Object.assign(doc.body, {
+        append: (...nodes: unknown[]) => {
+          for (const node of nodes) {
+            doc.body.appendChild(node as never);
+          }
+        },
+      });
+      const ensureAppend = (el: unknown) => {
+        const target = el as {
+          append?: (...nodes: unknown[]) => void;
+          appendChild: (node: unknown) => void;
+          dataset?: Record<string, string>;
+        };
+        if (!target.dataset) target.dataset = {};
+        if (!target.append) {
+          target.append = (...nodes: unknown[]) => {
+            for (const node of nodes) target.appendChild(node);
+          };
+        }
+        return el;
+      };
+      const origCreateElementNS = doc.createElementNS.bind(doc);
+      doc.createElementNS = ((ns: string, tag: string) =>
+        ensureAppend(
+          origCreateElementNS(ns, tag),
+        )) as typeof doc.createElementNS;
+      ensureAppend(inputEl);
+
+      const group: ModelProviderGroup = {
+        id: "sf-selector-expiry-group",
+        apiBase: "https://api.siliconflow.cn/v1",
+        apiKey: "sk-sf-expiry",
+        authMode: "api_key",
+        providerProtocol: "openai_chat_compat",
+        models: [createProviderModelEntry("Qwen/Qwen2.5-72B-Instruct")],
+      };
+
+      const picker = attachProviderModelSelect({
+        doc: doc as unknown as Document,
+        input: inputEl as unknown as HTMLInputElement,
+        group,
+        modelEntry: group.models[0],
+        onModelPicked: (modelId) => {
+          group.models[0].model = modelId;
+        },
+      });
+
+      // 0 requests on initial mount
+      assert.equal(fetchCalls, 0);
+
+      const selectEl = picker.container.querySelector("select")!;
+      assert.isNotNull(selectEl);
+
+      // 1st selector open at t = 0 -> triggers network fetch #1
+      selectEl.dispatch("focus");
+      await flushAsync();
+      assert.equal(fetchCalls, 1);
+      assert.isFalse(
+        isModelCatalogExpired(buildProviderCatalogIdentity(group)),
+      );
+
+      // Reopen selector at t = 29 minutes -> still within 30-min TTL, no extra request
+      currentTime += 29 * 60 * 1000;
+      selectEl.dispatch("focus");
+      await flushAsync();
+      assert.equal(fetchCalls, 1);
+
+      // Reopen selector past 30 minutes (t = 30m + 1s) -> cache expired, triggers network fetch #2
+      currentTime += 61 * 1000;
+      assert.isTrue(isModelCatalogExpired(buildProviderCatalogIdentity(group)));
+      selectEl.dispatch("focus");
+      await flushAsync();
+      assert.equal(
+        fetchCalls,
+        2,
+        "reopening selector after 30 minutes must trigger a fresh request",
+      );
+    });
+
+    it("preserves the 1-minute cache lifetime for existing non-ModelDiscovery providers (e.g. Ollama and local OpenAI-compatible servers)", async function () {
+      let currentTime = 1_700_000_000_000;
+      let fetchCalls = 0;
+
+      configureModelCapabilityRuntime({
+        environment: "test",
+        now: () => currentTime,
+        fetch: (async () => {
+          fetchCalls += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: [{ id: `local-model-${fetchCalls}` }],
+            }),
+          } as Response;
+        }) as unknown as typeof fetch,
+      });
+
+      const localIdentity = {
+        provider: "local",
+        model: "",
+        apiBase: "http://127.0.0.1:11434/v1",
+        protocol: "openai_chat_compat",
+        authMode: "api_key",
+      };
+
+      await refreshModelCatalog(localIdentity);
+      assert.equal(fetchCalls, 1);
+
+      // At 30 seconds (< 1 minute): cache hit
+      currentTime += 30 * 1000;
+      await refreshModelCatalog(localIdentity);
+      assert.equal(fetchCalls, 1);
+
+      // At 61 seconds (> 1 minute, well below 30 minutes): must expire and re-fetch for non-ModelDiscovery providers
+      currentTime += 31 * 1000;
+      assert.isTrue(isModelCatalogExpired(localIdentity));
+      const refreshed = await refreshModelCatalog(localIdentity);
+      assert.equal(
+        fetchCalls,
+        2,
+        "existing providers must keep their 1-minute catalog TTL",
+      );
+      assert.deepEqual(
+        refreshed.map((m) => m.id),
+        ["local-model-2"],
+      );
     });
   });
 });

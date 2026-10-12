@@ -73,9 +73,15 @@ import type {
 } from "./types";
 
 const REGISTRY_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const PROVIDER_CATALOG_TTL_MS = MODEL_DISCOVERY_CACHE_TTL_MS;
+const PROVIDER_CATALOG_TTL_MS = 60 * 1000;
 const DEFAULT_REFRESH_TIMEOUT_MS = 10_000;
 const FIRST_USE_PREFLIGHT_TIMEOUT_MS = 5_000;
+
+function getCatalogTtlMs(identity: ModelCatalogIdentity): number {
+  return hasModelDiscoveryAdapter(identity)
+    ? MODEL_DISCOVERY_CACHE_TTL_MS
+    : PROVIDER_CATALOG_TTL_MS;
+}
 
 type CatalogSnapshot = ModelCatalogStatus;
 
@@ -288,6 +294,40 @@ function buildCatalogBaseKey(identity: ModelCapabilityIdentity): string {
   ].join("\u0000");
 }
 
+function setCatalogSnapshot(
+  key: string,
+  identity: ModelCatalogIdentity,
+  snapshot: CatalogSnapshot,
+): void {
+  const baseKey = buildCatalogBaseKey(identity);
+  const normalizedBase = normalize(identity.apiBase);
+  const endpointTail = normalizedBase
+    ? [
+        normalizedBase,
+        normalize(identity.protocol),
+        normalize(identity.authMode),
+      ].join("\u0000")
+    : "";
+  const reqScope = normalize(identity.scope);
+  for (const existingKey of Array.from(catalogSnapshots.keys())) {
+    if (existingKey === key) continue;
+    const parts = existingKey.split("\u0000");
+    const existingScope = parts[4] || "";
+    if (reqScope && existingScope && existingScope !== reqScope) {
+      continue;
+    }
+    const existingBaseKey = parts.slice(0, 4).join("\u0000");
+    const existingEndpointTail = parts.slice(1, 4).join("\u0000");
+    if (
+      existingBaseKey === baseKey ||
+      (endpointTail && existingEndpointTail === endpointTail)
+    ) {
+      catalogSnapshots.delete(existingKey);
+    }
+  }
+  catalogSnapshots.set(key, snapshot);
+}
+
 function getCatalogSnapshot(
   identity: ModelCatalogIdentity,
 ): CatalogSnapshot | undefined {
@@ -300,16 +340,17 @@ function getCatalogSnapshot(
     const parts = snapshotKey.split("\u0000");
     const snapshotScope = parts[4] || "";
     const snapshotApiKey = parts[5] || "";
-    if (hasExplicitApiKey) {
-      if (snapshotApiKey !== reqApiKey) return false;
-      if (reqScope && snapshotScope && snapshotScope !== reqScope) {
-        return false;
-      }
+    if (reqScope && snapshotScope && snapshotScope !== reqScope) {
+      return false;
+    }
+    if (hasExplicitApiKey && snapshotApiKey !== reqApiKey) {
+      return false;
     }
     return true;
   };
+  const entriesNewestFirst = Array.from(catalogSnapshots.entries()).reverse();
   const baseKey = buildCatalogBaseKey(identity);
-  for (const [snapshotKey, snapshot] of catalogSnapshots) {
+  for (const [snapshotKey, snapshot] of entriesNewestFirst) {
     if (!matchesSnapshotKey(snapshotKey)) continue;
     if (snapshotKey.split("\u0000").slice(0, 4).join("\u0000") === baseKey) {
       return snapshot;
@@ -322,7 +363,7 @@ function getCatalogSnapshot(
       normalize(identity.protocol),
       normalize(identity.authMode),
     ].join("\u0000");
-    for (const [snapshotKey, snapshot] of catalogSnapshots) {
+    for (const [snapshotKey, snapshot] of entriesNewestFirst) {
       if (!matchesSnapshotKey(snapshotKey)) continue;
       if (
         snapshotKey.split("\u0000").slice(1, 4).join("\u0000") === endpointTail
@@ -1096,11 +1137,12 @@ export async function refreshModelCatalog(
 ): Promise<DiscoveredModel[]> {
   const key = buildCatalogKey(identity);
   const cached = catalogSnapshots.get(key);
+  const ttlMs = getCatalogTtlMs(identity);
   if (
     cached &&
     !options.force &&
     !cached.stale &&
-    now() - cached.fetchedAt < PROVIDER_CATALOG_TTL_MS
+    now() - cached.fetchedAt < ttlMs
   ) {
     return cached.models;
   }
@@ -1141,7 +1183,11 @@ async function fetchModelCatalog(
         timeoutMs: options.timeoutMs || DEFAULT_REFRESH_TIMEOUT_MS,
       });
       if (isCurrentGeneration()) {
-        catalogSnapshots.set(key, { models, fetchedAt: now(), stale: false });
+        setCatalogSnapshot(key, identity, {
+          models,
+          fetchedAt: now(),
+          stale: false,
+        });
         notify();
       }
       return models;
@@ -1153,7 +1199,7 @@ async function fetchModelCatalog(
         error: error instanceof Error ? error.message : String(error),
       };
       if (isCurrentGeneration()) {
-        catalogSnapshots.set(key, snapshot);
+        setCatalogSnapshot(key, identity, snapshot);
       }
       return snapshot.models;
     }
@@ -1168,7 +1214,7 @@ async function fetchModelCatalog(
       error: "Enter the API key above to fetch this provider's models.",
     };
     if (isCurrentGeneration()) {
-      catalogSnapshots.set(key, snapshot);
+      setCatalogSnapshot(key, identity, snapshot);
       notify();
     }
     return snapshot.models;
@@ -1185,7 +1231,7 @@ async function fetchModelCatalog(
         error: "Invalid API URL for models endpoint.",
       };
       if (isCurrentGeneration()) {
-        catalogSnapshots.set(key, snapshot);
+        setCatalogSnapshot(key, identity, snapshot);
         notify();
       }
       return snapshot.models;
@@ -1267,14 +1313,18 @@ async function fetchModelCatalog(
         error: "No available chat models returned by provider.",
       };
       if (isCurrentGeneration()) {
-        catalogSnapshots.set(key, emptySnapshot);
+        setCatalogSnapshot(key, identity, emptySnapshot);
         notify();
         return [];
       }
       return catalogSnapshots.get(key)?.models || [];
     }
     if (isCurrentGeneration()) {
-      catalogSnapshots.set(key, { models, fetchedAt: now(), stale: false });
+      setCatalogSnapshot(key, identity, {
+        models,
+        fetchedAt: now(),
+        stale: false,
+      });
       notify();
       return models;
     }
@@ -1304,7 +1354,7 @@ async function fetchModelCatalog(
       error: errorMessage,
     };
     if (isCurrentGeneration()) {
-      catalogSnapshots.set(key, snapshot);
+      setCatalogSnapshot(key, identity, snapshot);
       notify();
       return snapshot.models;
     }
@@ -1330,6 +1380,14 @@ export function getModelCatalogStatus(
     catalogSnapshots.get(buildCatalogKey(identity)) ??
     getCatalogSnapshot(identity);
   return snapshot ? clone(snapshot) : null;
+}
+
+export function isModelCatalogExpired(identity: ModelCatalogIdentity): boolean {
+  const snapshot =
+    catalogSnapshots.get(buildCatalogKey(identity)) ??
+    getCatalogSnapshot(identity);
+  if (!snapshot || snapshot.stale || snapshot.fetchedAt <= 0) return true;
+  return now() - snapshot.fetchedAt >= getCatalogTtlMs(identity);
 }
 
 export async function refreshConfiguredModelCatalogs(
