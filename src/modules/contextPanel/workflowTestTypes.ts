@@ -657,6 +657,16 @@ export type WorkflowTestApi = {
     stopAfterNotes: number;
   }) => ReturnType<typeof import("./longJobReplay").exerciseLongJobNoteResume>;
   /**
+   * One scenario of the agent stop rules (turnBoundary.ts) through the
+   * panel's send flow; only the model is scripted.
+   */
+  exerciseAgentStopRules: (input: {
+    panelId: string;
+    scenario: import("./stopRulesReplay").StopRuleScenario;
+    collection?: import("../../shared/types").CollectionContextRef;
+    papers?: Array<{ itemId: number; title: string }>;
+  }) => ReturnType<typeof import("./stopRulesReplay").exerciseAgentStopRules>;
+  /**
    * A note job whose one note_write_batch is stopped while it writes, the
    * agent's state reloaded as at startup, then "continue"; only the model is
    * scripted.
