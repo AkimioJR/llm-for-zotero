@@ -54,6 +54,7 @@ import {
   exerciseLongJobNoteResume,
   exerciseLongJobReplay,
 } from "./longJobReplay";
+import { exerciseAgentStopRules } from "./stopRulesReplay";
 import { mountPanelShell } from "./panelMount";
 import { getAgentRuntime } from "../../agent";
 import { normalizeExecutionOutput } from "../../agent/tools/execution/results";
@@ -7283,6 +7284,12 @@ export function installWorkflowTestHarness(targetAddon: {
         papers: input.papers,
         inputTokenCap: input.inputTokenCap,
         stopAfterNotes: input.stopAfterNotes,
+      }),
+    exerciseAgentStopRules: (input) =>
+      exerciseAgentStopRules(getPanel(input.panelId), {
+        scenario: input.scenario,
+        collection: input.collection,
+        papers: input.papers,
       }),
     exerciseLongJobBatchStop: (input) =>
       exerciseLongJobBatchStop(getPanel(input.panelId), {

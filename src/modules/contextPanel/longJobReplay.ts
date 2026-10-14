@@ -28,6 +28,7 @@ import { ActionContractService } from "../../agent/contracts/actionContract";
 import { ZoteroGateway } from "../../agent/services/zoteroGateway";
 import type { CollectionContextRef } from "../../shared/types";
 import type { TaskPaperScopeSet } from "../../agent/context/taskPaperScopeListing";
+import type { TurnSafetyLimits } from "../../agent/loop/turnBoundary";
 import type {
   AgentActionReceipt,
   AgentModelMessage,
@@ -43,7 +44,7 @@ const PAPER_TEXT_CHARACTERS = 16_000;
  * paper_read as the fixtures script it: each paper's text, its finding
  * first, no longer than the page share the host set for an overview read.
  */
-function stubPaperReadTool(
+export function stubPaperReadTool(
   libraryID: number,
   paperCharacters = PAPER_TEXT_CHARACTERS,
 ) {
@@ -284,7 +285,7 @@ async function reloadAgentStateAsAtStartup(panel: {
  * the panel's Stop button while that request is in flight, and the request
  * then ends as an aborted request does, on the signal the button aborted.
  */
-async function scriptedJobTurn(
+export async function scriptedJobTurn(
   panel: { body: HTMLElement; item: Zotero.Item },
   input: {
     collection: CollectionContextRef;
@@ -298,6 +299,8 @@ async function scriptedJobTurn(
       messages: AgentModelMessage[],
       stop: () => Promise<AgentModelStep>,
     ) => AgentModelStep | Promise<AgentModelStep>;
+    /** Safety limits for a job stopped by one (turnBoundary.ts, Rule 3). */
+    turnLimits?: Partial<TurnSafetyLimits>;
   },
 ) {
   const { body, item } = panel;
@@ -337,6 +340,7 @@ async function scriptedJobTurn(
   let firstPrompt = "";
   const runtime = new AgentRuntime({
     registry,
+    ...(input.turnLimits ? { turnLimits: input.turnLimits } : {}),
     resolveTurnScopePapers: async () => input.scope,
     adapterFactory: () => ({
       supportsTools: () => true,
@@ -374,6 +378,14 @@ async function scriptedJobTurn(
     runStatus: trace.run?.status,
     end: latestExecutionCheckpoint(trace.events)?.end?.state,
     ledger: latestExecutionCheckpoint(trace.events),
+    stopRule: trace.events
+      .map((event) => event.payload)
+      .flatMap((event) =>
+        event.type === "provider_event" &&
+        event.providerType === "agent_run_stop"
+          ? [String((event.payload as { rule?: unknown })?.rule)]
+          : [],
+      )[0],
     firstPrompt,
     events: trace.events.map((event) => event.payload),
   };

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AnthropicMessagesAgentAdapter } from "../src/agent/model/anthropicMessages";
+import { ModelStreamInterruptedError } from "../src/agent/model/completion";
 import { createPaperReadTool } from "../src/agent/tools/read/paperRead";
 import type {
   AgentModelMessage,
@@ -597,6 +598,125 @@ describe("AnthropicMessagesAgentAdapter", function () {
     assert.deepEqual(deltas, ["Hello ", "world"]);
   });
 
+  it("classifies a stream cut inside a content block as interrupted, and an overloaded error event too", async function () {
+    const stream = (frames: string[]) => {
+      (
+        globalThis as typeof globalThis & {
+          ztoolkit: { getGlobal: (name: string) => unknown };
+        }
+      ).ztoolkit = {
+        getGlobal: (name: string) =>
+          name === "fetch"
+            ? async () => ({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                body: makeSseStream(frames),
+                json: async () => ({}),
+                text: async () => "",
+              })
+            : undefined,
+      };
+      return new AnthropicMessagesAgentAdapter()
+        .runStep({
+          request: makeRequest(),
+          messages: [{ role: "user", content: "Answer" }],
+          tools,
+        })
+        .then(
+          (step) => step,
+          (error: unknown) => error,
+        );
+    };
+    const cut = await stream([
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Half an"}}\n\n',
+    ]);
+    assert.instanceOf(cut, ModelStreamInterruptedError);
+    const overloaded = await stream([
+      'data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n',
+    ]);
+    assert.instanceOf(overloaded, ModelStreamInterruptedError);
+    assert.equal((overloaded as ModelStreamInterruptedError).status, 529);
+    // A provider that ends its stream between blocks without a terminal
+    // event is taken as finished.
+    const closed = (await stream([
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Whole."}}\n\n',
+      'data: {"type":"content_block_stop","index":0}\n\n',
+    ])) as { kind?: string; text?: string };
+    assert.equal(closed.kind, "final");
+    assert.equal(closed.text, "Whole.");
+  });
+
+  it("keeps no empty or thinking-only assistant turn for the next request", async function () {
+    for (const content of [
+      [],
+      [
+        {
+          type: "thinking",
+          thinking: "Weighing the lookalikes.",
+          signature: "sig",
+        },
+      ],
+    ]) {
+      const bodies: Array<{
+        messages: Array<{ role: string; content: unknown }>;
+      }> = [];
+      (
+        globalThis as typeof globalThis & {
+          ztoolkit: { getGlobal: (name: string) => unknown };
+        }
+      ).ztoolkit = {
+        getGlobal: (name: string) =>
+          name === "fetch"
+            ? async (_url: string, init?: RequestInit) => {
+                bodies.push(JSON.parse(String(init?.body || "{}")));
+                const reply =
+                  bodies.length === 1
+                    ? { content, stop_reason: "end_turn" }
+                    : {
+                        content: [{ type: "text", text: "Not confirmed." }],
+                        stop_reason: "end_turn",
+                      };
+                return {
+                  ok: true,
+                  status: 200,
+                  statusText: "OK",
+                  body: undefined,
+                  json: async () => reply,
+                  text: async () => JSON.stringify(reply),
+                };
+              }
+            : undefined,
+      };
+      const adapter = new AnthropicMessagesAgentAdapter();
+      const first = await adapter.runStep({
+        request: makeRequest(),
+        messages: [{ role: "user", content: "Answer now, without tools." }],
+        tools,
+        toolChoice: "none",
+      });
+      assert.equal(first.kind, "final");
+      const second = await adapter.runStep({
+        request: makeRequest(),
+        messages: [{ role: "user", content: "Answer now, without tools." }],
+        continuationMessages: [
+          { role: "user", content: "Your last reply had no answer text." },
+        ],
+        tools,
+        toolChoice: "none",
+      });
+      assert.equal(second.kind, "final");
+      const sent = bodies[1].messages;
+      assert.isFalse(
+        sent.some((message) => message.role === "assistant"),
+        JSON.stringify(sent),
+      );
+      assert.equal(sent[sent.length - 1].role, "user");
+    }
+  });
+
   it("streams thinking deltas separately from answer text", async function () {
     const adapter = new AnthropicMessagesAgentAdapter();
     const reasoning: string[] = [];
@@ -616,6 +736,7 @@ describe("AnthropicMessagesAgentAdapter", function () {
             'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Plan first."}}\n\n',
             'data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
             'data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Final answer."}}\n\n',
+            'data: {"type":"message_stop"}\n\n',
           ]),
           json: async () => ({}),
           text: async () => "",
@@ -667,6 +788,7 @@ describe("AnthropicMessagesAgentAdapter", function () {
                 'data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-123"}}\n\n',
                 'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_456","name":"read_paper","input":{}}}\n\n',
                 'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"query\\":\\"methods\\"}"}}\n\n',
+                'data: {"type":"message_stop"}\n\n',
               ]),
               json: async () => ({}),
               text: async () => "",
@@ -743,6 +865,7 @@ describe("AnthropicMessagesAgentAdapter", function () {
           body: makeSseStream([
             'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_bad","name":"read_paper","input":{}}}\n\n',
             'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"action\\":\\"write\\",\\"content\\":\\"secret draft"}}\n\n',
+            'data: {"type":"message_stop"}\n\n',
           ]),
           json: async () => ({}),
           text: async () => "",
@@ -877,6 +1000,7 @@ describe("AnthropicMessagesAgentAdapter", function () {
                 'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Plan first"}}\n\n',
                 'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"read_paper","input":{"query":"a"}}}\n\n',
                 'data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_2","name":"read_paper","input":{"query":"b"}}}\n\n',
+                'data: {"type":"message_stop"}\n\n',
               ]),
               json: async () => ({}),
               text: async () => "",

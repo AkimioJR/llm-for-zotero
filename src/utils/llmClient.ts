@@ -3,6 +3,7 @@
  *
  * Provides streaming and non-streaming API calls to OpenAI-compatible endpoints.
  */
+import { providerHttpError } from "./retryAfter";
 
 import { appLogger } from "../core/logging";
 import { config } from "../../package.json";
@@ -3790,9 +3791,7 @@ async function postWithTemperatureFallback(params: {
       return res;
     }
     const secondErr = await res.text();
-    throw new Error(
-      `${res.status} ${res.statusText} (${params.url}) - ${secondErr}`,
-    );
+    throw providerHttpError(res, params.url, secondErr);
   }
   const retryCapKey = findOutputCapKey(requestPayload);
   const capRecovery = retryCapKey
@@ -3824,14 +3823,10 @@ async function postWithTemperatureFallback(params: {
       return res;
     }
     const secondErr = await res.text();
-    throw new Error(
-      `${res.status} ${res.statusText} (${params.url}) - ${secondErr}`,
-    );
+    throw providerHttpError(res, params.url, secondErr);
   }
 
-  throw new Error(
-    `${res.status} ${res.statusText} (${params.url}) - ${firstErr}`,
-  );
+  throw providerHttpError(res, params.url, firstErr);
 }
 
 export function parseStatusFromErrorMessage(message: string): number | null {

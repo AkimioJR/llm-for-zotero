@@ -1492,7 +1492,7 @@ function buildAnswerContract(params: {
     unsafeClaims.push("Do not claim all full-text-only matches were found.");
   } else {
     unsafeClaims.push(
-      "Do not make full-text presence or absence claims from this result.",
+      "Do not make full-text presence or absence claims from this result; a title or author lookup with library_search can show that a paper is absent from the library.",
     );
   }
   if (
