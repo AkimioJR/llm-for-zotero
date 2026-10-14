@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AnthropicMessagesAgentAdapter } from "../src/agent/model/anthropicMessages";
+import { planContextCacheReuse } from "../src/contextCache/manager";
 import { ModelStreamInterruptedError } from "../src/agent/model/completion";
 import { createPaperReadTool } from "../src/agent/tools/read/paperRead";
 import type {
@@ -413,7 +414,8 @@ describe("AnthropicMessagesAgentAdapter", function () {
 
     assert.isArray(capturedBody?.system);
     const system = capturedBody?.system as Array<Record<string, unknown>>;
-    assert.notProperty(system[0] || {}, "cache_control");
+    // A lone stable block also leaves a breakpoint on the fixed prompt.
+    assert.deepEqual(system[0]?.cache_control, { type: "ephemeral" });
     assert.deepEqual(system[1]?.cache_control, { type: "ephemeral" });
     assert.equal(system[1]?.text, "Stable Zotero resource context");
   });
@@ -557,6 +559,122 @@ describe("AnthropicMessagesAgentAdapter", function () {
     const system = capturedBody?.system as Array<Record<string, unknown>>;
     assert.deepEqual(system[1]?.cache_control, { type: "ephemeral" });
     assert.deepEqual(system[2]?.cache_control, { type: "ephemeral" });
+  });
+
+  it("caches an agent turn with no resource context within four breakpoints", async function () {
+    // Anthropic accepts at most four cache breakpoints per request; the
+    // request-level breakpoint counts toward them.
+    const contextCache = planContextCacheReuse({
+      model: "claude-haiku-5-5",
+      apiBase: "https://api.anthropic.com/v1",
+      protocol: "anthropic_messages",
+      mode: "full",
+      strategy: "agent-stable-resources",
+      contextText: "",
+    });
+    assert.isTrue(contextCache.enabled);
+    const countBreakpoints = (body: Record<string, unknown>) =>
+      JSON.stringify(body).split('"cache_control"').length - 1;
+    const twoTools = [
+      ...tools,
+      {
+        name: "search_paper",
+        description: "search",
+        inputSchema: { type: "object" },
+        executionClass: "read" as const,
+        requiresConfirmation: false,
+      },
+    ];
+
+    for (const stableBlocks of [0, 1, 3]) {
+      const adapter = new AnthropicMessagesAgentAdapter();
+      const requestBodies: Record<string, unknown>[] = [];
+      (
+        globalThis as typeof globalThis & {
+          ztoolkit: { getGlobal: (name: string) => unknown };
+        }
+      ).ztoolkit = {
+        getGlobal: (name: string) => {
+          if (name !== "fetch") return undefined;
+          return async (_url: string, init?: RequestInit) => {
+            requestBodies.push(
+              JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+            );
+            return requestBodies.length === 1
+              ? {
+                  ok: true,
+                  status: 200,
+                  statusText: "OK",
+                  body: makeSseStream([
+                    'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"read_paper","input":{}}}\n\n',
+                    'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
+                    'data: {"type":"message_stop"}\n\n',
+                  ]),
+                  json: async () => ({}),
+                  text: async () => "",
+                }
+              : {
+                  ok: true,
+                  status: 200,
+                  statusText: "OK",
+                  body: undefined,
+                  json: async () => ({
+                    content: [{ type: "text", text: "Done" }],
+                  }),
+                  text: async () => "",
+                };
+          };
+        },
+      };
+      const request = makeRequest({ model: "claude-haiku-5-5", contextCache });
+      const firstStep = await adapter.runStep({
+        request,
+        messages: [
+          { role: "system", content: "Fixed agent prompt" },
+          ...Array.from({ length: stableBlocks }, (_, index) => ({
+            role: "system" as const,
+            content: `Stable resource block ${index}`,
+            cachePolicy: "stable-prefix" as const,
+          })),
+          { role: "user", content: "Search methods" },
+        ],
+        tools: twoTools,
+      });
+      if (firstStep.kind !== "tool_calls") {
+        assert.fail("expected a tool call");
+        return;
+      }
+      await adapter.runStep({
+        request,
+        messages: [
+          firstStep.assistantMessage,
+          {
+            role: "tool",
+            tool_call_id: "toolu_1",
+            name: "read_paper",
+            content: '{"matches":[]}',
+          },
+        ],
+        tools: twoTools,
+      });
+
+      assert.lengthOf(requestBodies, 2);
+      for (const body of requestBodies) {
+        assert.isAtMost(countBreakpoints(body), 4, `${stableBlocks} blocks`);
+        assert.deepEqual(body.cache_control, { type: "ephemeral" });
+        const bodyTools = body.tools as Array<Record<string, unknown>>;
+        assert.deepEqual(bodyTools[bodyTools.length - 1]?.cache_control, {
+          type: "ephemeral",
+        });
+        const system = body.system as Array<Record<string, unknown>>;
+        assert.deepEqual(system[system.length - 1]?.cache_control, {
+          type: "ephemeral",
+        });
+        if (stableBlocks === 1) {
+          assert.deepEqual(system[0]?.cache_control, { type: "ephemeral" });
+        }
+      }
+    }
   });
 
   it("streams text deltas from native messages SSE", async function () {
