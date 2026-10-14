@@ -121,18 +121,59 @@ function yearOf(value: unknown): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
+type TitleForms = { full: string; main: string; hasSubtitle: boolean };
+
+/** Normalized full title, main title (before ":") and whether a subtitle follows. */
+function titleForms(paper: PaperWorkFacts): TitleForms {
+  const title = String(paper.title || "");
+  const colon = title.indexOf(":");
+  const main = unicodeTokens(colon >= 0 ? title.slice(0, colon) : title);
+  const subtitle = colon >= 0 ? unicodeTokens(title.slice(colon + 1)) : [];
+  return {
+    full: unicodeTokens(title).join(" "),
+    main: main.join(" "),
+    hasSubtitle: subtitle.length > 0,
+  };
+}
+
+/** Whether an equal DOI may group two items: their titles must not conflict. */
+function doiTitlesCompatible(left: PaperWorkFacts, right: PaperWorkFacts) {
+  const a = titleForms(left);
+  const b = titleForms(right);
+  if (!a.full || !b.full) return false;
+  return (
+    a.full === b.full ||
+    (!!a.main && (a.main === b.full || a.main === b.main)) ||
+    (!!b.main && b.main === a.full)
+  );
+}
+
+/**
+ * Whether two items in one title-and-creator bucket share a work: equal full
+ * titles, or at least one of them has no subtitle. Two different subtitles
+ * ("Part I. Theory" and "Part II. Experiments") never match.
+ */
+function titleBucketMatch(left: PaperWorkFacts, right: PaperWorkFacts) {
+  const a = titleForms(left);
+  const b = titleForms(right);
+  return a.full === b.full || !a.hasSubtitle || !b.hasSubtitle;
+}
+
 /**
  * Work group ids for items that share a work, keyed by item id; an item no
  * other item shares a work with gets none. Items share a work when they name
- * an equal DOI or version-free arXiv id, or when their titles (before any
- * subtitle, at least four tokens) and first creators are equal and their
- * years are at most two apart. The id names the group's lowest item id, so
- * it is the same in every call that sees the same items.
+ * an equal version-free arXiv id, or an equal DOI with compatible titles, or
+ * when their titles (before any subtitle, at least four tokens, and never two
+ * different subtitles) and first creators are equal and the years of the
+ * whole group stay at most two apart. The id names the group's lowest item
+ * id, so it is the same in every call that sees the same items.
  */
 export function groupPaperWorks(
   papers: readonly PaperWorkFacts[],
 ): Map<number, string> {
   const parent = papers.map((_, index) => index);
+  const minYear = papers.map((paper) => yearOf(paper.year));
+  const maxYear = [...minYear];
   const find = (index: number): number => {
     while (parent[index] !== index) {
       parent[index] = parent[parent[index]];
@@ -140,19 +181,46 @@ export function groupPaperWorks(
     }
     return index;
   };
-  const union = (left: number, right: number) => {
+  const known = (values: Array<number | undefined>): number[] =>
+    values.filter((y): y is number => y !== undefined);
+  const merge = (left: number, right: number) => {
     const a = find(left);
     const b = find(right);
-    if (a !== b) parent[Math.max(a, b)] = Math.min(a, b);
+    if (a === b) return;
+    const root = Math.min(a, b);
+    const other = Math.max(a, b);
+    parent[other] = root;
+    const lows = known([minYear[root], minYear[other]]);
+    const highs = known([maxYear[root], maxYear[other]]);
+    minYear[root] = lows.length ? Math.min(...lows) : undefined;
+    maxYear[root] = highs.length ? Math.max(...highs) : undefined;
+  };
+  /** A title union needs every member of the merged group within the gap. */
+  const unionByTitle = (left: number, right: number) => {
+    const a = find(left);
+    const b = find(right);
+    if (a === b) return;
+    const lows = known([minYear[a], minYear[b]]);
+    const highs = known([maxYear[a], maxYear[b]]);
+    if (lows.length && Math.max(...highs) - Math.min(...lows) > MAX_YEAR_GAP)
+      return;
+    merge(a, b);
   };
 
-  const firstByKey = new Map<string, number>();
+  const holdersByKey = new Map<string, number[]>();
   const byTitleCreator = new Map<string, number[]>();
   papers.forEach((paper, index) => {
     for (const key of strongKeys(paper)) {
-      const first = firstByKey.get(key);
-      if (first === undefined) firstByKey.set(key, index);
-      else union(first, index);
+      const holders = holdersByKey.get(key) || [];
+      for (const holder of holders) {
+        if (
+          key.startsWith("arxiv:") ||
+          doiTitlesCompatible(papers[holder], paper)
+        )
+          merge(holder, index);
+      }
+      holders.push(index);
+      holdersByKey.set(key, holders);
     }
     const key = titleCreatorKey(paper);
     if (!key || yearOf(paper.year) === undefined) return;
@@ -163,10 +231,8 @@ export function groupPaperWorks(
   for (const bucket of byTitleCreator.values()) {
     for (let i = 0; i < bucket.length; i += 1) {
       for (let j = i + 1; j < bucket.length; j += 1) {
-        const gap = Math.abs(
-          yearOf(papers[bucket[i]].year)! - yearOf(papers[bucket[j]].year)!,
-        );
-        if (gap <= MAX_YEAR_GAP) union(bucket[i], bucket[j]);
+        if (titleBucketMatch(papers[bucket[i]], papers[bucket[j]]))
+          unionByTitle(bucket[i], bucket[j]);
       }
     }
   }

@@ -3511,4 +3511,62 @@ describe("groupPaperWorks title and creator key", function () {
     ]);
     assert.equal(short.size, 0);
   });
+
+  it("keeps Part I, Part II and a review of one series as three works", function () {
+    const base = "Neural dynamics of decision making";
+    const groups = groupPaperWorks([
+      paper(1, `${base}: Part I. Theory`, "2020"),
+      paper(2, `${base}: Part II. Experiments`, "2021"),
+      paper(3, `${base}: a review`, "2022"),
+    ]);
+    assert.equal(groups.size, 0);
+  });
+
+  it("groups a titled-subtitle version with the bare title one year apart", function () {
+    const base = "Neural dynamics of decision making";
+    const groups = groupPaperWorks([
+      paper(1, `${base}: Part I. Theory`, "2020"),
+      paper(2, base, "2021"),
+    ]);
+    assert.isString(groups.get(1));
+    assert.equal(groups.get(1), groups.get(2));
+  });
+
+  it("never puts two versions more than two years apart in one group, even through a middle one", function () {
+    const title = "Neural dynamics of decision making in animals";
+    const groups = groupPaperWorks([
+      paper(1, title, "2019"),
+      paper(2, title, "2020"),
+      paper(3, title, "2022"),
+    ]);
+    assert.equal(groups.get(1), groups.get(2));
+    assert.isUndefined(groups.get(3));
+  });
+
+  it("does not group two chapters that share the book's DOI", function () {
+    const groups = groupPaperWorks([
+      { ...paper(1, "Chapter one on memory", "2020"), doi: "10.1000/book" },
+      { ...paper(2, "Chapter two on attention", "2020"), doi: "10.1000/book" },
+    ]);
+    assert.equal(groups.size, 0);
+  });
+
+  it("still groups a preprint (arXiv DOI) with its journal version of the same title", function () {
+    const title = "Neural dynamics of decision making in animals";
+    const groups = groupPaperWorks([
+      { ...paper(1, title, "2020"), doi: "10.48550/arXiv.2001.01234" },
+      { ...paper(2, title, "2021"), doi: "10.1000/journal" },
+    ]);
+    assert.isString(groups.get(1));
+    assert.equal(groups.get(1), groups.get(2));
+    const byArxiv = groupPaperWorks([
+      { ...paper(1, title, "2020"), doi: "10.48550/arXiv.2001.01234" },
+      {
+        ...paper(2, "Another title", "2024"),
+        doi: "10.1000/journal",
+        extra: "arXiv: 2001.01234",
+      },
+    ]);
+    assert.equal(byArxiv.get(1), byArxiv.get(2), "arXiv id is unconditional");
+  });
 });

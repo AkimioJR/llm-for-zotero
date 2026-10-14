@@ -1603,6 +1603,8 @@ function buildReadStrategyDiagnostics(params: {
   candidateRecords: ResourceRecord[];
   snippets: LibraryRetrieveSnippet[];
   frontier: LibraryRetrieveFrontier;
+  /** Item ids of papers the snippet cap left without a passage. */
+  budgetCutItemIds?: ReadonlySet<string>;
 }): LibraryChatReadStrategyDiagnostics {
   const plannedRecords = params.candidateRecords;
   const snippetItemIds = new Set(
@@ -1619,6 +1621,12 @@ function buildReadStrategyDiagnostics(params: {
   const unreadableReasons: string[] = [];
   for (const record of plannedRecords) {
     const itemId = String(record.target.itemId);
+    if (params.budgetCutItemIds?.has(itemId)) {
+      unreadableReasons.push(
+        `${itemId}: not returned because the passage budget was full`,
+      );
+      continue;
+    }
     if (!record.paperContext) {
       unreadableReasons.push(`${itemId}: no full-text attachment available`);
       continue;
@@ -2527,11 +2535,10 @@ export class LibraryRetrieveService {
         snippets.push(snippet);
       });
       readPapers.forEach(({ record, paperSnippets }, index) => {
+        // Invariant: reading stopped at maxTotalSnippets papers and each read
+        // paper holds at least one snippet, so every one gets a first slot
+        // (allocateSnippetSlots) and `kept` is never empty.
         const kept = paperSnippets.slice(0, slots[index]);
-        if (!kept.length) {
-          budgetCutItemIds.add(String(record.target.itemId));
-          return;
-        }
         record.queryState.add("snippet_returned");
         evidencePapers += 1;
         snippets.push(...kept);
@@ -2628,6 +2635,7 @@ export class LibraryRetrieveService {
       candidateRecords,
       snippets: dedupedSnippets,
       frontier,
+      budgetCutItemIds,
     });
     const answerContract = buildAnswerContract({
       input,
