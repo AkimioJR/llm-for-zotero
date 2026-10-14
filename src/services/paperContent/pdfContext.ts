@@ -2312,11 +2312,18 @@ function shouldTryEmbeddings(): boolean {
  * `body` and `unknown` never move — a prior may break a tie, it may not
  * decide the order (reciprocal-rank fusion spans ~0.03 in total, so the old
  * additive constants of 0.8–1.5 overruled relevance outright).
+ *
+ * Captions and appendices are not demoted. Their kinds come from the text
+ * heuristic (a chunk that starts "Figure 2:", or any mention of "appendix"),
+ * and PDF text runs a caption straight into the body paragraph after it, so a
+ * demoted "caption" was often the passage that held the answer. An offline
+ * replay over QASPER-200 found more gold evidence without the demotion
+ * (scripts/qasper-evidence-replay.ts).
  */
 const SECTION_BOOST_PROFILE: { boost: PdfChunkKind[]; demote: PdfChunkKind[] } =
   {
     boost: ["abstract", "results", "discussion", "conclusion"],
-    demote: ["figure-caption", "table-caption", "appendix", "references"],
+    demote: ["references"],
   };
 
 /** Ranks a boosted section kind can climb. */
@@ -2332,9 +2339,10 @@ const DEMOTED_PRIOR: SectionPrior = { priorShift: 0, demoted: true };
 const NEUTRAL_PRIOR: SectionPrior = { priorShift: 0 };
 
 /**
- * Bounded section prior: a rank shift, not a score. Demoted chunks carry
- * `demoted: true` and sort to the end; they stay candidates so a
- * reference-locked read can still pull a caption or a reference entry back.
+ * Bounded section prior: a rank shift, not a score. Demoted chunks (reference
+ * lists and chunks under MIN_EVIDENCE_WORD_COUNT words) carry `demoted: true`
+ * and sort to the end; they stay candidates so a reference-locked read can
+ * still pull a reference entry back.
  */
 function priorShiftFor(params: {
   chunkText: string;
