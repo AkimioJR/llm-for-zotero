@@ -3053,3 +3053,79 @@ describe("LibraryRetrieveService review fixes", function () {
     );
   });
 });
+
+describe("LibraryRetrieveService exact-match ranking", function () {
+  it("keeps the strongest exact matches of one paper, not the first in document order", async function () {
+    const weak = (n: number) =>
+      `Section ${n}\nThe zebrafish cohort was imaged.`;
+    const strong = (n: number) =>
+      `Section ${n}\nThe zebrafish cohort showed calcium transients in hippocampal neurons during sleep.`;
+    const service = new LibraryRetrieveService(
+      makeGateway([makeItem(1, "Imaging paper", "", { hasPdf: true })]) as any,
+      {
+        ensurePaperContext: async () =>
+          makePdfContext([
+            weak(1),
+            weak(2),
+            weak(3),
+            strong(4),
+            strong(5),
+            strong(6),
+          ]),
+      } as any,
+      async () => [],
+    );
+
+    const result = await service.retrieve({
+      query:
+        "zebrafish cohort calcium transients hippocampal neurons during sleep",
+      depth: "verify",
+      perPaperTopK: 3,
+      scope: { libraryID: 1, itemIds: [1] },
+      request: {
+        conversationKey: 1,
+        mode: "agent",
+        userText: "Verify the zebrafish calcium claim",
+        libraryID: 1,
+      },
+    });
+
+    const exact = result.snippets.filter(
+      (snippet) => snippet.matchMethod === "exact",
+    );
+    assert.deepEqual(
+      exact.map((snippet) => Number(snippet.chunkIndex)).sort((a, b) => a - b),
+      [3, 4, 5],
+    );
+  });
+
+  it("breaks equal-score ties by item id, not by title", async function () {
+    const entries = [
+      makeItem(7, "Aardvark neuron study", "", { hasPdf: true }),
+      makeItem(3, "Zebra neuron study", "", { hasPdf: true }),
+    ];
+    const service = new LibraryRetrieveService(
+      makeGateway(entries) as any,
+      {
+        ensurePaperContext: async () =>
+          makePdfContext(["Methods\nThe shared quasar phrase appears here."]),
+      } as any,
+      async () => [],
+    );
+
+    const result = await service.retrieve({
+      query: "shared quasar phrase",
+      depth: "verify",
+      scope: { libraryID: 1, itemIds: [7, 3] },
+      request: {
+        conversationKey: 1,
+        mode: "agent",
+        userText: "Verify the shared quasar phrase",
+        libraryID: 1,
+      },
+    });
+
+    const order = result.snippets.map((snippet) => snippet.itemId);
+    assert.deepEqual(order, ["3", "7"]);
+  });
+});

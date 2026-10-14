@@ -2019,7 +2019,13 @@ export class LibraryRetrieveService {
       if (right.score !== left.score) return right.score - left.score;
       if (left.paperContext && !right.paperContext) return -1;
       if (!left.paperContext && right.paperContext) return 1;
-      return left.target.title.localeCompare(right.target.title);
+      // Neutral, deterministic ties: raw lexical strength, then library id.
+      // Never the title: alphabetical order is not relevance and would favor
+      // some papers on every tied query.
+      if (right.bm25Score !== left.bm25Score) {
+        return right.bm25Score - left.bm25Score;
+      }
+      return left.target.itemId - right.target.itemId;
     });
 
     const matchedRecords = sorted.filter(recordMatchedQuery);
@@ -3267,12 +3273,13 @@ export class LibraryRetrieveService {
   }): LibraryRetrieveSnippet[] {
     const snippets: LibraryRetrieveSnippet[] = [];
     const chunkMeta = params.pdfContext.chunkMeta || [];
+    // Walk every chunk (bounded by the paper's chunk count, ~77 on average):
+    // stopping at the first maxSnippets matches would keep the earliest, not
+    // the strongest, ones.
     for (let index = 0; index < params.pdfContext.chunks.length; index += 1) {
-      if (snippets.length >= params.maxSnippets) break;
       const chunk = params.pdfContext.chunks[index] || "";
       const match = findExactMatchForQueryPlan(chunk, params.queryPlan);
       if (!match) continue;
-      params.record.matchedQueryVariants.add(match.matchedQueryVariant);
       const meta = chunkMeta[index];
       snippets.push({
         snippetId: `lr_${params.paperContext.itemId}_${params.paperContext.contextItemId}_${index}_exact`,
@@ -3299,7 +3306,14 @@ export class LibraryRetrieveService {
         matchedQueryVariant: match.matchedQueryVariant,
       });
     }
-    return snippets.sort((left, right) => right.score - left.score);
+    // Stable sort: equal scores keep document order (earlier chunk first).
+    const top = snippets
+      .sort((left, right) => right.score - left.score)
+      .slice(0, Math.max(0, params.maxSnippets));
+    for (const snippet of top) {
+      params.record.matchedQueryVariants.add(snippet.matchedQueryVariant!);
+    }
+    return top;
   }
 
   private dedupeAndRankSnippets(
