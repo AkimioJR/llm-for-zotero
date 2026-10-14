@@ -28,6 +28,8 @@ import {
   INDEX_PRIORITY,
   INDEX_RECENT_USE_PROTECT_MS,
   INDEX_RECONCILE_STAT_BATCH,
+  INDEX_REPOST_SLICE_MS,
+  INDEX_RETRY_BACKOFF_MS,
   INDEX_STOP_GRACE_MS,
   INDEX_URGENT_ADD_BATCH_MAX,
   INDEX_URGENT_MIN_PRIORITY,
@@ -35,6 +37,7 @@ import {
 } from "./constants";
 import { isLibraryTextIndexClosedError } from "./db";
 import { indexAttachment } from "./indexer";
+import { runTokenizerUpgradeSlice } from "./tokenizerUpgrade";
 import {
   getLibraryTextIndexStore,
   type IndexDocumentRow,
@@ -203,6 +206,8 @@ export class LibraryTextIndexScheduler {
   private vectorSkipped = new Set<number>();
   private vectorFailuresInARow = 0;
   private vectorPaused = false;
+  private tokenizerUpgradeFailureLogged = false;
+  private repostedThisSession = 0;
 
   constructor(env: Partial<SchedulerEnv> = {}) {
     this.env = {
@@ -707,6 +712,16 @@ export class LibraryTextIndexScheduler {
         now,
         minPriority: INDEX_URGENT_MIN_PRIORITY,
       });
+      if (!job && (await this.isTokenizerUpgradePending(store))) {
+        // Between the urgent and prefetch lanes: it never waits for idle,
+        // and an urgent job still goes first at every step. Once done, this
+        // drain goes on to the lanes below.
+        const step = await this.runTokenizerUpgradeStep(store);
+        if (step !== "done") {
+          next = step;
+          return;
+        }
+      }
       let lane: "urgent" | "prefetch" = "urgent";
       const prefetchAllowed =
         !job &&
@@ -771,6 +786,51 @@ export class LibraryTextIndexScheduler {
       this.rekick = false;
       if (generation === this.generation && this.running && next !== null)
         this.kick(next);
+    }
+  }
+
+  /** The store caches a true answer, so this costs a query only until the pass ends. */
+  private async isTokenizerUpgradePending(
+    store: LibraryTextIndexStore,
+  ): Promise<boolean> {
+    return !(await store.isTokenizerVersionCurrent());
+  }
+
+  /**
+   * One slice of the re-posting pass (tokenizerUpgrade.ts). Returns "done"
+   * once every document is re-posted, else the delay until the next drain:
+   * the usual gap while documents remain, a retry backoff after a failure.
+   */
+  private async runTokenizerUpgradeStep(
+    store: LibraryTextIndexStore,
+  ): Promise<number | "done"> {
+    try {
+      const slice = await runTokenizerUpgradeSlice(store, {
+        sliceMs: INDEX_REPOST_SLICE_MS,
+        now: this.env.now,
+      });
+      this.repostedThisSession += slice.reposted;
+      if (slice.done) {
+        if (this.repostedThisSession)
+          appLogger.debug(
+            `LLM index: re-posted ${this.repostedThisSession} document(s) for the current tokenizer`,
+          );
+        return "done";
+      }
+      return retrievalActivity > 0
+        ? INDEX_DRAIN_GAP_BUSY_MS
+        : INDEX_DRAIN_GAP_MS;
+    } catch (error) {
+      if (isLibraryTextIndexClosedError(error)) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      this.lastError = message;
+      if (!this.tokenizerUpgradeFailureLogged) {
+        this.tokenizerUpgradeFailureLogged = true;
+        appLogger.warn(
+          `LLM index: re-posting for the new tokenizer failed; retrying later. ${message}`,
+        );
+      }
+      return INDEX_RETRY_BACKOFF_MS[0];
     }
   }
 
@@ -945,7 +1005,9 @@ export class LibraryTextIndexScheduler {
         .getStore()
         .then(async (store) => {
           if (!store) return done();
-          const runnable = await store.dequeueNext({ now: this.env.now() });
+          const runnable =
+            (await store.dequeueNext({ now: this.env.now() })) ||
+            (await this.isTokenizerUpgradePending(store));
           if (!runnable && !this.draining) done();
           // Otherwise the drain resolves the waiter when it next finds nothing to do.
           else this.kick();

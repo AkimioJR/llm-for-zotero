@@ -506,6 +506,29 @@ export type WorkflowTestApi = {
     stale: number;
     skippedForBudget: number;
   }>;
+  // Stops the index, rewrites it into the shape a pre-stemming build left
+  // (surface-token postings for these documents, no document_tokenizer
+  // table, no tokenizer_version row), then starts it as Zotero startup does.
+  restartLibraryTextIndexFromPreStemmingShape: (
+    attachmentIds: number[],
+  ) => Promise<void>;
+  // The recorded tokenizer version (null = none) and how many documents
+  // still wait for the re-posting pass.
+  libraryTextIndexTokenizerState: () => Promise<{
+    recordedVersion: string | null;
+    documentsNeedingRepost: number;
+  }>;
+  // One document's posting terms, sorted.
+  libraryTextIndexPostingTerms: (attachmentId: number) => Promise<string[]>;
+  // A library text index search through the plugin's own store.
+  searchLibraryTextIndexForTest: (input: {
+    queries: string[];
+    attachmentIds: number[];
+  }) => Promise<{
+    paperAttachmentIds: number[];
+    matchedTerms: string[];
+    snippets: string[];
+  }>;
   // Loads one attachment's text through the question path (fires write-through).
   loadPaperContextForTest: (attachmentId: number) => Promise<void>;
   // Drops every loaded paper text and retrieval candidate so the next

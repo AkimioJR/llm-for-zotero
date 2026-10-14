@@ -327,6 +327,49 @@ describe("library text index scheduler", function () {
     assert.equal((await store.countQueue(1)).queued, 0);
   });
 
+  it("re-posts a pre-stemming index while the user is active, after urgent jobs, and waitForIdle waits for it", async function () {
+    userIdle = false;
+    const text = "Readout errors grew with temperature.";
+    await store.upsertDocument(
+      docRow(7, {
+        chunks: [
+          {
+            chunkIndex: 0,
+            text,
+            tokenCount: 5,
+            meta: { chunkKind: "body" },
+            // Surface tokens, as a build before stemming wrote them.
+            tf: { readout: 1, errors: 1, grew: 1, temperature: 1 },
+          },
+        ],
+      }),
+    );
+    harness.exec(`DELETE FROM document_tokenizer`);
+    // The queue is empty, but the pending pass is runnable work.
+    let idle: boolean | null = null;
+    void scheduler.waitForIdle(60_000).then((value) => {
+      idle = value;
+    });
+    await new Promise((r) => setImmediate(r));
+    assert.isNull(idle, "not idle while the pass is pending");
+    await scheduler.enqueue([3], "added");
+    scheduler.start();
+    clock += INDEX_DRAIN_GAP_BUSY_MS;
+    await runDueTimers();
+    assert.deepEqual(indexed, [{ id: 3, lane: "urgent" }], "urgent first");
+    assert.isNull(await store.getIndexMeta("tokenizer_version"));
+    assert.isNull(idle, "still not idle after the urgent job");
+    await drainAll(3);
+    assert.isTrue(idle, "idle once the pass is done");
+    assert.equal(await store.getIndexMeta("tokenizer_version"), "2");
+    const terms = harness
+      .rows(`SELECT term FROM postings WHERE attachment_id = 7`)
+      .map((row) => row.term);
+    assert.includeMembers(terms, ["error", "readout", "grew", "temperatur"]);
+    assert.notInclude(terms, "errors");
+    assert.deepEqual(indexed, [{ id: 3, lane: "urgent" }], "no PDF re-read");
+  });
+
   it("does not take a prefetch job while a retrieval is in flight, even when the user is idle", async function () {
     await scheduler.enqueue([1], "prefetch");
     const end = beginRetrievalActivity();

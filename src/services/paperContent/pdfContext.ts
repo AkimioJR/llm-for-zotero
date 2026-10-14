@@ -23,6 +23,8 @@ import {
   RRF_K,
 } from "../retrieval/constants";
 import {
+  toRetrievalIndexTerm,
+  toRetrievalIndexTerms,
   tokenizeRetrievalQuery,
   tokenizeRetrievalText,
 } from "../retrieval/retrievalTokenizer";
@@ -1746,10 +1748,15 @@ export function formatSuggestedEvidenceCitation(
   return `(${citationParts.join(", ")})`;
 }
 
+/** A chunk's BM25 terms: index terms (stems of plain English words). */
 function tokenizeText(text: string): string[] {
-  return tokenizeRetrievalText(text);
+  return tokenizeRetrievalText(text, { stem: true });
 }
 
+/**
+ * BM25 term statistics per chunk. `tf` and `docFreq` are keyed by index
+ * terms (`toRetrievalIndexTerm`), so look a surface query term up through it.
+ */
 export function buildChunkIndex(chunks: string[]): {
   chunkStats: ChunkStat[];
   docFreq: Record<string, number>;
@@ -1793,9 +1800,16 @@ function queryPlanTerms(
     : tokenizeQuery(question);
 }
 
+/**
+ * The query variants a chunk matches: the whole variant as a substring, or
+ * one of its terms as a substring or (the BM25 rule) through a shared index
+ * term in the chunk's `tf`, so a chunk BM25 ranked for "error" also names
+ * the variant that asked about "errors".
+ */
 function matchedQueryVariantsForText(
   text: string,
   queryPlan: RetrievalQueryPlan | undefined,
+  chunkTf?: Record<string, number>,
 ): string[] {
   if (!queryPlan?.effectiveQueries.length || !text.trim()) return [];
   const haystack = text.toLocaleLowerCase();
@@ -1807,13 +1821,26 @@ function matchedQueryVariantsForText(
       continue;
     }
     const terms = tokenizeQuery(query);
-    if (terms.length && terms.some((term) => haystack.includes(term))) {
+    if (
+      terms.length &&
+      terms.some(
+        (term) =>
+          haystack.includes(term) ||
+          Boolean(chunkTf?.[toRetrievalIndexTerm(term)]),
+      )
+    ) {
       matches.push(query);
     }
   }
   return Array.from(new Set(matches));
 }
 
+/**
+ * BM25 of one chunk for surface query terms (`lexicalTerms`, or
+ * `tokenizeRetrievalQuery` output). They are mapped to their distinct index
+ * terms here, the keys of `buildChunkIndex`; never pass stems, which would be
+ * stemmed again.
+ */
 export function scoreChunkBM25(
   chunk: ChunkStat,
   terms: string[],
@@ -1826,7 +1853,7 @@ export function scoreChunkBM25(
   const b = 0.75;
   let score = 0;
 
-  for (const term of terms) {
+  for (const term of toRetrievalIndexTerms(terms)) {
     const tf = chunk.tf[term] || 0;
     if (!tf) continue;
     const df = docFreq[term] || 0;
@@ -2766,6 +2793,7 @@ export async function buildPaperRetrievalCandidates(
     const matchedQueryVariants = matchedQueryVariantsForText(
       chunks[chunk.index],
       queryPlan,
+      chunk.tf,
     );
     const candidate: PaperContextCandidate = {
       paperKey: buildPaperKey(paperContext),

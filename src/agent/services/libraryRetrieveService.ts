@@ -12,8 +12,10 @@ import {
 } from "../../services/retrieval/retrievalQueryPlan";
 import {
   extractCjkKeywordProbes,
+  findFirstIndexTermMatch,
   isCjkDominantText,
   stripTerminalPunctuation,
+  toRetrievalIndexTerm,
   tokenizeRetrievalText,
 } from "../../services/retrieval/retrievalTokenizer";
 import type {
@@ -963,7 +965,9 @@ function snippetTextAround(
 /**
  * An index chunk's snippet: a window around the earliest occurrence of any
  * matched term (a chunk head would cut passages deep in the chunk), or the
- * chunk head when no term occurs, as for zero-score leading chunks.
+ * chunk head when no term occurs, as for zero-score leading chunks. A term
+ * occurs as a substring or, as BM25 counted it, as a word with the same
+ * index term ("error" for the query term "errors").
  */
 function indexSnippetText(text: string, terms: string[]): string {
   const lower = text.toLowerCase();
@@ -977,6 +981,11 @@ function indexSnippetText(text: string, terms: string[]): string {
       start = at;
       end = at + needle.length;
     }
+  }
+  const stemmed = findFirstIndexTermMatch(text, terms);
+  if (stemmed && (start < 0 || stemmed.start < start)) {
+    start = stemmed.start;
+    end = stemmed.end;
   }
   return start >= 0
     ? snippetTextAround(text, start, end)
@@ -2921,11 +2930,19 @@ export class LibraryRetrieveService {
         records.length,
         avgChunkLength || 1,
       );
-      const hits = queryPlan.lexicalTerms.filter((term) => stats.tf[term]);
+      // The corpus is keyed by index terms; one hit per index term, shown
+      // by its first surface term ("errors" and "error" are one hit).
+      const hitsByIndexTerm = new Map<string, string>();
+      for (const term of queryPlan.lexicalTerms) {
+        const indexTerm = toRetrievalIndexTerm(term);
+        if (stats.tf[indexTerm] && !hitsByIndexTerm.has(indexTerm))
+          hitsByIndexTerm.set(indexTerm, term);
+      }
+      const hits = [...hitsByIndexTerm.values()];
       record.bm25TermHits = hits.length;
       const distinctiveCeiling = Math.max(1, Math.floor(records.length / 2));
-      record.bm25DistinctiveHits = hits.filter(
-        (term) => (docFreq[term] || 0) <= distinctiveCeiling,
+      record.bm25DistinctiveHits = [...hitsByIndexTerm.keys()].filter(
+        (indexTerm) => (docFreq[indexTerm] || 0) <= distinctiveCeiling,
       ).length;
       if (recordBm25Matched(record)) {
         // The "abstract " prefix keeps recordHasAbstractMatch attributing

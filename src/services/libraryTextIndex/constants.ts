@@ -2,6 +2,17 @@ export const LIBRARY_TEXT_INDEX_DB_NAME = "llm-for-zotero-index";
 export const LIBRARY_TEXT_INDEX_SCHEMA_VERSION = 1;
 /** 2: chunks carry their enclosing standard section (`enclosingSection`). */
 export const LIBRARY_TEXT_INDEX_CHUNKER_VERSION = 2;
+/**
+ * What the postings' terms are. 1 (no `tokenizer_version` row in
+ * `index_meta`): surface tokens. 2: index terms, the Porter stems of plain
+ * English words (`toRetrievalIndexTerm`). A change re-posts every document
+ * from its stored chunk text (tokenizerUpgrade.ts): no PDF read, the chunk
+ * boundaries and vectors stay.
+ */
+export const LIBRARY_TEXT_INDEX_TOKENIZER_VERSION = 2;
+export const TOKENIZER_VERSION_META_KEY = "tokenizer_version";
+/** One drain step re-posts documents for about this long, then yields. */
+export const INDEX_REPOST_SLICE_MS = 50;
 export const INDEX_DRAIN_GAP_MS = 250;
 export const INDEX_DRAIN_GAP_BUSY_MS = 2000;
 export const INDEX_MAX_ATTEMPTS = 3;
