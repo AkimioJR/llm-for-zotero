@@ -557,6 +557,8 @@ function buildTargetedPaperGroups(
     const outline = outlineByPaper?.get(key);
     return {
       paperContext,
+      // Retrieval keeps every paper's best candidate whatever the call's
+      // topK, so a paper without passages had no candidate in scope.
       status: !passages.length
         ? "no_matches"
         : passages.every(
@@ -632,9 +634,8 @@ async function readManifestStructure(
 /**
  * Does any chunk of this paper sit in one of the requested sections and carry
  * text? The outline that resolved those ids is built from the same chunk
- * metadata, so this is the honest answer to "is the requested scope empty?".
- * A retrieval result is not: a read of several papers keeps only its best
- * passages, so a paper can be out-ranked with its sections full of text.
+ * metadata, so this is the honest answer to "is the requested scope empty?",
+ * and it is known before the read.
  */
 function sectionsHoldText(
   paperContent: PdfContext | undefined,

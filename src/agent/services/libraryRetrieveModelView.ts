@@ -19,7 +19,9 @@ import type {
  *   as a bounded synthesis reads (DEEP_SYNTHESIS_MAX_PAPERS).
  * The caller's own perPaperTopK and maxSnippetPapers override the per-paper
  * and paper counts. The model's room caps the whole: past it, passages leave
- * from the lowest-ranked paper up, then ledger rows without a passage.
+ * one at a time from the paper showing the most (the lowest-ranked of equals),
+ * so a paper loses its last passage only once every paper is down to one;
+ * then ledger rows without a passage leave.
  *
  * Rows keep the fields an answer uses; the chunk text, scores and match
  * diagnostics, the candidate shortlist, the query plan and the text
@@ -34,6 +36,7 @@ const PAPER_FIELDS = [
   "title",
   "matchStatus",
   "returnedSnippetCount",
+  "passageStatus",
 ] as const;
 // contextItemId names the attachment a passage came from: paper_read's
 // target, and the source its evidence ref covers.
@@ -69,6 +72,31 @@ function pick(row: object, fields: readonly string[]): Row {
 function shownFirst<T>(rows: readonly T[], shown: readonly T[]): T[] {
   const inView = new Set(shown);
   return [...shown, ...rows.filter((row) => !inView.has(row))];
+}
+
+/**
+ * The index of the passage to trim first: the last passage of the paper
+ * showing the most passages, the lowest-ranked such paper on a tie. Passages
+ * are grouped by paper in rank order, so later means lower-ranked.
+ */
+function deepestPaperLastPassage(
+  passages: readonly LibraryRetrieveSnippet[],
+): number {
+  const counts = new Map<string, number>();
+  for (const passage of passages)
+    counts.set(passage.itemId, (counts.get(passage.itemId) || 0) + 1);
+  let chosen = passages.length - 1;
+  let deepest = 0;
+  for (let index = passages.length - 1; index >= 0; index -= 1) {
+    const count = counts.get(passages[index].itemId) || 0;
+    if (count > deepest) {
+      deepest = count;
+      chosen = index;
+    }
+    // Skip the rest of this paper: its last passage is already considered.
+    counts.set(passages[index].itemId, -1);
+  }
+  return chosen;
 }
 
 function tokens(value: unknown): number {
@@ -169,11 +197,12 @@ export function buildLibraryRetrieveModelView(params: {
     };
   };
 
-  // Past the room, passages leave from the lowest-ranked paper up (the best
-  // one stays), then ledger rows whose paper shows no passage.
+  // Past the room, passages leave round-robin from the deepest papers (the
+  // best passage stays), then ledger rows whose paper shows no passage.
   let total = tokens(build());
   while (total > params.roomTokens && passages.length > 1) {
-    total -= tokens(passageRow(passages.pop()!));
+    const removed = passages.splice(deepestPaperLastPassage(passages), 1)[0];
+    total -= tokens(passageRow(removed));
   }
   const withPassage = new Set(passages.map((passage) => passage.itemId));
   for (

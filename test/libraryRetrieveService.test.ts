@@ -185,6 +185,91 @@ describe("LibraryRetrieveService", function () {
     assert.notProperty(result.snippets[0], "quoteCitationId");
   });
 
+  describe("a snippet cap smaller than the papers' depth", function () {
+    function denoisingService(paperCount: number) {
+      const entries = Array.from({ length: paperCount }, (_, index) =>
+        makeItem(index + 1, `Denoising paper ${index + 1}`, "Denoising.", {
+          hasPdf: true,
+        }),
+      );
+      return new LibraryRetrieveService(
+        makeGateway(entries) as any,
+        {
+          ensurePaperContext: async () =>
+            makePdfContext(["Methods\nA denoising model is evaluated."]),
+        } as any,
+        async (paperContext): Promise<PaperContextCandidate[]> =>
+          [0, 1, 2].map((index) => ({
+            paperKey: `${paperContext.itemId}:${paperContext.contextItemId}`,
+            itemId: paperContext.itemId,
+            contextItemId: paperContext.contextItemId,
+            title: paperContext.title,
+            chunkIndex: index,
+            chunkText: `Candidate ${index} denoising evidence for ${paperContext.title}.`,
+            chunkKind: "methods",
+            estimatedTokens: 10,
+            bm25Score: 1,
+            embeddingScore: 0,
+            hybridScore: 1,
+            evidenceScore: 1 - index * 0.1,
+          })),
+      );
+    }
+    const retrieveDenoising = (paperCount: number, maxTotalSnippets: number) =>
+      denoisingService(paperCount).retrieve({
+        query: "denoising",
+        depth: "evidence",
+        methods: ["metadata", "abstract", "fts"],
+        maxFullTextPapers: paperCount,
+        perPaperTopK: 3,
+        maxTotalSnippets,
+        request: {
+          conversationKey: 1,
+          mode: "agent",
+          userText: "Find denoising evidence",
+          libraryID: 1,
+        },
+      });
+
+    it("gives every paper one snippet before any paper a second", async function () {
+      const result = await retrieveDenoising(5, 5);
+      assert.lengthOf(result.snippets, 5);
+      assert.sameMembers(
+        result.snippets.map((snippet) => snippet.itemId),
+        ["1", "2", "3", "4", "5"],
+      );
+      const deeper = await retrieveDenoising(5, 7);
+      const counts = new Map<string, number>();
+      for (const snippet of deeper.snippets)
+        counts.set(snippet.itemId, (counts.get(snippet.itemId) || 0) + 1);
+      assert.deepEqual(
+        ["1", "2", "3", "4", "5"].map((itemId) => counts.get(itemId)),
+        [3, 1, 1, 1, 1],
+        "the top-up goes to the papers in rank order",
+      );
+    });
+
+    it("marks a paper the cap left without a snippet as not returned", async function () {
+      const result = await retrieveDenoising(7, 5);
+      const byId = new Map(
+        result.paperMatches.map((match) => [match.itemId, match]),
+      );
+      for (const itemId of ["1", "2", "3", "4", "5"]) {
+        assert.equal(byId.get(itemId)?.returnedSnippetCount, 1, itemId);
+        assert.isUndefined(byId.get(itemId)?.passageStatus, itemId);
+      }
+      for (const itemId of ["6", "7"]) {
+        assert.equal(byId.get(itemId)?.returnedSnippetCount, 0, itemId);
+        assert.equal(
+          byId.get(itemId)?.passageStatus,
+          "not_returned_budget",
+          itemId,
+        );
+      }
+      assert.equal(result.frontier.stopReason, "budget_limit");
+    });
+  });
+
   it("summarize intent returns snippets as evidence without quote-card anchors", async function () {
     const entries = [
       makeItem(1, "Representational drift overview", "", {

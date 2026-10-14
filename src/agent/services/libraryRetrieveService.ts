@@ -180,6 +180,11 @@ export type LibraryRetrievePaperMatch = {
   confidence: "high" | "medium" | "low";
   whyMatched: string;
   matchedQueryVariants?: string[];
+  /**
+   * The paper's text was available but the snippet cap was full before it
+   * was read, so its returned snippet count says nothing about its content.
+   */
+  passageStatus?: "not_returned_budget";
 };
 
 export type LibraryRetrieveFrontier = {
@@ -1203,10 +1208,36 @@ function paperMatchConfidence(
   return "low";
 }
 
+/**
+ * Snippet slots per paper, in rank order: one for every paper while the cap
+ * lasts, then the rest topped up in rank order to each paper's own count.
+ */
+function allocateSnippetSlots(
+  available: readonly number[],
+  maxTotal: number,
+): number[] {
+  const slots = available.map(() => 0);
+  let left = Math.max(0, maxTotal);
+  for (let index = 0; index < available.length && left > 0; index += 1) {
+    if (available[index] <= 0) continue;
+    slots[index] = 1;
+    left -= 1;
+  }
+  for (let index = 0; index < available.length && left > 0; index += 1) {
+    const extra = Math.min(left, available[index] - slots[index]);
+    if (extra <= 0) continue;
+    slots[index] += extra;
+    left -= extra;
+  }
+  return slots;
+}
+
 function buildPaperMatches(params: {
   records: ResourceRecord[];
   snippets: LibraryRetrieveSnippet[];
   maxMatches: number;
+  /** Item ids of full-text papers the snippet cap left unread. */
+  budgetCutItemIds?: ReadonlySet<string>;
 }): LibraryRetrievePaperMatch[] {
   const snippetsByItem = new Map<string, LibraryRetrieveSnippet[]>();
   for (const snippet of params.snippets) {
@@ -1240,6 +1271,9 @@ function buildPaperMatches(params: {
       record.metadataScore > 0 ||
       record.quicksearchMatched;
     if (!hasEvidence) continue;
+    const budgetCut =
+      !snippets.length &&
+      Boolean(params.budgetCutItemIds?.has(String(record.target.itemId)));
     matches.push({
       itemId: String(record.target.itemId),
       title: record.target.title,
@@ -1250,8 +1284,8 @@ function buildPaperMatches(params: {
       matchedQueryVariants: matchedQueryVariants.size
         ? Array.from(matchedQueryVariants)
         : undefined,
-      whyMatched:
-        record.why.length || snippets.length
+      whyMatched: [
+        record.why.length || snippets.length || budgetCut
           ? [
               ...record.why.slice(0, 3),
               ...snippets.slice(0, 2).map((snippet) => snippet.whyMatched),
@@ -1259,6 +1293,13 @@ function buildPaperMatches(params: {
               .filter(Boolean)
               .join("; ")
           : "Shortlisted but no direct evidence was found at this retrieval depth",
+        budgetCut
+          ? "Not returned because the passage budget was full; this is not evidence of absence"
+          : "",
+      ]
+        .filter(Boolean)
+        .join("; "),
+      ...(budgetCut ? { passageStatus: "not_returned_budget" as const } : {}),
     });
   }
   return matches
@@ -2160,6 +2201,7 @@ export class LibraryRetrieveService {
     }
 
     const snippets: LibraryRetrieveSnippet[] = [];
+    const budgetCutItemIds = new Set<string>();
     let snippetPapersExpanded = 0;
     let evidencePapers = 0;
     let fallbackRead = 0;
@@ -2183,10 +2225,19 @@ export class LibraryRetrieveService {
         Boolean(indexResult) &&
         input.depth === "evidence" &&
         !input.requireExact;
+      // Every paper read keeps at least one snippet, so reading stops once
+      // as many papers returned one as the cap allows; the rest are cut by
+      // the budget, not by their content.
+      const readPapers: Array<{
+        record: ResourceRecord;
+        paperSnippets: LibraryRetrieveSnippet[];
+      }> = [];
       for (const record of fullTextRecords) {
-        if (snippets.length >= input.maxTotalSnippets) break;
-        const remaining = input.maxTotalSnippets - snippets.length;
-        const maxSnippets = Math.min(input.perPaperTopK, remaining);
+        if (readPapers.length >= input.maxTotalSnippets) {
+          budgetCutItemIds.add(String(record.target.itemId));
+          continue;
+        }
+        const maxSnippets = input.perPaperTopK;
         let paperSnippets: LibraryRetrieveSnippet[];
         if (useIndexSnippets && record.indexed && record.paperContext) {
           const queryOverride =
@@ -2252,12 +2303,22 @@ export class LibraryRetrieveService {
         if (!record.queryState.has("content_loaded")) continue;
         snippetPapersExpanded += 1;
         record.resourceState.add("text_indexed");
-        if (paperSnippets.length) {
-          record.queryState.add("snippet_returned");
-          evidencePapers += 1;
-          snippets.push(...paperSnippets);
-        }
+        if (paperSnippets.length) readPapers.push({ record, paperSnippets });
       }
+      const slots = allocateSnippetSlots(
+        readPapers.map((paper) => paper.paperSnippets.length),
+        input.maxTotalSnippets,
+      );
+      readPapers.forEach(({ record, paperSnippets }, index) => {
+        const kept = paperSnippets.slice(0, slots[index]);
+        if (!kept.length) {
+          budgetCutItemIds.add(String(record.target.itemId));
+          return;
+        }
+        record.queryState.add("snippet_returned");
+        evidencePapers += 1;
+        snippets.push(...kept);
+      });
       if (input.requireExact && snippets.length === 0) {
         warnings.push(
           "Verify mode found no exact passage snippets in the searched full-text candidates.",
@@ -2323,6 +2384,7 @@ export class LibraryRetrieveService {
       records: candidateRecords,
       snippets: dedupedSnippets,
       maxMatches: input.maxCandidatePapers,
+      budgetCutItemIds,
     });
     const snippetCapHit = dedupedSnippets.length >= input.maxTotalSnippets;
     const frontier = buildFrontier({

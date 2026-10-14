@@ -8,6 +8,7 @@ import type {
   LibraryRetrieveSnippet,
 } from "../src/agent/services/libraryRetrieveService";
 import { DEEP_SYNTHESIS_MAX_PAPERS } from "../src/shared/libraryChatReadStrategy";
+import { estimateTextTokens } from "../src/utils/modelInputCap";
 
 type PaperSpec = {
   status: LibraryRetrievePaperMatchStatus;
@@ -362,6 +363,35 @@ describe("library_retrieve model view", function () {
         "a passage's paper stays in the ledger",
       );
     }
+  });
+
+  it("trims the deepest papers first and a paper's last passage only after every paper is down to one", function () {
+    const result = fullResult("summarize", [
+      { status: "strong", passages: 6 },
+      { status: "strong", passages: 6 },
+      { status: "strong", passages: 1 },
+    ]);
+    const roomy = view(result).content;
+    const room = estimateTextTokens(JSON.stringify(roomy)) - 500;
+    const kept = (content: Record<string, any>) =>
+      ["1", "2", "3"].map(
+        (itemId) =>
+          content.snippets.filter(
+            (s: LibraryRetrieveSnippet) => s.itemId === itemId,
+          ).length,
+      );
+    const [first, second, third] = kept(view(result, {}, room).content);
+    assert.isBelow(first + second, 12, "the room forced a trim");
+    assert.equal(third, 1, "the one-passage paper keeps its passage");
+    assert.include([0, 1], first - second, "the deep papers trim in turn");
+    const [onlyFirst, onlySecond, onlyThird] = kept(
+      view(result, {}, 1).content,
+    );
+    assert.deepEqual(
+      [onlyFirst, onlySecond, onlyThird],
+      [1, 0, 0],
+      "past one passage each, the lowest-ranked paper's goes first",
+    );
   });
 
   it("stores every row with the rows it shows first, so the omitted rows start at the number shown", function () {
