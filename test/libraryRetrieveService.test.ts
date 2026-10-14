@@ -977,6 +977,86 @@ describe("LibraryRetrieveService", function () {
     assert.include(result.methodsUsed, "exact");
   });
 
+  describe("verify mode matches whole words", function () {
+    async function verify(query: string, chunk: string) {
+      const service = new LibraryRetrieveService(
+        makeGateway([
+          makeItem(1, "Neutral title", "A method paper.", { hasPdf: true }),
+        ]) as any,
+        {
+          ensurePaperContext: async () => makePdfContext([chunk]),
+        } as any,
+        async () => [],
+      );
+      return service.retrieve({
+        query,
+        depth: "verify",
+        request: {
+          conversationKey: 1,
+          mode: "agent",
+          userText: `Verify ${query}`,
+          libraryID: 1,
+        },
+      });
+    }
+
+    it("does not match a term inside a longer word", async function () {
+      const result = await verify(
+        "cell",
+        "Results\nThe excellent outcome held.",
+      );
+      assert.lengthOf(result.snippets, 0);
+    });
+
+    it("matches a term that is a whole word", async function () {
+      const result = await verify("cell", "Results\nThe cell counts rose.");
+      assert.lengthOf(result.snippets, 1);
+      assert.equal(result.snippets[0].matchMethod, "exact");
+    });
+
+    it("does not match a phrase that occurs only inside longer words", async function () {
+      const result = await verify(
+        "cell count",
+        "Results\nThe excellent counting method held.",
+      );
+      assert.lengthOf(result.snippets, 0);
+    });
+
+    it("matches a hyphenated term case-insensitively", async function () {
+      const result = await verify("IL-6", "Results\nSerum il-6 levels rose.");
+      assert.lengthOf(result.snippets, 1);
+    });
+
+    it("accepts an English plural of a whole word", async function () {
+      const result = await verify("neuron", "Results\nNeurons fired in CA1.");
+      assert.lengthOf(result.snippets, 1);
+    });
+
+    it("rejects other suffixes after a term", async function () {
+      assert.lengthOf(
+        (await verify("cell", "Results\nA cellular state held.")).snippets,
+        0,
+      );
+      assert.lengthOf(
+        (await verify("rat", "Results\nThe rating rose.")).snippets,
+        0,
+      );
+    });
+
+    it("accepts a plural after the last word of a phrase", async function () {
+      const result = await verify(
+        "place cell",
+        "Results\nPlace cells remapped.",
+      );
+      assert.lengthOf(result.snippets, 1);
+    });
+
+    it("keeps substring matching for CJK terms", async function () {
+      const result = await verify("神经元", "结果\n海马神经元活动增加。");
+      assert.lengthOf(result.snippets, 1);
+    });
+  });
+
   it("searches explicit item scopes even when metadata and quicksearch do not match", async function () {
     const entries = [
       makeItem(7, "Unrelated title", "", {

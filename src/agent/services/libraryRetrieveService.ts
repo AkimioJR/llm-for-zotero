@@ -989,6 +989,27 @@ function truncateText(text: string, maxChars: number): string {
   return `${normalized.slice(0, Math.max(0, maxChars - 3)).trim()}...`;
 }
 
+/**
+ * Index of `term` in `lower` as a whole word: not preceded or followed by a
+ * letter or digit (Unicode-aware). Terms with Han, Kana, or Hangul characters
+ * use plain indexOf, because CJK text has no word boundaries.
+ */
+function indexOfWholeTerm(lower: string, term: string): number {
+  if (!term) return -1;
+  if (
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(
+      term,
+    )
+  )
+    return lower.indexOf(term);
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // A term ending in a letter may take an English plural ending (s or es).
+  const plural = /\p{L}$/u.test(term) ? "(?:s|es)?" : "";
+  return lower.search(
+    new RegExp(`(?<![\\p{L}\\p{N}])${escaped}${plural}(?![\\p{L}\\p{N}])`, "u"),
+  );
+}
+
 function findExactMatch(
   text: string,
   query: string,
@@ -1003,7 +1024,7 @@ function findExactMatch(
   const lower = text.toLowerCase();
   const queryLower = query.toLowerCase();
   if (queryLower.length > 2) {
-    const phraseIndex = lower.indexOf(queryLower);
+    const phraseIndex = indexOfWholeTerm(lower, queryLower);
     if (phraseIndex >= 0) {
       return {
         start: phraseIndex,
@@ -1015,7 +1036,7 @@ function findExactMatch(
     }
   }
   const hits = terms
-    .map((term) => ({ term, index: lower.indexOf(term) }))
+    .map((term) => ({ term, index: indexOfWholeTerm(lower, term) }))
     .filter((entry) => entry.index >= 0);
   if (!hits.length) return null;
   const requireAllTerms = terms.length <= 4;
@@ -1257,16 +1278,6 @@ function allocateSnippetSlots(
 }
 
 /**
- * Index of `term` in `lower` as a whole word; plain indexOf for terms with
- * non-ASCII characters, where ASCII word boundaries do not apply.
- */
-function indexOfWholeTerm(lower: string, term: string): number {
-  if (/[^\x00-\x7f]/.test(term)) return lower.indexOf(term);
-  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return lower.search(new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`));
-}
-
-/**
  * The passage a paper without full text gets from its abstract: in verify
  * mode only when the abstract holds an exact match (the same test a body
  * chunk passes), otherwise when the abstract holds at least two distinct query terms as whole
@@ -1280,8 +1291,8 @@ function buildAbstractSnippet(
   const abstractText = record.abstractText;
   if (record.paperContext || !abstractText) return null;
   const lower = abstractText.toLowerCase();
-  // The substring-based exact match decides only in verify mode; elsewhere
-  // the whole-token rule below applies, so "cell" never matches "excellent".
+  // The exact match decides only in verify mode; elsewhere the whole-token
+  // rule below applies.
   const exact = input.requireExact
     ? findExactMatchForQueryPlan(abstractText, input.queryPlan)
     : null;
