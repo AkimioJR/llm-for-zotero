@@ -18,6 +18,7 @@ import {
   LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
   TOKENIZER_VERSION_META_KEY,
 } from "./constants";
+import { isLibraryTextIndexClosedError } from "./db";
 import { estimateDocumentBytes } from "./indexer";
 import type { LibraryTextIndexStore } from "./store";
 
@@ -28,6 +29,8 @@ export type TokenizerUpgradeSlice = {
   reposted: number;
   /** True once every document is at the current version and the global row is written. */
   done: boolean;
+  /** Message of the first failure in this slice; the failed document was set aside. */
+  failure?: string;
 };
 
 /** Index-term counts per chunk and the byte estimate, as a fresh index computes them. */
@@ -51,7 +54,18 @@ export function rebuildDocumentTerms(texts: string[]): {
  */
 export async function runTokenizerUpgradeSlice(
   store: LibraryTextIndexStore,
-  options: { sliceMs: number; now?: () => number },
+  options: {
+    sliceMs: number;
+    now?: () => number;
+    /**
+     * Failures per document, kept by the caller across slices. A document
+     * with `maxAttempts` failures is left out of the pass. A failure does
+     * not end the slice: the pass goes on with the other documents.
+     */
+    failures?: Map<number, number>;
+    maxAttempts?: number;
+    onSkipped?: (attachmentId: number, message: string) => void;
+  },
 ): Promise<TokenizerUpgradeSlice> {
   if (await store.isTokenizerVersionCurrent()) {
     const recorded = await store.getIndexMeta(TOKENIZER_VERSION_META_KEY);
@@ -64,27 +78,60 @@ export async function runTokenizerUpgradeSlice(
   }
   const now = options.now || Date.now;
   const started = now();
+  const failures = options.failures || new Map<number, number>();
+  const maxAttempts = options.maxAttempts ?? Infinity;
+  const setAside = new Set<number>(); // failed in this slice: not retried until the next one
+  let failure: string | undefined;
   let reposted = 0;
   while (true) {
+    const exclude = [
+      ...new Set([
+        ...setAside,
+        ...[...failures].filter(([, n]) => n >= maxAttempts).map(([id]) => id),
+      ]),
+    ];
     const ids = await store.listDocumentsNeedingRepost(
       LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
       REPOST_BATCH,
+      exclude,
     );
     if (!ids.length) {
-      await store.setIndexMeta(
-        TOKENIZER_VERSION_META_KEY,
-        String(LIBRARY_TEXT_INDEX_TOKENIZER_VERSION),
-      );
-      return { reposted, done: true };
+      // A document left out keeps its old postings: the store stays "not current".
+      const leftOut =
+        (
+          await store.listDocumentsNeedingRepost(
+            LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
+            1,
+          )
+        ).length > 0;
+      if (!leftOut)
+        await store.setIndexMeta(
+          TOKENIZER_VERSION_META_KEY,
+          String(LIBRARY_TEXT_INDEX_TOKENIZER_VERSION),
+        );
+      return { reposted, done: true, ...(failure ? { failure } : {}) };
     }
     for (const attachmentId of ids) {
-      await store.repostDocument(
-        attachmentId,
-        LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
-        rebuildDocumentTerms,
-      );
-      reposted += 1;
-      if (now() - started >= options.sliceMs) return { reposted, done: false };
+      try {
+        await store.repostDocument(
+          attachmentId,
+          LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
+          rebuildDocumentTerms,
+        );
+        reposted += 1;
+      } catch (error) {
+        // Without a failure map the caller wants the first failure thrown.
+        if (!options.failures || isLibraryTextIndexClosedError(error))
+          throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        failure = failure ?? message;
+        const count = (failures.get(attachmentId) || 0) + 1;
+        failures.set(attachmentId, count);
+        setAside.add(attachmentId);
+        if (count >= maxAttempts) options.onSkipped?.(attachmentId, message);
+      }
+      if (now() - started >= options.sliceMs)
+        return { reposted, done: false, ...(failure ? { failure } : {}) };
     }
   }
 }

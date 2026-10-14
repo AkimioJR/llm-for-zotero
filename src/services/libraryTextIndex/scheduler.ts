@@ -33,7 +33,7 @@ import {
   INDEX_STOP_GRACE_MS,
   INDEX_URGENT_ADD_BATCH_MAX,
   INDEX_URGENT_MIN_PRIORITY,
-  LIBRARY_TEXT_INDEX_CHUNKER_VERSION,
+  isChunkerVersionStale,
 } from "./constants";
 import { isLibraryTextIndexClosedError } from "./db";
 import { indexAttachment } from "./indexer";
@@ -207,6 +207,10 @@ export class LibraryTextIndexScheduler {
   private vectorFailuresInARow = 0;
   private vectorPaused = false;
   private tokenizerUpgradeFailureLogged = false;
+  /** Re-post failures per attachment this session; see `INDEX_MAX_ATTEMPTS`. */
+  private repostFailures = new Map<number, number>();
+  /** No re-posting before this time after a failed slice (ms, env clock). */
+  private repostRetryAt = 0;
   private repostedThisSession = 0;
 
   constructor(env: Partial<SchedulerEnv> = {}) {
@@ -542,8 +546,8 @@ export class LibraryTextIndexScheduler {
   }
 
   private async staleReason(row: IndexDocumentRow): Promise<Reason | null> {
-    if (row.chunkerVersion !== LIBRARY_TEXT_INDEX_CHUNKER_VERSION)
-      return "chunkerVersion";
+    // Version 2 has the current chunk boundaries: the re-posting pass handles it.
+    if (isChunkerVersionStale(row.chunkerVersion)) return "chunkerVersion";
     if (
       row.sourceType !== "mineru" &&
       (await this.env.hasMineruCache(row.attachmentId))
@@ -712,7 +716,11 @@ export class LibraryTextIndexScheduler {
         now,
         minPriority: INDEX_URGENT_MIN_PRIORITY,
       });
-      if (!job && (await this.isTokenizerUpgradePending(store))) {
+      if (
+        !job &&
+        this.env.now() >= this.repostRetryAt &&
+        (await this.isTokenizerUpgradePending(store))
+      ) {
         // Between the urgent and prefetch lanes: it never waits for idle,
         // and an urgent job still goes first at every step. Once done, this
         // drain goes on to the lanes below.
@@ -783,6 +791,9 @@ export class LibraryTextIndexScheduler {
     } finally {
       this.draining = false;
       if (next === null && this.rekick) next = 0;
+      // A failed re-post waits for its backoff; wake then instead of parking.
+      const repostWake = this.repostRetryAt - this.env.now();
+      if (next === null && repostWake > 0) next = repostWake;
       this.rekick = false;
       if (generation === this.generation && this.running && next !== null)
         this.kick(next);
@@ -808,8 +819,20 @@ export class LibraryTextIndexScheduler {
       const slice = await runTokenizerUpgradeSlice(store, {
         sliceMs: INDEX_REPOST_SLICE_MS,
         now: this.env.now,
+        failures: this.repostFailures,
+        maxAttempts: INDEX_MAX_ATTEMPTS,
+        onSkipped: (attachmentId, message) =>
+          appLogger.warn(
+            `LLM index: re-posting attachment ${attachmentId} failed ${INDEX_MAX_ATTEMPTS} times; leaving it with its old postings for this session. ${message}`,
+          ),
       });
       this.repostedThisSession += slice.reposted;
+      if (slice.failure) {
+        // A failed slice must not block the lanes below: back off, then go on.
+        this.lastError = slice.failure;
+        this.repostRetryAt = this.env.now() + INDEX_RETRY_BACKOFF_MS[0];
+        return "done";
+      }
       if (slice.done) {
         if (this.repostedThisSession)
           appLogger.debug(
@@ -946,9 +969,8 @@ export class LibraryTextIndexScheduler {
     return {
       ...base,
       indexed: documents.length,
-      stale: documents.filter(
-        (d) => d.chunkerVersion !== LIBRARY_TEXT_INDEX_CHUNKER_VERSION,
-      ).length,
+      stale: documents.filter((d) => isChunkerVersionStale(d.chunkerVersion))
+        .length,
       queued: counts.queued,
       failed: counts.failed,
       building: this.draining || counts.queued > 0,

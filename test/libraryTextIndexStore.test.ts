@@ -10,6 +10,7 @@ import {
   type LibraryTextIndexDb,
 } from "../src/services/libraryTextIndex/db";
 import {
+  LIBRARY_TEXT_INDEX_CHUNKER_VERSION,
   LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
   TOKENIZER_VERSION_META_KEY,
 } from "../src/services/libraryTextIndex/constants";
@@ -551,7 +552,7 @@ describe("library text index tokenizer upgrade on a pre-stemming database", func
       sourceFingerprint: "fp107",
       sourceMtime: null,
       sourceSize: null,
-      chunkerVersion: 2,
+      chunkerVersion: LIBRARY_TEXT_INDEX_CHUNKER_VERSION,
       byteEstimate: 10,
       chunks: [
         {
@@ -643,7 +644,14 @@ describe("library text index tokenizer upgrade on a pre-stemming database", func
       harness.rows(
         `SELECT attachment_id, source_fingerprint, chunker_version, chunk_count, total_tokens, indexed_at FROM documents WHERE attachment_id <> 107 ORDER BY attachment_id`,
       ),
-      before.documents,
+      before.documents.map((row) => ({ ...row, chunker_version: 3 })),
+      "the pass records chunker version 3; nothing else changes",
+    );
+    assert.deepEqual(
+      harness
+        .rows(`SELECT DISTINCT chunker_version FROM documents`)
+        .map((row) => Number(row.chunker_version)),
+      [LIBRARY_TEXT_INDEX_CHUNKER_VERSION],
     );
     assert.deepEqual(
       harness.rows(`SELECT * FROM vector_documents`),
@@ -654,6 +662,33 @@ describe("library text index tokenizer upgrade on a pre-stemming database", func
     assert.deepEqual(await find("encoding"), [103, 104], "'encodes' too");
     const again = await runTokenizerUpgradeSlice(store, { sliceMs: 50 });
     assert.deepEqual(again, { reposted: 0, done: true });
+  });
+
+  it("lists a chunker-2 document for re-posting even when its marker is current, and leaves other chunker versions at their value", async function () {
+    await runTokenizerUpgradeSlice(store, { sliceMs: 60_000 });
+    harness.exec(
+      `UPDATE documents SET chunker_version = 2 WHERE attachment_id = 103`,
+    );
+    harness.exec(
+      `UPDATE documents SET chunker_version = 1 WHERE attachment_id = 104`,
+    );
+    store = new LibraryTextIndexStore(db);
+    assert.deepEqual(
+      await store.listDocumentsNeedingRepost(
+        LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
+        100,
+      ),
+      [103],
+    );
+    await runTokenizerUpgradeSlice(store, { sliceMs: 60_000 });
+    const versions = Object.fromEntries(
+      harness
+        .rows(
+          `SELECT attachment_id, chunker_version FROM documents WHERE attachment_id IN (103, 104)`,
+        )
+        .map((row) => [row.attachment_id, Number(row.chunker_version)]),
+    );
+    assert.deepEqual(versions, { 103: 3, 104: 1 });
   });
 
   it("deleting a document mid-pass removes its marker with it", async function () {
@@ -687,7 +722,7 @@ describe("library text index tokenizer upgrade on a pre-stemming database", func
         [term, 102, JSON.stringify([[0, count, surface.length]]), 1],
       );
     harness.exec(
-      `UPDATE documents SET indexed_at = 99999 WHERE attachment_id = 102`,
+      `UPDATE documents SET indexed_at = 99999, chunker_version = 2 WHERE attachment_id = 102`,
     );
 
     // A new plugin start: a fresh store instance, same storage.

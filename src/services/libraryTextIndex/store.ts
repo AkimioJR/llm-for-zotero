@@ -3,6 +3,8 @@ import type { PdfChunkMeta } from "../paperContent/types";
 import {
   INDEX_MAX_ATTEMPTS,
   INDEX_RETRY_BACKOFF_MS,
+  LIBRARY_TEXT_INDEX_CHUNKER_VERSION,
+  LIBRARY_TEXT_INDEX_POSTINGS_ONLY_CHUNKER_VERSION,
   LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
 } from "./constants";
 import { openLibraryTextIndexDb, type LibraryTextIndexDb } from "./db";
@@ -220,12 +222,21 @@ export class LibraryTextIndexStore {
   async listDocumentsNeedingRepost(
     tokenizerVersion: number,
     limit: number,
+    excludeIds: number[] = [],
   ): Promise<number[]> {
+    const exclude = excludeIds.length
+      ? ` AND d.attachment_id NOT IN (${excludeIds.map(() => "?").join(",")})`
+      : "";
     const rows = (await this.q(
       `SELECT d.attachment_id FROM documents d LEFT JOIN document_tokenizer t ON t.attachment_id = d.attachment_id
-       WHERE t.attachment_id IS NULL OR t.tokenizer_version <> ? OR t.indexed_at <> d.indexed_at
+       WHERE (t.attachment_id IS NULL OR t.tokenizer_version <> ? OR t.indexed_at <> d.indexed_at OR d.chunker_version = ?)${exclude}
        ORDER BY d.attachment_id ASC LIMIT ?`,
-      [tokenizerVersion, limit],
+      [
+        tokenizerVersion,
+        LIBRARY_TEXT_INDEX_POSTINGS_ONLY_CHUNKER_VERSION,
+        ...excludeIds,
+        limit,
+      ],
     )) as Array<{ attachment_id: number }>;
     return rows.map((row) => Number(row.attachment_id));
   }
@@ -286,8 +297,13 @@ export class LibraryTextIndexStore {
         );
       }
       await this.q(
-        `UPDATE documents SET byte_estimate = ? WHERE attachment_id = ?`,
-        [rebuilt.byteEstimate, attachmentId],
+        `UPDATE documents SET byte_estimate = ?, chunker_version = CASE WHEN chunker_version = ? THEN ? ELSE chunker_version END WHERE attachment_id = ?`,
+        [
+          rebuilt.byteEstimate,
+          LIBRARY_TEXT_INDEX_POSTINGS_ONLY_CHUNKER_VERSION,
+          LIBRARY_TEXT_INDEX_CHUNKER_VERSION,
+          attachmentId,
+        ],
       );
       await this.q(
         `INSERT OR REPLACE INTO document_tokenizer (attachment_id, tokenizer_version, indexed_at) VALUES (?, ?, ?)`,

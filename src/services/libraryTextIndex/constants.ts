@@ -1,7 +1,22 @@
 export const LIBRARY_TEXT_INDEX_DB_NAME = "llm-for-zotero-index";
 export const LIBRARY_TEXT_INDEX_SCHEMA_VERSION = 1;
-/** 2: chunks carry their enclosing standard section (`enclosingSection`). */
-export const LIBRARY_TEXT_INDEX_CHUNKER_VERSION = 2;
+/**
+ * 2: chunks carry their enclosing standard section (`enclosingSection`).
+ * 3: same chunk boundaries as 2, and the postings hold index terms (stems).
+ * An older build expects 2, so it sees 3 as stale and re-indexes from the
+ * PDF with its own tokenizer; this build re-posts a version 2 document from
+ * its stored chunks instead (`isChunkerVersionStale`).
+ */
+export const LIBRARY_TEXT_INDEX_CHUNKER_VERSION = 3;
+/** The last version whose chunk boundaries equal the current ones. */
+export const LIBRARY_TEXT_INDEX_POSTINGS_ONLY_CHUNKER_VERSION = 2;
+/** True when a document's chunks must be rebuilt from the source. */
+export function isChunkerVersionStale(version: number): boolean {
+  return (
+    version !== LIBRARY_TEXT_INDEX_CHUNKER_VERSION &&
+    version !== LIBRARY_TEXT_INDEX_POSTINGS_ONLY_CHUNKER_VERSION
+  );
+}
 /**
  * What the postings' terms are. 1 (no `tokenizer_version` row in
  * `index_meta`): surface tokens. 2: index terms, the Porter stems of plain
