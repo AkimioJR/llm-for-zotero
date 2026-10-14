@@ -517,6 +517,7 @@ function compactPaperMatch(record: unknown): Record<string, unknown> {
     "year",
     "matchStatus",
     "passageStatus",
+    "workGroupId",
     "score",
     "sourceKind",
     "evidenceCount",

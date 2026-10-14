@@ -4,6 +4,8 @@ import {
   QUICKSEARCH_MAX_PROBES,
   buildQuicksearchProbes,
 } from "../src/agent/services/libraryRetrieveService";
+import { buildLibraryRetrieveModelView } from "../src/agent/services/libraryRetrieveModelView";
+import { groupPaperWorks } from "../src/agent/services/paperWorkIdentity";
 import { buildRetrievalQueryPlan } from "../src/services/retrieval/retrievalQueryPlan";
 import type { PaperContextCandidate } from "../src/services/paperContent/types";
 import type { PaperContextRef } from "../src/shared/types";
@@ -3127,5 +3129,306 @@ describe("LibraryRetrieveService exact-match ranking", function () {
 
     const order = result.snippets.map((snippet) => snippet.itemId);
     assert.deepEqual(order, ["3", "7"]);
+  });
+});
+
+describe("LibraryRetrieveService abstract-only papers and same-work marking", function () {
+  const request = {
+    conversationKey: 1,
+    mode: "agent" as const,
+    userText: "Find the hexagonal spatial map claim",
+    libraryID: 1,
+  };
+  const ROOMY = 1_000_000;
+
+  it("returns a no-PDF paper's matching abstract as one abstract passage that is not body evidence", async function () {
+    const entries = [
+      makeItem(
+        1,
+        "Grid cells in entorhinal cortex",
+        "Grid cells encode a hexagonal spatial map of the environment.",
+        { hasPdf: false },
+      ),
+      makeItem(2, "Unrelated imaging paper", "", { hasPdf: true }),
+    ];
+    const service = new LibraryRetrieveService(
+      makeGateway(entries) as any,
+      {
+        ensurePaperContext: async () =>
+          makePdfContext(["Methods\nCalcium imaging of zebrafish larvae."]),
+      } as any,
+      async () => [],
+    );
+    const input = {
+      query: "hexagonal spatial map",
+      depth: "verify" as const,
+      scope: { libraryID: 1, itemIds: [1, 2] },
+    };
+    const result = await service.retrieve({ ...input, request });
+
+    const abstractPassages = result.snippets.filter(
+      (snippet) => snippet.itemId === "1",
+    );
+    assert.lengthOf(abstractPassages, 1);
+    const [passage] = abstractPassages;
+    assert.equal(passage.sourceKind, "abstract");
+    assert.equal(passage.chunkKind, "abstract");
+    assert.equal(passage.matchMethod, "metadata");
+    assert.include(passage.snippet, "hexagonal spatial map");
+    assert.isUndefined(passage.contextItemId, "no attachment to anchor");
+    assert.isUndefined(passage.quoteCitationId, "no quote anchor");
+    assert.notInclude(
+      (result.quoteCitations || []).map((citation) => String(citation.itemId)),
+      "1",
+    );
+    assert.equal(
+      result.answerContract.papersBodyRead,
+      0,
+      "an abstract is not body evidence",
+    );
+
+    const content = buildLibraryRetrieveModelView({
+      input,
+      result,
+      roomTokens: ROOMY,
+    })!.content as Record<string, any>;
+    assert.include(
+      content.paperMatches.map((row: { itemId: string }) => row.itemId),
+      "1",
+    );
+    assert.equal(
+      content.snippets.find((row: { itemId: string }) => row.itemId === "1")
+        ?.sourceKind,
+      "abstract",
+    );
+  });
+
+  it("returns no abstract passage in verify when the abstract lacks the exact phrase, and lists the paper as not read", async function () {
+    const entries = [
+      makeItem(
+        1,
+        "Grid cells in entorhinal cortex",
+        "Grid cells fire in hexagonal patterns.",
+        { hasPdf: false },
+      ),
+      makeItem(2, "Spatial map paper", "", { hasPdf: true }),
+    ];
+    const service = new LibraryRetrieveService(
+      makeGateway(entries) as any,
+      {
+        ensurePaperContext: async () =>
+          makePdfContext([
+            "Results\nPlace cells form a hexagonal spatial map in this task.",
+          ]),
+      } as any,
+      async () => [],
+    );
+    const input = {
+      query: "hexagonal spatial map",
+      depth: "verify" as const,
+      scope: { libraryID: 1, itemIds: [1, 2] },
+    };
+    const result = await service.retrieve({ ...input, request });
+
+    assert.notInclude(
+      result.snippets.map((snippet) => snippet.itemId),
+      "1",
+    );
+    const row = result.paperMatches.find((match) => match.itemId === "1");
+    assert.equal(row?.passageStatus, "no_pdf_attachment");
+    const content = buildLibraryRetrieveModelView({
+      input,
+      result,
+      roomTokens: ROOMY,
+    })!.content as Record<string, any>;
+    const viewRow = content.paperMatches.find(
+      (entry: { itemId: string }) => entry.itemId === "1",
+    );
+    assert.equal(viewRow?.passageStatus, "no_pdf_attachment");
+    assert.equal(viewRow?.title, "Grid cells in entorhinal cortex");
+  });
+
+  it("marks a preprint and its journal version as one work, and never groups by a short title alone", async function () {
+    const entries = [
+      makeItem(1, "Sparse coding of natural images in visual cortex"),
+      makeItem(2, "Sparse Coding of Natural Images in Visual Cortex: a model"),
+      makeItem(3, "Introduction"),
+      makeItem(4, "Introduction"),
+      makeItem(5, "Introduction"),
+      makeItem(6, "Introduction"),
+      makeItem(7, "Attention for sequence models"),
+      makeItem(8, "Transformers: the preprint"),
+    ];
+    entries[0].metadata.fields.DOI = "10.48550/arXiv.2301.00001";
+    entries[1].metadata.fields.DOI = "10.1016/j.neuron.2024.01.001";
+    entries[1].target.year = "2023";
+    entries[3].metadata.creators = [
+      { creatorType: "author", firstName: "Bo", lastName: "Jones" },
+    ];
+    entries[6].metadata.fields.url = "https://arxiv.org/abs/2302.12345v2";
+    entries[7].metadata.fields.DOI = "10.48550/arXiv.2302.12345";
+    entries[7].metadata.creators = [
+      { creatorType: "author", firstName: "Bo", lastName: "Jones" },
+    ];
+    const service = new LibraryRetrieveService(
+      makeGateway(entries) as any,
+      {
+        ensurePaperContext: async () =>
+          makePdfContext(["Methods\nA model is evaluated."]),
+      } as any,
+      async (paperContext): Promise<PaperContextCandidate[]> => [
+        {
+          paperKey: `${paperContext.itemId}:${paperContext.contextItemId}`,
+          itemId: paperContext.itemId,
+          contextItemId: paperContext.contextItemId,
+          title: paperContext.title,
+          chunkIndex: 1,
+          chunkText: `Methods\nThe model of paper ${paperContext.itemId} is evaluated.`,
+          chunkKind: "methods",
+          estimatedTokens: 10,
+          bm25Score: 1,
+          embeddingScore: 0,
+          hybridScore: 1,
+          evidenceScore: 1,
+        },
+      ],
+    );
+    const result = await service.retrieve({
+      query: "model",
+      depth: "evidence",
+      methods: ["metadata", "abstract", "fts"],
+      scope: {
+        libraryID: 1,
+        itemIds: entries.map((entry) => entry.target.itemId),
+      },
+      request,
+    });
+
+    const byId = new Map(
+      result.paperMatches.map((match) => [match.itemId, match]),
+    );
+    assert.lengthOf(result.paperMatches, 8, "rows are marked, not merged");
+    assert.isString(byId.get("1")?.workGroupId);
+    assert.equal(
+      byId.get("1")?.workGroupId,
+      byId.get("2")?.workGroupId,
+      "same title before the subtitle, first creator and close years",
+    );
+    for (const itemId of ["3", "4", "5", "6"]) {
+      assert.notProperty(byId.get(itemId)!, "workGroupId", itemId);
+    }
+    assert.isString(byId.get("7")?.workGroupId);
+    assert.equal(
+      byId.get("7")?.workGroupId,
+      byId.get("8")?.workGroupId,
+      "an arXiv URL and an arXiv DOI name one work",
+    );
+    assert.notEqual(byId.get("1")?.workGroupId, byId.get("7")?.workGroupId);
+    assert.lengthOf(result.snippets, 8, "every item keeps its passage");
+    assert.equal(result.resourcePool.queryCoverage.evidencePapers, 8);
+    assert.equal(result.resourcePool.queryCoverage.evidenceWorks, 6);
+
+    const content = buildLibraryRetrieveModelView({
+      input: {},
+      result,
+      roomTokens: ROOMY,
+    })!.content as Record<string, any>;
+    const viewRow = content.paperMatches.find(
+      (row: { itemId: string }) => row.itemId === "2",
+    );
+    assert.equal(viewRow?.workGroupId, byId.get("2")?.workGroupId);
+  });
+});
+
+describe("abstract-only passages need two distinct query terms", function () {
+  const request = {
+    conversationKey: 1,
+    mode: "agent" as const,
+    userText: "q",
+    libraryID: 1,
+  };
+  async function abstractPassageFor(abstract: string, query: string) {
+    const entries = [
+      makeItem(1, "A paper", abstract, { hasPdf: false }),
+      makeItem(2, "Other", "", { hasPdf: true }),
+    ];
+    const service = new LibraryRetrieveService(
+      makeGateway(entries) as any,
+      {
+        ensurePaperContext: async () => makePdfContext(["Methods\nNothing."]),
+      } as any,
+      async () => [],
+    );
+    const result = await service.retrieve({
+      query,
+      depth: "evidence",
+      scope: { libraryID: 1, itemIds: [1, 2] },
+      request,
+    });
+    return result.snippets.filter((snippet) => snippet.itemId === "1");
+  }
+
+  it("adds no abstract passage for one shared term out of two", async function () {
+    assert.lengthOf(
+      await abstractPassageFor(
+        "Hexagonal firing patterns appear in many regions.",
+        "hexagonal spatial map",
+      ),
+      0,
+    );
+  });
+
+  it("adds an abstract passage for two shared terms", async function () {
+    assert.lengthOf(
+      await abstractPassageFor(
+        "Hexagonal firing forms a spatial code.",
+        "hexagonal spatial map",
+      ),
+      1,
+    );
+  });
+
+  it("does not count a term found only inside a longer word", async function () {
+    assert.lengthOf(
+      await abstractPassageFor(
+        "Excellent hexagonal results were seen.",
+        "hexagonal cell",
+      ),
+      0,
+    );
+  });
+});
+
+describe("groupPaperWorks title and creator key", function () {
+  const paper = (itemId: number, title: string, year: string) => ({
+    itemId,
+    title,
+    firstCreatorLastName: "Devlin",
+    year,
+  });
+
+  it("groups a short main title with a long subtitle by its full title", function () {
+    const title =
+      "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding";
+    const groups = groupPaperWorks([
+      paper(1, title, "2018"),
+      paper(2, title, "2019"),
+    ]);
+    assert.equal(groups.get(1), groups.get(2));
+    assert.isString(groups.get(1));
+  });
+
+  it("groups CJK titles of at least eight letters, not shorter ones", function () {
+    const long = groupPaperWorks([
+      paper(1, "深度双向变换器的语言理解预训练", "2018"),
+      paper(2, "深度双向变换器的语言理解预训练", "2019"),
+    ]);
+    assert.isString(long.get(1));
+    assert.equal(long.get(1), long.get(2));
+    const short = groupPaperWorks([
+      paper(1, "语言理解预训练", "2018"),
+      paper(2, "语言理解预训练", "2019"),
+    ]);
+    assert.equal(short.size, 0);
   });
 });

@@ -17,6 +17,9 @@ import type {
  * - enumerate: every matching paper by id and title, with its best passage;
  * - summarize: the top papers read in depth (all their passages), as many
  *   as a bounded synthesis reads (DEEP_SYNTHESIS_MAX_PAPERS).
+ * Verify and summarize also list, after those, up to NOT_READ_PAPER_ROWS
+ * matching papers that show no passage, each with its passageStatus (cut by
+ * the budget, or no full text), so the answer can name what it did not read.
  * The caller's own perPaperTopK and maxSnippetPapers override the per-paper
  * and paper counts. The model's room caps the whole: past it, passages leave
  * one at a time from the paper showing the most (the lowest-ranked of equals),
@@ -37,7 +40,14 @@ const PAPER_FIELDS = [
   "matchStatus",
   "returnedSnippetCount",
   "passageStatus",
+  "workGroupId",
 ] as const;
+/**
+ * At most this many matching papers without a passage (cut by the budget, or
+ * without full text) are listed in a verify or summarize view, after the
+ * papers with passages, so the answer can name the papers it did not read.
+ */
+const NOT_READ_PAPER_ROWS = 25;
 // contextItemId names the attachment a passage came from: paper_read's
 // target, and the source its evidence ref covers.
 const PASSAGE_FIELDS = [
@@ -127,19 +137,36 @@ export function buildLibraryRetrieveModelView(params: {
     paper.matchStatus !== "not_enough_evidence";
   const perPaperOverride = input.perPaperTopK;
   const paperCountOverride = input.maxSnippetPapers ?? input.maxFullTextPapers;
+  // A matching paper no passage was read for, with the reason on its row.
+  const notRead = (paper: LibraryRetrievePaperMatch) =>
+    !hasPassages(paper) && Boolean(paper.passageStatus);
+  const notReadRows = (
+    inScope: (paper: LibraryRetrievePaperMatch) => boolean,
+  ) =>
+    result.paperMatches
+      .filter((paper) => notRead(paper) && inScope(paper))
+      .slice(0, NOT_READ_PAPER_ROWS);
   let papers: LibraryRetrievePaperMatch[];
   let perPaper: number;
   if (result.intent === "verify") {
-    papers = result.paperMatches.filter(hasPassages);
+    papers = [
+      ...result.paperMatches.filter(hasPassages),
+      ...notReadRows(matched),
+    ];
     perPaper = perPaperOverride ?? Number.POSITIVE_INFINITY;
   } else if (result.intent === "summarize") {
     // A bounded synthesis plans every paper in scope, so a paper nothing
     // matched is still read; elsewhere such a paper is a fallback lead.
     const planned =
       result.answerContract?.resolvedStrategy === "deep_synthesis";
-    papers = result.paperMatches
-      .filter((paper) => hasPassages(paper) && (planned || matched(paper)))
-      .slice(0, paperCountOverride ?? DEEP_SYNTHESIS_MAX_PAPERS);
+    const inScope = (paper: LibraryRetrievePaperMatch) =>
+      planned || matched(paper);
+    papers = [
+      ...result.paperMatches
+        .filter((paper) => hasPassages(paper) && inScope(paper))
+        .slice(0, paperCountOverride ?? DEEP_SYNTHESIS_MAX_PAPERS),
+      ...notReadRows(inScope),
+    ];
     perPaper = perPaperOverride ?? Number.POSITIVE_INFINITY;
   } else {
     papers = result.paperMatches.filter(matched);
@@ -159,7 +186,13 @@ export function buildLibraryRetrieveModelView(params: {
   const paperRow = (paper: LibraryRetrievePaperMatch) =>
     pick(paper, PAPER_FIELDS);
   const passageRow = (passage: LibraryRetrieveSnippet) =>
-    pick(passage, PASSAGE_FIELDS);
+    // sourceKind marks a passage from a paper without full text; PDF passages omit it.
+    ({
+      ...pick(passage, PASSAGE_FIELDS),
+      ...(passage.sourceKind === "abstract" || passage.sourceKind === "metadata"
+        ? { sourceKind: passage.sourceKind }
+        : {}),
+    });
   const { unreadableReasons, coverageFrontier, ...answerContract } =
     result.answerContract || ({} as LibraryRetrieveResult["answerContract"]);
   void unreadableReasons;
