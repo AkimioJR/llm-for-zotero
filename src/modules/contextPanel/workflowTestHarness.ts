@@ -6935,6 +6935,96 @@ export function installWorkflowTestHarness(targetAddon: {
         Zotero.Libraries.userLibraryID,
       );
     },
+    restartLibraryTextIndexFromPreStemmingShape: async (attachmentIds) => {
+      const { startLibraryTextIndex, stopLibraryTextIndex } =
+        await import("../../services/libraryTextIndex");
+      const { closeLibraryTextIndexDb, openLibraryTextIndexDb } =
+        await import("../../services/libraryTextIndex/db");
+      const { getLibraryTextIndexStore } =
+        await import("../../services/libraryTextIndex/store");
+      const { estimateDocumentBytes } =
+        await import("../../services/libraryTextIndex/indexer");
+      const { tokenizeRetrievalText } =
+        await import("../../services/retrieval/retrievalTokenizer");
+      const { TOKENIZER_VERSION_META_KEY } =
+        await import("../../services/libraryTextIndex/constants");
+      await stopLibraryTextIndex();
+      const store = await getLibraryTextIndexStore();
+      const db = await openLibraryTextIndexDb();
+      if (!store || !db) throw new Error("library text index unavailable");
+      // The tokenizer before stemming: surface tokens, as tokenizeRetrievalText
+      // emits them without `stem`.
+      const surfaceTerms = (texts: string[]) => {
+        const tf = texts.map((text) => {
+          const counts: Record<string, number> = Object.create(null);
+          for (const token of tokenizeRetrievalText(text))
+            counts[token] = (counts[token] || 0) + 1;
+          return counts;
+        });
+        return {
+          tf,
+          byteEstimate: estimateDocumentBytes({
+            chunks: texts.map((text, i) => ({ text, tf: tf[i] })),
+          }),
+        };
+      };
+      for (const attachmentId of attachmentIds)
+        await store.repostDocument(attachmentId, 1, surfaceTerms);
+      await db.queryAsync(`DROP TABLE IF EXISTS document_tokenizer`);
+      await db.queryAsync(`DELETE FROM index_meta WHERE key = ?`, [
+        TOKENIZER_VERSION_META_KEY,
+      ]);
+      await closeLibraryTextIndexDb();
+      await startLibraryTextIndex();
+    },
+    libraryTextIndexTokenizerState: async () => {
+      const { getLibraryTextIndexStore } =
+        await import("../../services/libraryTextIndex/store");
+      const {
+        LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
+        TOKENIZER_VERSION_META_KEY,
+      } = await import("../../services/libraryTextIndex/constants");
+      const store = await getLibraryTextIndexStore();
+      if (!store) throw new Error("library text index store unavailable");
+      return {
+        recordedVersion: await store.getIndexMeta(TOKENIZER_VERSION_META_KEY),
+        documentsNeedingRepost: (
+          await store.listDocumentsNeedingRepost(
+            LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
+            1_000_000,
+          )
+        ).length,
+      };
+    },
+    libraryTextIndexPostingTerms: async (attachmentId) => {
+      const { openLibraryTextIndexDb } =
+        await import("../../services/libraryTextIndex/db");
+      const db = await openLibraryTextIndexDb();
+      if (!db) throw new Error("library text index unavailable");
+      const rows = (await db.queryAsync(
+        `SELECT term FROM postings WHERE attachment_id = ? ORDER BY term`,
+        [attachmentId],
+      )) as Array<{ term: string }>;
+      return rows.map((row) => String(row.term));
+    },
+    searchLibraryTextIndexForTest: async (input) => {
+      const { libraryTextIndex } =
+        await import("../../services/libraryTextIndex");
+      const result = await libraryTextIndex.search({
+        scopeAttachmentIds: input.attachmentIds,
+        queries: input.queries,
+        maxPapers: Math.max(1, input.attachmentIds.length),
+        perPaperTopK: 3,
+      });
+      if (!result) throw new Error("library text index search unavailable");
+      return {
+        paperAttachmentIds: result.papers.map((paper) => paper.attachmentId),
+        matchedTerms: [
+          ...new Set(result.chunks.flatMap((chunk) => chunk.matchedTerms)),
+        ],
+        snippets: result.chunks.map((chunk) => chunk.text),
+      };
+    },
     loadPaperContextForTest: async (attachmentId) => {
       const { pdfTextCache } =
         await import("../../services/paperContent/contextCache");
