@@ -97,6 +97,7 @@ import {
   readLongJob,
   renderLongJobMessage,
   renderLongJobRecord,
+  renderUnfinishedParts,
   settledTargetCount,
 } from "./loop/longJob";
 import {
@@ -105,6 +106,7 @@ import {
   declaresReadPart,
   decideRunEnd,
   OUTCOME_REASONS,
+  openDeclaredOutcomes,
   reconcileJournaledReceipts,
   resumesOnContinue,
   settleOutcomes,
@@ -2009,9 +2011,22 @@ export class AgentRuntime {
           modelFinalText.length - webAttribution.cleanText.length,
         )!;
         const receiptStatus = actionContractSession.receiptStatus();
-        const finalText = receiptStatus
-          ? `${modelFinalText}\n\n${receiptStatus}`
-          : modelFinalText;
+        // Parts still open after the answer end the run not done: the answer
+        // says so, whatever the model claimed.
+        const unfinished = recordsOutcomes()
+          ? renderUnfinishedParts(
+              openDeclaredOutcomes(request.executionCheckpoint),
+              OUTCOME_REASONS.noText,
+            )
+          : "";
+        const finalText = [
+          receiptStatus
+            ? `${modelFinalText}\n\n${receiptStatus}`
+            : modelFinalText,
+          unfinished,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
         if (finalText) {
           if (!stepStreamedText) {
             currentAnswerText = `${committedAnswerText}${finalText}`;

@@ -399,7 +399,10 @@ export async function scriptedJobTurn(
  * task_update, note_write (real notes, verified receipts), the Stop button
  * and the panel's send flow are the real ones; paper_read is the stub above.
  * The resumed model first writes a note on a paper the job has already
- * noted, as a model that starts its page over would.
+ * noted, as a model that starts its page over would. The model reads a
+ * page in one step, then writes one note_write a paper in the next; it
+ * reports each step's note calls and every step the host refused as too
+ * many calls, so a page larger than the ordinary limit is seen through.
  */
 export async function exerciseLongJobNoteResume(
   panel: { body: HTMLElement; item: Zotero.Item },
@@ -463,6 +466,59 @@ export async function exerciseLongJobNoteResume(
       .find((text) => text.startsWith("Long job"));
   const pageOf = (host: string) =>
     [...host.matchAll(/^- itemId=(\d+)/gm)].map((match) => Number(match[1]));
+  // The script counts a paper read or noted only once the runtime confirms
+  // it: a read by its tool result, a note by the note Zotero holds. A call
+  // the runtime refused or never ran is asked again, a few times at most.
+  const itemOf = (call: AgentToolCall) =>
+    Number(
+      (call.arguments as { targetItemId?: number }).targetItemId ??
+        (call.arguments as { target?: { itemId?: number } }).target?.itemId,
+    );
+  let awaiting: AgentToolCall[] = [];
+  const attempts = new Map<string, number>();
+  /** How many note calls each of the turn's steps sent. */
+  let noteSteps: number[] = [];
+  const request = (calls: AgentToolCall[]): AgentModelStep => {
+    const notes = calls.filter((call) => call.name === "note_write").length;
+    if (notes) noteSteps.push(notes);
+    for (const call of calls) {
+      const key = `${call.name}:${itemOf(call)}`;
+      const count = (attempts.get(key) || 0) + 1;
+      if (count > 3)
+        throw new Error(`${key} was asked ${count} times, never confirmed.`);
+      attempts.set(key, count);
+    }
+    awaiting = calls;
+    return toolStep(calls);
+  };
+  const confirm = async (
+    messages: AgentModelMessage[],
+    read: Set<number>,
+    noted: Set<number>,
+  ) => {
+    const succeeded = new Set<string>();
+    for (const message of messages) {
+      if (message.role !== "tool") continue;
+      let content: { error?: unknown } | null = null;
+      try {
+        content = JSON.parse(contentText(message));
+      } catch {
+        // A result that is not JSON is no error object.
+      }
+      if (!content?.error) succeeded.add(message.tool_call_id);
+    }
+    for (const call of awaiting) {
+      const itemId = itemOf(call);
+      if (call.name === "paper_read") {
+        if (succeeded.has(call.id)) read.add(itemId);
+        continue;
+      }
+      const parent = Zotero.Items.get(itemId);
+      await parent.reload(["childItems"], true);
+      if (parent.getNotes().length) noted.add(itemId);
+    }
+    awaiting = [];
+  };
   /** Read the page's papers, then save a note on each of them. */
   const workPage = (
     papers: number[],
@@ -470,14 +526,10 @@ export async function exerciseLongJobNoteResume(
     noted: Set<number>,
   ): AgentModelStep | null => {
     const toRead = papers.filter((itemId) => !read.has(itemId));
-    if (toRead.length) {
-      for (const itemId of toRead) read.add(itemId);
-      return toolStep(toRead.map(readCall));
-    }
+    if (toRead.length) return request(toRead.map(readCall));
     const toNote = papers.filter((itemId) => !noted.has(itemId));
     if (!toNote.length) return null;
-    for (const itemId of toNote) noted.add(itemId);
-    return toolStep(toNote.map((itemId) => noteCall(itemId)));
+    return request(toNote.map((itemId) => noteCall(itemId)));
   };
 
   /** One turn through the panel's send flow, with a fresh runtime. */
@@ -507,7 +559,8 @@ export async function exerciseLongJobNoteResume(
     let declared = false;
     const first = await turn(
       `Read each paper in ${input.collection.name} and save a note on each`,
-      (messages, stop) => {
+      async (messages, stop) => {
+        await confirm(messages, read, noted);
         if (!declared) {
           declared = true;
           return toolStep([
@@ -554,7 +607,11 @@ export async function exerciseLongJobNoteResume(
     const resumedRead = new Set<number>();
     const resumedNoted = new Set<number>();
     let resumed = false;
-    const second = await turn("continue", (messages) => {
+    attempts.clear();
+    const firstNoteSteps = noteSteps;
+    noteSteps = [];
+    const second = await turn("continue", async (messages) => {
+      await confirm(messages, resumedRead, resumedNoted);
       const host = latestHost(messages);
       if (!resumed) {
         resumed = true;
@@ -564,8 +621,7 @@ export async function exerciseLongJobNoteResume(
             ?.split(", ")
             .map(Number) ?? [];
         const firstPapers = left.slice(0, 2);
-        for (const itemId of firstPapers) resumedRead.add(itemId);
-        return toolStep([
+        return request([
           noteCall(again, "the finding, once more"),
           ...firstPapers.map(readCall),
         ]);
@@ -610,12 +666,31 @@ export async function exerciseLongJobNoteResume(
         if (match) skipped.push(Number(match[1]));
       }
     }
+    // The pages the host planned, and the steps it refused as too many calls.
+    const paging = (events: typeof first.events) => {
+      const payloads = (type: string) =>
+        events.flatMap((event) =>
+          event.type === "provider_event" && event.providerType === type
+            ? [event.payload as { papers?: unknown; complete?: unknown }]
+            : [],
+        );
+      return {
+        pages: payloads("agent_long_job_page").flatMap((page) =>
+          typeof page.papers === "number" && !page.complete
+            ? [page.papers]
+            : [],
+        ),
+        overflows: payloads("agent_tool_call_overflow").length,
+      };
+    };
     return {
       first: {
         runStatus: first.runStatus,
         end: first.end,
         read: read.size,
         noted: [...noted],
+        noteSteps: firstNoteSteps,
+        ...paging(first.events),
       },
       second: {
         runStatus: second.runStatus,
@@ -624,6 +699,8 @@ export async function exerciseLongJobNoteResume(
           /Long job to resume:[^\n]*/.exec(second.firstPrompt)?.[0] || "",
         again,
         skipped,
+        noteSteps,
+        ...paging(second.events),
       },
       notesPerPaper,
       receiptsPerPaper,
