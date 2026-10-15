@@ -524,6 +524,29 @@ function buildPackageTitle(sourceAttachmentKey: string): string {
   return `${MINERU_SYNC_ATTACHMENT_TITLE_PREFIX} ${sourceAttachmentKey}.zip`;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const MINERU_SYNC_PACKAGE_TITLE_PATTERN = new RegExp(
+  `^${escapeRegExp(MINERU_SYNC_ATTACHMENT_TITLE_PREFIX)} (\\S+)\\.zip$`,
+);
+
+/**
+ * The source attachment key that a package title built by
+ * `buildPackageTitle` names, or null for any other title. Package title and
+ * metadata are written from the same key, so a title naming another key
+ * rules the package out without reading its bytes.
+ */
+export function parseMineruSyncPackageTitleKey(title: string): string | null {
+  const match = MINERU_SYNC_PACKAGE_TITLE_PATTERN.exec(title.trim());
+  return match ? match[1] : null;
+}
+
+function getPackageTitleSourceKey(item: Zotero.Item): string | null {
+  return parseMineruSyncPackageTitleKey(getAttachmentTitle(item));
+}
+
 function getPackageAttachmentSearchText(item: Zotero.Item): string {
   return `${getAttachmentTitle(item)} ${getAttachmentFilename(item)}`.trim();
 }
@@ -586,7 +609,10 @@ export function readMineruSyncMetadataFromPackageBytes(
   zipBytes: Uint8Array,
 ): MineruSyncMetadata | null {
   try {
-    const entries = unzipSync(zipBytes);
+    // Inflate only the metadata entry, not the cache files.
+    const entries = unzipSync(zipBytes, {
+      filter: (file) => file.name === MINERU_SYNC_METADATA_FILE,
+    });
     const metadataBytes = entries[MINERU_SYNC_METADATA_FILE];
     return metadataBytes ? parseMineruSyncMetadata(metadataBytes) : null;
   } catch {
@@ -778,21 +804,23 @@ async function computeLocalMineruCacheContentHash(
   return entries["full.md"] ? computeCacheEntriesContentHash(entries) : null;
 }
 
-async function packageAttachmentHasMetadata(
-  item: Zotero.Item,
-): Promise<boolean> {
+function mayBeMineruSyncPackageAttachment(item: Zotero.Item): boolean {
   const filename = getAttachmentFilename(item).toLowerCase();
   const contentType = String(
     (item as unknown as { attachmentContentType?: unknown })
       .attachmentContentType || "",
   ).toLowerCase();
-  if (
-    !filename.endsWith(".zip") &&
-    !contentType.includes("zip") &&
-    !isMineruSyncPackageAttachment(item)
-  ) {
-    return false;
-  }
+  return (
+    filename.endsWith(".zip") ||
+    contentType.includes("zip") ||
+    isMineruSyncPackageAttachment(item)
+  );
+}
+
+async function packageAttachmentHasMetadata(
+  item: Zotero.Item,
+): Promise<boolean> {
+  if (!mayBeMineruSyncPackageAttachment(item)) return false;
   const bytes = await readAttachmentFileBytes(item);
   return Boolean(bytes && readMineruSyncMetadataFromPackageBytes(bytes));
 }
@@ -829,6 +857,32 @@ async function packageProvenanceMatchesSource(
     return false;
   }
   return true;
+}
+
+/**
+ * A stored hash may come from any formula this plugin has shipped. Older
+ * versions hashed the raw package entries instead of the finalized cache
+ * entries (69e3af5b), included the source provenance file (6ab0e06e), and
+ * included the derived manifest (7402f810). Any of them proves the package.
+ * Each formula hashes every entry, so they are tried one at a time, and only
+ * after the current formula has not matched.
+ */
+function matchesShippedContentHashFormula(
+  storedHash: string,
+  entrySets: Array<Record<string, Uint8Array>>,
+): boolean {
+  for (const entrySet of entrySets) {
+    for (const includeSourceProvenance of [false, true]) {
+      for (const includeDerivedManifest of [false, true]) {
+        const hash = computeCacheEntriesContentHash(entrySet, {
+          includeSourceProvenance,
+          includeDerivedManifest,
+        });
+        if (hash === storedHash) return true;
+      }
+    }
+  }
+  return false;
 }
 
 function extractPackageFiles(
@@ -878,26 +932,14 @@ function extractPackageFiles(
     );
 
     const contentHash = computeCacheEntriesContentHash(hashEntries);
-    // A stored hash may come from any formula this plugin has shipped: over
-    // the finalized or the raw entries, with or without source provenance,
-    // with or without the derived manifest. Any of them proves the package.
-    const acceptedHashes = new Set<string>();
-    for (const entrySet of [hashEntries, rawHashEntries]) {
-      for (const includeSourceProvenance of [false, true]) {
-        for (const includeDerivedManifest of [false, true]) {
-          acceptedHashes.add(
-            computeCacheEntriesContentHash(entrySet, {
-              includeSourceProvenance,
-              includeDerivedManifest,
-            }),
-          );
-        }
-      }
-    }
     if (
       typeof metadata.cacheContentHash === "string" &&
       metadata.cacheContentHash.trim() &&
-      !acceptedHashes.has(metadata.cacheContentHash)
+      metadata.cacheContentHash !== contentHash &&
+      !matchesShippedContentHashFormula(metadata.cacheContentHash, [
+        hashEntries,
+        rawHashEntries,
+      ])
     ) {
       return null;
     }
@@ -968,6 +1010,9 @@ async function findPackageCandidatesForSource(
   const matches: MineruPackageCandidate[] = [];
   const candidates = await collectPackageAttachmentCandidates(sourceAttachment);
   for (const item of candidates) {
+    // A plugin package titled for another source cannot belong to this one.
+    const titleKey = getPackageTitleSourceKey(item);
+    if (titleKey && titleKey !== sourceKey) continue;
     const titleMatched =
       isMineruSyncPackageAttachment(item) &&
       getPackageAttachmentSearchText(item).includes(sourceKey);
@@ -983,6 +1028,16 @@ async function findPackageCandidatesForSource(
       const shouldRead = Boolean(options.loadBytes || options.requireReadable);
       if (!titleMatched && !shouldRead) continue;
       const bytes = shouldRead ? await readAttachmentFileBytes(item) : null;
+      // A library-wide scan reaches every ZIP attachment, so one whose title
+      // does not name the source is extracted only after its metadata does.
+      if (
+        !titleMatched &&
+        (!bytes ||
+          readMineruSyncMetadataFromPackageBytes(bytes)?.sourceAttachmentKey !==
+            sourceKey)
+      ) {
+        continue;
+      }
       const extracted = bytes ? extractPackageFiles(bytes) : null;
       const metadata = extracted?.metadata;
       if (metadata && metadata.sourceAttachmentKey !== sourceKey) continue;
@@ -1531,6 +1586,9 @@ async function packageAttachmentMatchesRemovedSource(
   ) {
     return true;
   }
+  const titleKey = getPackageTitleSourceKey(item);
+  if (titleKey && titleKey !== sourceAttachmentKey) return false;
+  if (!mayBeMineruSyncPackageAttachment(item)) return false;
 
   try {
     const bytes = await readAttachmentFileBytes(item);
