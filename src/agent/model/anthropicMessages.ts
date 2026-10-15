@@ -413,10 +413,17 @@ function buildAnthropicSystemPayload(
   const firstStableIndex = blocks.findIndex(
     (block) => block.cachePolicy === "stable-prefix",
   );
+  // With a single stable block (no paper blocks), the second breakpoint goes
+  // on the fixed prompt in front of it, so it stays reusable when the stable
+  // block changes with the active item.
+  const fixedPromptIndex =
+    firstStableIndex === targetIndex && targetIndex > 0 ? 0 : -1;
   return blocks.map((block, index) => ({
     type: "text",
     text: block.text,
-    ...(index === targetIndex || index === firstStableIndex
+    ...(index === targetIndex ||
+    index === firstStableIndex ||
+    index === fixedPromptIndex
       ? { cache_control: cacheControl }
       : {}),
   }));

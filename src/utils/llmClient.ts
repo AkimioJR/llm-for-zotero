@@ -2312,6 +2312,39 @@ function buildReasoningControlPayload(
   providerProtocol?: ProviderProtocol,
   options?: ReasoningPayloadOptions,
 ): { extra: Record<string, unknown>; omitTemperature: boolean } {
+  const payload = buildProviderReasoningControlPayload(
+    reasoning,
+    useResponses,
+    modelName,
+    apiBase,
+    providerProtocol,
+    options,
+  );
+  // One owner: a model whose registry entry forbids a temperature never gets
+  // one, whichever provider branch built the reasoning controls.
+  if (payload.omitTemperature) return payload;
+  const capabilities = getModelCapabilities({
+    provider: reasoning?.provider,
+    model: modelName || "",
+    apiBase,
+    protocol:
+      providerProtocol ||
+      (useResponses ? "responses_api" : "openai_chat_compat"),
+    profileOverride: options?.profileOverride,
+  });
+  return capabilities.sampling.temperature !== "configurable"
+    ? { ...payload, omitTemperature: true }
+    : payload;
+}
+
+function buildProviderReasoningControlPayload(
+  reasoning: ReasoningConfig | undefined,
+  useResponses: boolean,
+  modelName?: string,
+  apiBase?: string,
+  providerProtocol?: ProviderProtocol,
+  options?: ReasoningPayloadOptions,
+): { extra: Record<string, unknown>; omitTemperature: boolean } {
   const exactEffort = reasoning?.effort?.trim();
   if (
     exactEffort &&
