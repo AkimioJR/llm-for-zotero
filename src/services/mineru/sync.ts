@@ -767,6 +767,7 @@ function pathToNsIFile(filePath: string): nsIFile | string {
 }
 
 async function deletePackageAttachment(item: Zotero.Item): Promise<void> {
+  clearPackageTitleIndexes();
   const eraseTx = (item as unknown as { eraseTx?: () => Promise<void> })
     .eraseTx;
   if (typeof eraseTx === "function") {
@@ -955,8 +956,101 @@ function extractPackageFiles(
   }
 }
 
+/**
+ * Attachments in `libraryID` whose title matches, through one DB query.
+ * Children of a trashed parent are kept, so a write can still move or delete
+ * them; attachments that are themselves in the trash are dropped. Never
+ * throws.
+ */
+async function searchAttachmentsByTitle(
+  libraryID: number,
+  operator: "is" | "beginsWith",
+  title: string,
+): Promise<Zotero.Item[]> {
+  if (typeof Zotero.Search !== "function") return [];
+  try {
+    const search = new Zotero.Search({ libraryID });
+    search.addCondition("itemType", "is", "attachment");
+    search.addCondition("title", operator, title);
+    // Zotero.Search leaves out the trash and its children by default.
+    search.addCondition("includeDeleted", "true");
+    const items = await Zotero.Items.getAsync(await search.search());
+    return items.filter(
+      (item) => item?.isAttachment?.() && !isDeletedItem(item),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function getLibraryIdOf(item: Zotero.Item): number | null {
+  const libraryID = Number(item.libraryID);
+  return Number.isFinite(libraryID) && libraryID > 0
+    ? Math.floor(libraryID)
+    : null;
+}
+
+async function searchPackageAttachmentsByTitle(
+  libraryID: number,
+  sourceAttachmentKey: string,
+): Promise<Zotero.Item[]> {
+  return searchAttachmentsByTitle(
+    libraryID,
+    "is",
+    buildPackageTitle(sourceAttachmentKey),
+  );
+}
+
+// Availability is checked once per PDF across a library, so read-only lookups
+// share one title query per library for a few seconds instead of one query
+// per PDF. This module clears it whenever it adds, moves, or deletes a package.
+const PACKAGE_TITLE_INDEX_TTL_MS = 5000;
+const packageTitleIndexes = new Map<
+  number,
+  { builtAt: number; idsByKey: Promise<Map<string, number[]>> }
+>();
+
+function clearPackageTitleIndexes(): void {
+  packageTitleIndexes.clear();
+}
+
+async function buildPackageTitleIndex(
+  libraryID: number,
+): Promise<Map<string, number[]>> {
+  const idsByKey = new Map<string, number[]>();
+  for (const item of await searchAttachmentsByTitle(
+    libraryID,
+    "beginsWith",
+    MINERU_SYNC_ATTACHMENT_TITLE_PREFIX,
+  )) {
+    const key = getPackageTitleSourceKey(item);
+    if (!key) continue;
+    idsByKey.set(key, [...(idsByKey.get(key) || []), item.id]);
+  }
+  return idsByKey;
+}
+
+async function getIndexedPackageAttachments(
+  libraryID: number,
+  sourceAttachmentKey: string,
+): Promise<Zotero.Item[]> {
+  const now = Date.now();
+  let index = packageTitleIndexes.get(libraryID);
+  if (!index || now - index.builtAt > PACKAGE_TITLE_INDEX_TTL_MS) {
+    index = { builtAt: now, idsByKey: buildPackageTitleIndex(libraryID) };
+    packageTitleIndexes.set(libraryID, index);
+  }
+  const items: Zotero.Item[] = [];
+  for (const id of (await index.idsByKey).get(sourceAttachmentKey) || []) {
+    const item = Zotero.Items.get(id);
+    if (item?.isAttachment?.() && !isDeletedItem(item)) items.push(item);
+  }
+  return items;
+}
+
 async function collectPackageAttachmentCandidates(
   sourceAttachment: Zotero.Item,
+  options: { readOnly?: boolean } = {},
 ): Promise<Zotero.Item[]> {
   const sourceKey = getItemKey(sourceAttachment);
   if (!sourceKey) return [];
@@ -970,6 +1064,20 @@ async function collectPackageAttachmentCandidates(
         item?.isAttachment?.() &&
         !(item as unknown as { deleted?: boolean }).deleted
       ) {
+        candidates.push(item);
+      }
+    }
+    // Retrieve Metadata and drag and drop move the PDF but not its package,
+    // so packages titled for the PDF are also found anywhere in the library.
+    const libraryID = getLibraryIdOf(sourceAttachment);
+    if (libraryID !== null) {
+      const seenIds = new Set(candidates.map((item) => item.id));
+      const titled = options.readOnly
+        ? await getIndexedPackageAttachments(libraryID, sourceKey)
+        : await searchPackageAttachmentsByTitle(libraryID, sourceKey);
+      for (const item of titled) {
+        if (seenIds.has(item.id)) continue;
+        seenIds.add(item.id);
         candidates.push(item);
       }
     }
@@ -1002,13 +1110,20 @@ async function collectPackageAttachmentCandidates(
 
 async function findPackageCandidatesForSource(
   sourceAttachment: Zotero.Item,
-  options: { loadBytes?: boolean; requireReadable?: boolean } = {},
+  options: {
+    loadBytes?: boolean;
+    requireReadable?: boolean;
+    readOnly?: boolean;
+  } = {},
 ): Promise<MineruPackageCandidate[]> {
   const sourceKey = getItemKey(sourceAttachment);
   if (!sourceKey) return [];
 
   const matches: MineruPackageCandidate[] = [];
-  const candidates = await collectPackageAttachmentCandidates(sourceAttachment);
+  const candidates = await collectPackageAttachmentCandidates(
+    sourceAttachment,
+    { readOnly: options.readOnly },
+  );
   for (const item of candidates) {
     // A plugin package titled for another source cannot belong to this one.
     const titleKey = getPackageTitleSourceKey(item);
@@ -1095,6 +1210,41 @@ async function prunePackageCandidates(
   }
 }
 
+/**
+ * Moves a kept package beside its PDF: under the PDF's current parent, or
+ * standalone when the PDF has none. Skips a package that cannot or should
+ * not move. Never throws.
+ */
+async function movePackageBesideSource(
+  packageItem: Zotero.Item,
+  sourceAttachment: Zotero.Item,
+): Promise<void> {
+  try {
+    const targetParent = getParentItem(sourceAttachment);
+    if (sourceAttachment.parentID && !targetParent) return;
+    const targetParentId = targetParent ? targetParent.id : false;
+    if (
+      (packageItem.parentID || false) === targetParentId ||
+      isDeletedItem(packageItem) ||
+      isDeletedItem(targetParent) ||
+      packageItem.isEditable?.() === false ||
+      getLibraryIdOf(packageItem) !== getLibraryIdOf(sourceAttachment)
+    ) {
+      return;
+    }
+    packageItem.parentID = targetParentId;
+    await packageItem.saveTx();
+    clearPackageTitleIndexes();
+  } catch (error) {
+    // A failed save has already reloaded the item and dropped the change.
+    appLogger.warn(
+      "LLM: Failed to move MinerU sync package beside its PDF",
+      packageItem.id,
+      error,
+    );
+  }
+}
+
 export async function hasSyncedMineruPackageForAttachment(
   sourceAttachment: Zotero.Item,
   options: MineruAvailabilityOptions = {},
@@ -1104,6 +1254,7 @@ export async function hasSyncedMineruPackageForAttachment(
   const candidates = await findPackageCandidatesForSource(sourceAttachment, {
     loadBytes: validateSyncedPackage,
     requireReadable: validateSyncedPackage,
+    readOnly: true,
   });
   return candidates.length > 0;
 }
@@ -1189,6 +1340,7 @@ async function importPackageAttachment(params: {
     } catch {
       /* imported item may already have the title */
     }
+    clearPackageTitleIndexes();
     return imported;
   } finally {
     void removePath(tempPath);
@@ -1320,6 +1472,7 @@ export async function publishMineruCachePackageForAttachment(
     );
     if (equivalent) {
       await prunePackageCandidates(existing, equivalent.item.id);
+      await movePackageBesideSource(equivalent.item, sourceAttachment);
       return {
         status: "up_to_date",
         attachmentId,
@@ -1354,6 +1507,24 @@ export async function publishMineruCachePackageForAttachment(
 }
 
 export async function ensureMineruRuntimeCacheForAttachment(
+  sourceAttachment: Zotero.Item,
+  options: MineruSyncRestoreOptions = {},
+): Promise<MineruSyncRestoreResult> {
+  const result = await restoreMineruRuntimeCacheFromPackage(
+    sourceAttachment,
+    options,
+  );
+  const packageItem =
+    result.status === "restored" && result.packageAttachmentId
+      ? Zotero.Items.get(result.packageAttachmentId)
+      : null;
+  // Chat and agent reads come through here: they do not wait on Zotero's DB
+  // transaction queue for the move.
+  if (packageItem) void movePackageBesideSource(packageItem, sourceAttachment);
+  return result;
+}
+
+async function restoreMineruRuntimeCacheFromPackage(
   sourceAttachment: Zotero.Item,
   options: MineruSyncRestoreOptions = {},
 ): Promise<MineruSyncRestoreResult> {
@@ -1456,6 +1627,24 @@ export async function ensureMineruCacheDirForAttachment(
 }
 
 export async function repairSyncedMineruCacheForAttachment(
+  sourceAttachment: Zotero.Item,
+  options: MineruSyncRestoreOptions = {},
+): Promise<MineruSyncRestoreResult> {
+  // The package moves after the cache write lock is released.
+  const result = await repairSyncedMineruCacheFromPackage(
+    sourceAttachment,
+    options,
+  );
+  const packageItem =
+    (result.status === "restored" || result.status === "already_cached") &&
+    result.packageAttachmentId
+      ? Zotero.Items.get(result.packageAttachmentId)
+      : null;
+  if (packageItem) await movePackageBesideSource(packageItem, sourceAttachment);
+  return result;
+}
+
+async function repairSyncedMineruCacheFromPackage(
   sourceAttachment: Zotero.Item,
   options: MineruSyncRestoreOptions = {},
 ): Promise<MineruSyncRestoreResult> {
@@ -1680,6 +1869,31 @@ async function deleteMatchingPackageAttachmentsForSource(params: {
   return result;
 }
 
+async function deleteMatchingPackageAttachmentsByTitle(params: {
+  libraryIds: number[];
+  sourceAttachmentKey: string | undefined;
+  seenPackageIds: Set<number>;
+}): Promise<{ deleted: number; failed: number }> {
+  const result = { deleted: 0, failed: 0 };
+  if (!params.sourceAttachmentKey) return result;
+
+  for (const libraryID of params.libraryIds) {
+    for (const item of await searchPackageAttachmentsByTitle(
+      libraryID,
+      params.sourceAttachmentKey,
+    )) {
+      const deleted = await deleteMatchingPackageAttachment(
+        item,
+        params.sourceAttachmentKey,
+        params.seenPackageIds,
+      );
+      if (deleted === "deleted") result.deleted += 1;
+      if (deleted === "failed") result.failed += 1;
+    }
+  }
+  return result;
+}
+
 export async function deleteMineruCacheArtifactsForAttachment(
   attachmentId: number,
 ): Promise<MineruAttachmentCleanupResult> {
@@ -1888,6 +2102,16 @@ export async function cleanupMineruArtifactsForRemovedAttachment(
   });
   removedSyncPackages += parentCleanup.deleted;
   failed += parentCleanup.failed;
+
+  // A package left behind when the PDF moved to another parent.
+  const liveLibraryId = liveItem ? getLibraryIdOf(liveItem) : null;
+  const titleCleanup = await deleteMatchingPackageAttachmentsByTitle({
+    libraryIds: liveLibraryId !== null ? [liveLibraryId] : getKnownLibraryIds(),
+    sourceAttachmentKey,
+    seenPackageIds,
+  });
+  removedSyncPackages += titleCleanup.deleted;
+  failed += titleCleanup.failed;
 
   await invalidateMineruMd(normalizedAttachmentId);
   await invalidateMineruRuntimeCache(normalizedAttachmentId);
