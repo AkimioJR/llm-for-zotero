@@ -5,6 +5,10 @@ import { sanitizeText } from "../../utils/textSanitization";
 import { clearCitationPageCache } from "./citationNavigationCache";
 import { readPageCompleteZoteroFulltextCache } from "./zoteroFulltextPageCache";
 import {
+  readAttachmentFileState,
+  type AttachmentFileState,
+} from "../../utils/attachmentFileState";
+import {
   findLargestUniqueQuoteTextAnchorMatch,
   normalizeLocatorText,
   splitQuoteAtPairedInlineMath,
@@ -1379,6 +1383,11 @@ const MAX_COOPERATIVE_PAGE_TEXT_CHARS = 50_000;
 
 type CachedPageTextRecord = {
   index: CachedPageTextIndex;
+  /**
+   * The attachment file the text was read from, as it was when the read
+   * began; a record from an earlier version of the file is stale.
+   */
+  fileState?: PageTextFileState;
   createdAt: number;
   lastAccessedAt: number;
   lastAccessedOrder: number;
@@ -1540,11 +1549,35 @@ function getReaderCacheKeys(reader: any): string[] {
   ]);
 }
 
-function getCachedPageTextIndex(keys: string[]): CachedPageTextIndex | null {
+type PageTextFileState = Pick<AttachmentFileState, "size" | "mtime">;
+
+function pageTextFileState(
+  state: AttachmentFileState | null | undefined,
+): PageTextFileState | undefined {
+  return state ? { size: state.size, mtime: state.mtime } : undefined;
+}
+
+/**
+ * The cached page text for `keys`. Given the attachment file's current
+ * state, a record read from another version of the file is dropped.
+ */
+function getCachedPageTextIndex(
+  keys: string[],
+  fileState?: AttachmentFileState | null,
+): CachedPageTextIndex | null {
   const currentTime = Date.now();
   evictExpiredPageTextCacheRecords(currentTime);
   for (const key of keys) {
     const cached = pageTextCacheByKey.get(key);
+    if (
+      cached?.fileState &&
+      fileState &&
+      (cached.fileState.size !== fileState.size ||
+        cached.fileState.mtime !== fileState.mtime)
+    ) {
+      deletePageTextCacheRecord(cached);
+      continue;
+    }
     if (cached) {
       touchPageTextCacheRecord(cached, currentTime);
       return cached.index;
@@ -1570,6 +1603,7 @@ function getCachedPageTextPromise(
 function storeCachedPageTextIndex(
   keys: string[],
   index: CachedPageTextIndex,
+  fileState?: AttachmentFileState | null,
 ): void {
   const currentTime = Date.now();
   evictExpiredPageTextCacheRecords(currentTime);
@@ -1577,6 +1611,7 @@ function storeCachedPageTextIndex(
   if (estimatedBytes > MAX_PAGE_TEXT_CACHE_ESTIMATED_BYTES) return;
   const record: CachedPageTextRecord = {
     index,
+    fileState: pageTextFileState(fileState),
     createdAt: currentTime,
     lastAccessedAt: currentTime,
     lastAccessedOrder: nextCacheAccessOrder(),
@@ -2672,13 +2707,19 @@ export async function warmPageTextCacheForAttachment(
       ? options.reader
       : null;
   const keys = reader ? getReaderCacheKeys(reader) : [key];
-  const cached = getCachedPageTextIndex(keys);
+  const itemId = Math.floor(Number(contextItemId));
+  // Taken before the stat below: a clear while it runs still voids this warm.
+  const generation = pageTextCacheGeneration;
+  // The file as it is now: text read from an earlier version of it is
+  // stale, and a fresh read is recorded against this version.
+  const fileState = await readAttachmentFileState(
+    (globalThis as { Zotero?: typeof Zotero }).Zotero?.Items?.get?.(itemId),
+  );
+  const cached = getCachedPageTextIndex(keys, fileState);
   if (cached) return cached;
   const cachedTask = getCachedPageTextPromise(keys, !options?.yieldToMain);
   if (cachedTask) return cachedTask;
 
-  const itemId = Math.floor(Number(contextItemId));
-  const generation = pageTextCacheGeneration;
   let foreground = false;
   let promote: (() => void) | undefined;
   const promotion = new Promise<void>((resolve) => {
@@ -2735,7 +2776,7 @@ export async function warmPageTextCacheForAttachment(
           );
       if (!result) return null;
       if (generation !== pageTextCacheGeneration) return null;
-      storeCachedPageTextIndex(keys, result);
+      storeCachedPageTextIndex(keys, result, fileState);
       return result;
     } catch (e) {
       appLogger.debug(
@@ -2760,11 +2801,13 @@ export async function warmPageTextCacheForAttachment(
  * as the text a context extraction just read, so quote checks need no second
  * extraction. The text is split and normalised exactly as a PDFWorker warm
  * would; an attachment that is cached or being read already is left alone.
+ * `fileState` is the attachment file as it was when that text was read.
  */
 export async function seedPageTextCacheFromFullText(
   contextItemId: number,
   fullText: PdfWorkerFullTextResult,
   options?: {
+    fileState?: AttachmentFileState | null;
     yieldToMain?: () => Promise<void>;
     shouldContinue?: () => boolean;
   },
@@ -2796,7 +2839,7 @@ export async function seedPageTextCacheFromFullText(
         },
       );
       if (!result || generation !== pageTextCacheGeneration) return null;
-      storeCachedPageTextIndex(keys, result);
+      storeCachedPageTextIndex(keys, result, options?.fileState);
       return result;
     } catch (e) {
       appLogger.debug("LLM quote-locator: page text seed failed:", e);

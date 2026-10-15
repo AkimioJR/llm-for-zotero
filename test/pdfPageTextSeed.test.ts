@@ -38,6 +38,8 @@ function installZotero(options: {
   worker?: (itemId: number) => Promise<WorkerResult | null>;
   fulltext?: Record<number, FakeFulltextCache>;
   nonPdfIds?: number[];
+  /** A PDF file's size and modification time; change one to replace it. */
+  pdfFiles?: Record<number, { size: number; mtime: number }>;
 }): { workerCalls: number[]; restore: () => void } {
   const g = globalThis as any;
   const originalZotero = g.Zotero;
@@ -86,6 +88,10 @@ function installZotero(options: {
     Number(path.slice(PDF_PATH_PREFIX.length).split("/")[0]);
   g.IOUtils = {
     stat: async (path: string) => {
+      const file = path.endsWith(".zotero-ft-cache")
+        ? undefined
+        : options.pdfFiles?.[idFromPath(path)];
+      if (file) return { size: file.size, lastModified: file.mtime };
       const entry = fulltext[idFromPath(path)];
       if (!entry) throw new Error(`missing ${path}`);
       return {
@@ -308,6 +314,34 @@ describe("PDF page text seeding", function () {
     assert.deepEqual(zotero.workerCalls, [801]);
     assert.equal(warmed?.pages[0]?.text, PAGE_ONE);
     assert.equal(warmed?.pageCount, 2);
+  });
+
+  it("reads a replaced PDF again instead of serving the text seeded from the old file", async function () {
+    const pdfFiles = { 803: { size: 100, mtime: 1_000 } };
+    let text = pdfWorkerText([PAGE_ONE]);
+    const zotero = installZotero({
+      pdfFiles,
+      worker: async () => ({ text, totalPages: text.split("\f").length }),
+    });
+    restore = zotero.restore;
+    const item = (globalThis as any).Zotero.Items.get(803);
+
+    await ensurePDFTextCached(item);
+    assert.lengthOf(
+      (await warmPageTextCacheForAttachment(803))?.pages || [],
+      1,
+    );
+    // The PDF is replaced by a two-page file under the same attachment.
+    pdfFiles[803] = { size: 200, mtime: 2_000 };
+    text = pdfWorkerText([PAGE_ONE, PAGE_THREE]);
+
+    const warmed = await warmPageTextCacheForAttachment(803);
+
+    assert.equal(warmed?.pages[1]?.text, PAGE_THREE);
+    assert.deepEqual(zotero.workerCalls, [803, 803]);
+    // An unchanged file is served from the cache.
+    await warmPageTextCacheForAttachment(803);
+    assert.deepEqual(zotero.workerCalls, [803, 803]);
   });
 
   it("does not seed page text from background library indexing", async function () {

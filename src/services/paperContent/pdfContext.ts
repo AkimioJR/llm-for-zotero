@@ -83,6 +83,7 @@ import {
 import type { TextAttachmentSourceMode } from "./contextAttachmentTypes";
 import { isPdfContextAttachment } from "./contextAttachmentSupport";
 import { seedPageTextCacheFromFullText } from "../pdf/livePdfSelectionLocator";
+import { readAttachmentFileState } from "../../utils/attachmentFileState";
 import { isBodyEvidenceSection } from "../../shared/libraryChatEvidencePolicy";
 import {
   extractDocumentReferenceEvidence,
@@ -454,6 +455,11 @@ async function cachePDFText(
     // 2. Fallback to Zotero.PDFWorker
     const tryPdfWorker = async (pdfItem: Zotero.Item) => {
       try {
+        // The file as this read finds it: page text seeded from the read is
+        // dropped once the PDF is replaced.
+        const fileState = options?.preferFulltextCache
+          ? null
+          : await readAttachmentFileState(pdfItem);
         const result = await Zotero.PDFWorker.getFullText(pdfItem.id);
         if (result && result.text) {
           pdfText = result.text;
@@ -471,11 +477,11 @@ async function cachePDFText(
           // Background library indexing reads papers no chat is quoting and
           // would only evict the pages a chat needs.
           if (!options?.preferFulltextCache) {
-            void seedPageTextCacheFromFullText(pdfItem.id, result).catch(
-              (error) => {
-                appLogger.debug("LLM: PDF page text seed failed", error);
-              },
-            );
+            void seedPageTextCacheFromFullText(pdfItem.id, result, {
+              fileState,
+            }).catch((error) => {
+              appLogger.debug("LLM: PDF page text seed failed", error);
+            });
           }
         }
       } catch (e) {
