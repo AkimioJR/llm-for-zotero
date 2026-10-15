@@ -196,6 +196,8 @@ import {
   loadConversation,
 } from "../../utils/chatStore";
 import { appendCodexMessage } from "../../codexAppServer/store";
+import { setCodexAppServerModelCatalogLoaderForTests } from "../../codexAppServer/modelCatalog";
+import type { WorkflowTestCodexModelCatalogResponse } from "./workflowTestTypes";
 import { appendClaudeMessage } from "../../claudeCode/store";
 import {
   ensureMarkedReaderSelectionTrackingListener,
@@ -240,6 +242,29 @@ import {
 } from "../../codexAppServer/state";
 
 let resolveDelayedCodexPermissionCatalog: (() => void) | null = null;
+let resolveDelayedCodexModelCatalog: (() => void) | null = null;
+let codexModelCatalogRequests: string[] = [];
+
+function configureCodexModelCatalogs(
+  responses: WorkflowTestCodexModelCatalogResponse[],
+): void {
+  assertWorkflowTestEnabled();
+  codexModelCatalogRequests = [];
+  setCodexAppServerModelCatalogLoaderForTests(async ({ codexPath }) => {
+    const response =
+      responses[
+        Math.min(codexModelCatalogRequests.length, responses.length - 1)
+      ];
+    codexModelCatalogRequests.push(codexPath || "");
+    if (response?.delayed) {
+      await new Promise<void>((resolve) => {
+        resolveDelayedCodexModelCatalog = resolve;
+      });
+    }
+    if (response?.error) throw new Error(response.error);
+    return { models: response?.models || [] };
+  });
+}
 
 function configurePermissionCatalogs(input?: {
   delayFirstCodex?: boolean;
@@ -6081,6 +6106,10 @@ async function exerciseAssistantSelectionPromptDismissal(input: {
 
 async function reset(): Promise<void> {
   assertWorkflowTestEnabled();
+  resolveDelayedCodexModelCatalog?.();
+  resolveDelayedCodexModelCatalog = null;
+  setCodexAppServerModelCatalogLoaderForTests();
+  codexModelCatalogRequests = [];
   resolveDelayedCodexPermissionCatalog?.();
   resolveDelayedCodexPermissionCatalog = null;
   for (const held of heldConversationWriteLocks.values()) held.release();
@@ -7623,6 +7652,14 @@ export function installWorkflowTestHarness(targetAddon: {
     getLastSend: () => lastSend,
     getDiagnostics,
     configurePermissionCatalogs,
+    configureCodexModelCatalogs,
+    getCodexModelCatalogRequests: () => [...codexModelCatalogRequests],
+    resolveDelayedCodexModelCatalog: async () => {
+      assertWorkflowTestEnabled();
+      resolveDelayedCodexModelCatalog?.();
+      resolveDelayedCodexModelCatalog = null;
+      await Zotero.Promise.delay(50);
+    },
     resolveDelayedCodexPermissionCatalog: resolveDelayedCodexCatalog,
     getPanelPermissionSurface,
     clickPanelPermissionToggle,

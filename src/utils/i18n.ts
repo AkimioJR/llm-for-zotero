@@ -805,6 +805,9 @@ const zhCN: Record<string, string> = {
   "Select a model…": "请选择模型…",
   "Customized…": "自定义…",
   "Loading Codex models…": "正在加载 Codex 模型…",
+  "Refreshing Codex models…": "正在刷新 Codex 模型…",
+  "Could not refresh Codex models. Showing the last known list.":
+    "无法刷新 Codex 模型。显示上次获取的列表。",
   "Could not load Codex models. Showing current model only.":
     "无法加载 Codex 模型。仅显示当前模型。",
   "Retry loading Codex models": "重试加载 Codex 模型",
