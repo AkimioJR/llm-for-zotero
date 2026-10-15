@@ -1,4 +1,4 @@
-import type { ClaudeCodeRuntimeClient, RuntimeModelInfo, RuntimePermissionModeCatalog } from "../runtime.js";
+import type { ClaudeCodeRuntimeClient, RuntimeAccountQuota, RuntimeAccountQuotaOptions, RuntimeModelInfo, RuntimePermissionModeCatalog } from "../runtime.js";
 import type { SessionMapper } from "../session-link/session-mapper.js";
 import type { TraceStore } from "../trace-store/trace-store.js";
 import type {
@@ -85,6 +85,16 @@ export class ClaudeCodeRuntimeAdapter {
             : undefined,
       }),
     );
+  }
+
+  async getRuntimeAccountQuota(
+    options: RuntimeAccountQuotaOptions,
+  ): Promise<RuntimeAccountQuota | null> {
+    try {
+      return await this.runtimeClient.getAccountQuota?.(options) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async listRuntimeModels(options?: {

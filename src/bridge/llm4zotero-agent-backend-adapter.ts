@@ -11,7 +11,7 @@ import type {
 import { mapToLlm4ZoteroEvent } from "../event-mapper/map-to-llm4zotero-event.js";
 import { findToolByName, getToolCatalog } from "./tool-catalog.js";
 import { globalPermissionStore } from "../permissions/permission-store.js";
-import type { RuntimeModelCatalog, RuntimePermissionModeCatalog } from "../runtime.js";
+import type { RuntimeAccountQuota, RuntimeModelCatalog, RuntimePermissionModeCatalog } from "../runtime.js";
 
 const CATASTROPHIC_ARG_PATTERNS: RegExp[] = [
   /\brm\s+-rf\s+\/(?!\S)/i,
@@ -231,6 +231,23 @@ export class Llm4ZoteroAgentBackendAdapter {
       ...entry,
       source: "sdk" as const,
     }));
+  }
+
+  async getAccountQuota(options: {
+    conversationKey: string | number;
+    settingSources?: Array<"user" | "project" | "local">;
+    scopeType?: ScopeType;
+    scopeId?: string;
+    scopeLabel?: string;
+  }): Promise<RuntimeAccountQuota | null> {
+    const scope = toScopeInfo(options);
+    return this.adapter.getRuntimeAccountQuota({
+      settingSources: options.settingSources,
+      runtimeCwdRelative: buildRuntimeCwdRelative(
+        scope,
+        String(options.conversationKey),
+      ),
+    });
   }
 
   async listModels(options?: {
