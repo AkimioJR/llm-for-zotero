@@ -6,6 +6,13 @@ import type { resolveRetrievalQueryPlan } from "../../services/retrieval/retriev
 import type { RetrievalTimingReport } from "../../services/retrieval/retrievalTiming";
 import type { LibraryTextIndexStatus } from "../../services/libraryTextIndex/scheduler";
 import type { LibraryRetrieveResult } from "../../agent/services/libraryRetrieveService";
+import type { CodexAppServerModelCatalogEntry } from "../../codexAppServer/modelCatalog";
+
+export type WorkflowTestCodexModelCatalogResponse = {
+  models?: CodexAppServerModelCatalogEntry[];
+  error?: string;
+  delayed?: boolean;
+};
 
 export type WorkflowTestFixture = {
   parentItemId: number;
@@ -1043,6 +1050,11 @@ export type WorkflowTestApi = {
   getLastSend: () => SendQuestionOptions | null;
   getDiagnostics: (panelId?: string) => Promise<WorkflowTestDiagnostics>;
   configurePermissionCatalogs: (input?: { delayFirstCodex?: boolean }) => void;
+  configureCodexModelCatalogs: (
+    responses: WorkflowTestCodexModelCatalogResponse[],
+  ) => void;
+  getCodexModelCatalogRequests: () => string[];
+  resolveDelayedCodexModelCatalog: () => Promise<void>;
   resolveDelayedCodexPermissionCatalog: () => Promise<void>;
   getPanelPermissionSurface: (
     panelId: string,

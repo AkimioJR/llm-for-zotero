@@ -1039,6 +1039,7 @@ export function setupHandlers(
   let codexModelCatalogModels: CodexAppServerModelCatalogEntry[] = [];
   let codexModelCatalogInFlight: Promise<void> | null = null;
   let codexModelCatalogPath = "";
+  let codexModelCatalogRequestId = 0;
   const resolveClaudeModelCatalogContext = ():
     | ClaudeModelCatalogRequestContext
     | undefined => {
@@ -1214,37 +1215,44 @@ export function setupHandlers(
     }
     positionFloatingMenu(body, modelMenu, modelBtn);
   };
-  const ensureCodexModelCatalogLoaded = (): Promise<void> => {
+  const ensureCodexModelCatalogLoaded = (force = false): Promise<void> => {
     if (!isCodexConversationSystem()) return Promise.resolve();
     const codexPath = getConfiguredCodexAppServerBinaryPath();
-    if (
-      codexModelCatalogStatus === "ready" &&
-      codexPath === codexModelCatalogPath
-    ) {
+    const pathChanged = codexPath !== codexModelCatalogPath;
+    if (!force && codexModelCatalogStatus === "ready" && !pathChanged) {
       return Promise.resolve();
     }
-    if (codexModelCatalogInFlight) return codexModelCatalogInFlight;
+    if (codexModelCatalogInFlight && !pathChanged)
+      return codexModelCatalogInFlight;
+    if (pathChanged) codexModelCatalogModels = [];
+    const requestId = ++codexModelCatalogRequestId;
+    const isCurrentRequest = () =>
+      !setupHandlersCleaned &&
+      requestId === codexModelCatalogRequestId &&
+      codexPath === getConfiguredCodexAppServerBinaryPath();
     codexModelCatalogStatus = "loading";
     codexModelCatalogError = "";
     codexModelCatalogPath = codexPath;
     refreshOpenCodexModelMenu();
     codexModelCatalogInFlight = loadCodexAppServerModelCatalog({ codexPath })
       .then((catalog) => {
+        if (!isCurrentRequest()) return;
         codexModelCatalogModels = catalog.models;
         codexModelCatalogStatus = "ready";
         codexModelCatalogError = "";
         reconcileSelectedCodexReasoningMode();
       })
       .catch((error: unknown) => {
-        codexModelCatalogModels = [];
+        if (!isCurrentRequest()) return;
         codexModelCatalogStatus = "error";
         codexModelCatalogError =
           error instanceof Error ? error.message : String(error);
         appLogger.warn("Codex app-server: failed to load model catalog", error);
       })
       .finally(() => {
+        if (requestId !== codexModelCatalogRequestId) return;
         codexModelCatalogInFlight = null;
-        refreshOpenCodexModelMenu();
+        if (!setupHandlersCleaned) refreshOpenCodexModelMenu();
       });
     return codexModelCatalogInFlight;
   };
@@ -5314,10 +5322,12 @@ export function setupHandlers(
       menu,
       status: codexModelCatalogStatus,
       modelCount: codexModelCatalogModels.length,
-      loadingMessage: t("Loading Codex models…"),
-      errorMessage: t(
-        "Could not load Codex models. Showing current model only.",
-      ),
+      loadingMessage: codexModelCatalogModels.length
+        ? t("Refreshing Codex models…")
+        : t("Loading Codex models…"),
+      errorMessage: codexModelCatalogModels.length
+        ? t("Could not refresh Codex models. Showing the last known list.")
+        : t("Could not load Codex models. Showing current model only."),
       errorTitle: codexModelCatalogError,
       emptyMessage: t("Codex did not return any available models."),
       retryLabel: t("Retry loading Codex models"),
@@ -5325,9 +5335,7 @@ export function setupHandlers(
         if (!isPrimaryPointerEvent(event)) return;
         event.preventDefault();
         event.stopPropagation();
-        codexModelCatalogStatus = "idle";
-        codexModelCatalogError = "";
-        void ensureCodexModelCatalogLoaded();
+        void ensureCodexModelCatalogLoaded(true);
       },
     });
   };
@@ -8104,7 +8112,9 @@ export function setupHandlers(
     if ((modelBtn as HTMLButtonElement).disabled) return;
     menus.closeMany(MENUS_CLOSED_BY_MODEL_MENU);
     if (isCodexConversationSystem()) {
-      void ensureCodexModelCatalogLoaded();
+      // A loaded catalog can change while this chat stays mounted. Revalidate
+      // on each user opening and update the menu when model/list returns.
+      void ensureCodexModelCatalogLoaded(true);
     } else if (isClaudeConversationSystem()) {
       // Force: the catalog cache identity (bridge URL, prefs, profile-dir
       // hash, scope) cannot see in-place ~/.claude/settings.json profile
