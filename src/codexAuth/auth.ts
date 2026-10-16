@@ -2,8 +2,10 @@ import { getLocalParentPath, joinLocalPath } from "../utils/localPath";
 
 export const CODEX_DIRECT_RESPONSES_URL =
   "https://chatgpt.com/backend-api/codex/responses";
-export const CODEX_DIRECT_MODELS_URL =
-  "https://chatgpt.com/backend-api/codex/models?client_version=0.0.0";
+// Direct's tested backend compatibility floor. The catalog filters models by
+// client_version, so 0.0.0 silently hides newer models, including GPT-6.1 Sol.
+export const CODEX_DIRECT_CLIENT_VERSION = "0.162.1";
+export const CODEX_DIRECT_MODELS_URL = `https://chatgpt.com/backend-api/codex/models?client_version=${CODEX_DIRECT_CLIENT_VERSION}`;
 
 const CODEX_REFRESH_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -149,6 +151,42 @@ async function defaultReadText(path: string): Promise<string> {
     );
   }
   throw new Error("No file API available to read Codex auth");
+}
+
+export async function resolveCodexDirectModelsUrl(
+  options: CodexAuthDependencies = {},
+): Promise<string> {
+  // Follow newer CLI catalog versions without starting an App Server session.
+  // A missing, corrupt, or old cache must not lower Direct's compatibility.
+  try {
+    const authPath = options.authPath || resolveCodexAuthPath();
+    const cachePath = joinLocalPath(
+      getLocalParentPath(authPath),
+      "models_cache.json",
+    );
+    const cache = JSON.parse(
+      await (options.readText || defaultReadText)(cachePath),
+    ) as { client_version?: unknown } | null;
+    const version = cache?.client_version;
+    if (
+      typeof version !== "string" ||
+      !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)
+    ) {
+      return CODEX_DIRECT_MODELS_URL;
+    }
+    const parts = version.split(".").map(Number);
+    if (!parts.every(Number.isSafeInteger)) return CODEX_DIRECT_MODELS_URL;
+    const floor = CODEX_DIRECT_CLIENT_VERSION.split(".").map(Number);
+    for (let index = 0; index < floor.length; index++) {
+      if (parts[index] < floor[index]) return CODEX_DIRECT_MODELS_URL;
+      if (parts[index] > floor[index]) break;
+    }
+    const url = new URL(CODEX_DIRECT_MODELS_URL);
+    url.searchParams.set("client_version", version);
+    return url.href;
+  } catch (_error) {
+    return CODEX_DIRECT_MODELS_URL;
+  }
 }
 
 async function ensureParentDirectory(path: string): Promise<void> {

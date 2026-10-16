@@ -197,6 +197,10 @@ import {
 } from "../../utils/chatStore";
 import { appendCodexMessage } from "../../codexAppServer/store";
 import { setCodexAppServerModelCatalogLoaderForTests } from "../../codexAppServer/modelCatalog";
+import {
+  resetCodexDirectCatalogForTests,
+  setCodexDirectCatalogDependenciesForTests,
+} from "../../codexAuth/modelCatalog";
 import type { WorkflowTestCodexModelCatalogResponse } from "./workflowTestTypes";
 import { appendClaudeMessage } from "../../claudeCode/store";
 import {
@@ -244,6 +248,58 @@ import {
 let resolveDelayedCodexPermissionCatalog: (() => void) | null = null;
 let resolveDelayedCodexModelCatalog: (() => void) | null = null;
 let codexModelCatalogRequests: string[] = [];
+let codexDirectCatalogRequests: string[] = [];
+
+function configureCodexDirectCatalog(input: {
+  cachedClientVersion?: string;
+  liveAuthPath?: string;
+}): void {
+  assertWorkflowTestEnabled();
+  resetCodexDirectCatalogForTests();
+  codexDirectCatalogRequests = [];
+  if (input.liveAuthPath) {
+    setCodexDirectCatalogDependenciesForTests({ authPath: input.liveAuthPath });
+    return;
+  }
+  setCodexDirectCatalogDependenciesForTests({
+    authPath: "/workflow/codex/auth.json",
+    readText: async (path) =>
+      path.endsWith("models_cache.json")
+        ? JSON.stringify({ client_version: input.cachedClientVersion })
+        : JSON.stringify({
+            tokens: {
+              access_token: "workflow-token",
+              account_id: "workflow-account",
+            },
+          }),
+    fetchFn: (async (url: string | URL | Request) => {
+      codexDirectCatalogRequests.push(String(url));
+      const version =
+        new URL(String(url)).searchParams.get("client_version") || "";
+      const [major, minor] = version.split(".").map(Number);
+      const models = [
+        {
+          slug: "gpt-6-astra",
+          display_name: "GPT-6-Astra",
+          visibility: "list",
+          priority: 1,
+        },
+      ];
+      if (major > 0 || minor >= 153) {
+        models.push({
+          slug: "gpt-6.1-sol",
+          display_name: "GPT-6.1-Sol",
+          visibility: "list",
+          priority: 2,
+        });
+      }
+      return new Response(JSON.stringify({ models }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch,
+  });
+}
 
 function configureCodexModelCatalogs(
   responses: WorkflowTestCodexModelCatalogResponse[],
@@ -6106,6 +6162,9 @@ async function exerciseAssistantSelectionPromptDismissal(input: {
 
 async function reset(): Promise<void> {
   assertWorkflowTestEnabled();
+  setCodexDirectCatalogDependenciesForTests();
+  resetCodexDirectCatalogForTests();
+  codexDirectCatalogRequests = [];
   resolveDelayedCodexModelCatalog?.();
   resolveDelayedCodexModelCatalog = null;
   setCodexAppServerModelCatalogLoaderForTests();
@@ -7652,6 +7711,8 @@ export function installWorkflowTestHarness(targetAddon: {
     getLastSend: () => lastSend,
     getDiagnostics,
     configurePermissionCatalogs,
+    configureCodexDirectCatalog,
+    getCodexDirectCatalogRequests: () => [...codexDirectCatalogRequests],
     configureCodexModelCatalogs,
     getCodexModelCatalogRequests: () => [...codexModelCatalogRequests],
     resolveDelayedCodexModelCatalog: async () => {
