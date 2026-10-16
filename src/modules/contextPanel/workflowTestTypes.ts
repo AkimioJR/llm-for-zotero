@@ -1050,6 +1050,11 @@ export type WorkflowTestApi = {
   getLastSend: () => SendQuestionOptions | null;
   getDiagnostics: (panelId?: string) => Promise<WorkflowTestDiagnostics>;
   configurePermissionCatalogs: (input?: { delayFirstCodex?: boolean }) => void;
+  configureCodexDirectCatalog: (input: {
+    cachedClientVersion?: string;
+    liveAuthPath?: string;
+  }) => void;
+  getCodexDirectCatalogRequests: () => string[];
   configureCodexModelCatalogs: (
     responses: WorkflowTestCodexModelCatalogResponse[],
   ) => void;
