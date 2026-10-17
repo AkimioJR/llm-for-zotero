@@ -6129,23 +6129,26 @@
   color: var(--fill-tertiary);
 }
 
+/* Footer actions grow with the chat's font size, as the time beside them
+ * does. */
 .llm-message-actions {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: calc(3px * var(--llm-font-scale, 1));
 }
 
 .llm-edit-latest,
 .llm-message-action {
+  --llm-message-action-size: calc(18px * var(--llm-font-scale, 1));
   appearance: none;
   -moz-appearance: none;
   display: inline-flex;
-  flex: 0 0 18px;
+  flex: 0 0 var(--llm-message-action-size);
   align-items: center;
   justify-content: center;
-  width: 18px;
-  min-width: 18px;
-  height: 18px;
+  width: var(--llm-message-action-size);
+  min-width: var(--llm-message-action-size);
+  height: var(--llm-message-action-size);
   padding: 0;
   margin: 0;
   border: none;
@@ -6165,8 +6168,8 @@
 .llm-message-action::before {
   content: "";
   display: block;
-  width: 13px;
-  height: 13px;
+  width: calc(13px * var(--llm-font-scale, 1));
+  height: calc(13px * var(--llm-font-scale, 1));
   background-color: currentColor;
   mask-repeat: no-repeat;
   mask-position: center;
