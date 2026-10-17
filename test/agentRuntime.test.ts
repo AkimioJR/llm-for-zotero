@@ -41,8 +41,10 @@ import {
   clearAgentToolResultHandleStore,
   createAgentToolResultHandleRecord,
   getAgentToolResultHandle,
+  hasAgentToolResultHandles,
   upsertAgentToolResultHandles,
 } from "../src/agent/store/toolResultHandles";
+import { EPHEMERAL_GLOBAL_CONVERSATION_KEY_BASE } from "../src/shared/conversationKeySpace";
 import { AgentToolRegistry } from "../src/agent/tools/registry";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
 import {
@@ -334,6 +336,78 @@ describe("AgentRuntime", function () {
       );
     } finally {
       PdfService.prototype.ensurePaperContext = originalLoad;
+      restore();
+    }
+  });
+
+  it("completes a side chat agent turn and keeps its tool results in memory", async function () {
+    const restore = installMockDb();
+    const conversationKey = EPHEMERAL_GLOBAL_CONVERSATION_KEY_BASE + 17;
+    const call = { id: "side-read", name: "query_library", arguments: {} };
+    try {
+      const registry = new AgentToolRegistry();
+      registry.register({
+        spec: {
+          name: "query_library",
+          description: "Read library",
+          inputSchema: { type: "object" },
+          executionClass: "read",
+          requiresConfirmation: false,
+        },
+        validate: () => ({ ok: true, value: {} }),
+        execute: async () => ({ results: [{ itemId: 3, title: "Paper" }] }),
+      });
+      let step = 0;
+      const runtime = new AgentRuntime({
+        registry,
+        adapterFactory: () => ({
+          getCapabilities: () => ({
+            streaming: false,
+            toolCalls: true,
+            multimodal: false,
+          }),
+          supportsTools: () => true,
+          async runStep(): Promise<AgentModelStep> {
+            step++;
+            if (step === 1)
+              return {
+                kind: "tool_calls",
+                calls: [call],
+                assistantMessage: {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: [call],
+                },
+              };
+            return {
+              kind: "final",
+              text: "Side answer.",
+              assistantMessage: { role: "assistant", content: "Side answer." },
+            };
+          },
+        }),
+      });
+      const outcome = await runtime.runTurn({
+        request: {
+          conversationKey,
+          libraryID: 1,
+          mode: "agent",
+          userText: "a test",
+          model: "gpt-5.4",
+          apiBase: "https://api.openai.com/v1/responses",
+          apiKey: "test",
+        },
+      });
+      // The final transcript checkpoint is accepted in memory, so the turn
+      // completes instead of failing as "checkpoint skipped".
+      assert.equal(outcome.kind, "completed");
+      assert.equal(outcome.text, "Side answer.");
+      assert.isTrue(
+        hasAgentToolResultHandles(conversationKey),
+        "the side chat's tool result stays readable in memory",
+      );
+    } finally {
+      clearAgentToolResultHandleStore();
       restore();
     }
   });

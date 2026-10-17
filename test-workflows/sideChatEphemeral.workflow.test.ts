@@ -294,16 +294,70 @@ describe("workflow: the side chat is never saved", function () {
       kind: "global",
     });
     assert.equal(side.surface, "side");
-    await api.clickPanelRuntimeModeToggle(side.panelId);
+    // The side chat starts in the last used mode; switch to Agent if needed.
+    let diagnostics = await api.getDiagnostics(side.panelId);
+    if (diagnostics.runtimeMode !== "agent")
+      diagnostics = await api.clickPanelRuntimeModeToggle(side.panelId);
+    assert.equal(
+      diagnostics.runtimeMode,
+      "agent",
+      "the side chat is in Agent mode",
+    );
 
     const QUESTION = "side-chat-agent-question-marker";
     const ANSWER = "side-chat-agent-answer-marker";
     await api.startPanelChatSend(side.panelId, QUESTION);
     const stream = await provider.waitForStream(QUESTION, 20_000);
+    // The model is told the side chat is read-only, and is offered no tool
+    // or skill that changes the library.
+    const requestBody = JSON.parse(stream.requestBody) as {
+      messages?: { role: string; content: unknown }[];
+      tools?: { function?: { name?: string } }[];
+    };
+    const systemText = (requestBody.messages || [])
+      .filter((message) => message.role === "system")
+      .map((message) =>
+        typeof message.content === "string"
+          ? message.content
+          : JSON.stringify(message.content),
+      )
+      .join("\n");
+    assert.include(systemText, "temporary side chat, and it is read-only");
+    assert.include(systemText, '"id":"compare-papers"', "read skills stay");
+    for (const skillId of [
+      "write-note",
+      "reorganize-library",
+      "import-to-library",
+    ])
+      assert.notInclude(
+        systemText,
+        `"id":"${skillId}"`,
+        `${skillId} is not offered`,
+      );
+    const toolNames = (requestBody.tools || []).map(
+      (tool) => tool.function?.name || "",
+    );
+    assert.isAbove(toolNames.length, 0, "read tools are offered");
+    for (const name of [
+      "note_write",
+      "apply_tags",
+      "move_to_collection",
+      "run_command",
+    ])
+      assert.notInclude(toolNames, name, `${name} is withheld`);
     stream.push(ANSWER);
     stream.finish();
     const answer = await waitForAnswer(side.conversationKey, ANSWER);
     await Zotero.Promise.delay(500);
+    assert.equal(answer.runMode, "agent", "the answer came from an agent run");
+    // A finished side answer is not marked interrupted and leaves no error.
+    assert.notEqual(answer.interrupted, true, "the answer is not interrupted");
+    const status = Zotero.getMainWindow()
+      .document.querySelector(
+        `[data-workflow-panel-id="${side.panelId}"] #llm-status`,
+      )
+      ?.textContent?.trim();
+    assert.notInclude(status || "", "Error", "no error under the composer");
 
     const runIds =
       typeof answer.agentRunId === "string" && answer.agentRunId

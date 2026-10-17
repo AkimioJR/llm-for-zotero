@@ -22,6 +22,11 @@ import { buildSkillInventory, getAllSkills } from "../skills";
 import type { AgentSkill } from "../skills";
 import { getSkillCustomizationNotice } from "../skills/managedBlock";
 import { SKILL_SCOPE_GUARD } from "../skills/scopeGuard";
+import { isEphemeralConversationKey } from "../../shared/conversationKeySpace";
+import {
+  SIDE_CHAT_READ_ONLY_INSTRUCTION,
+  isSkillWithheldForEphemeralRequest,
+} from "../skills/sideChatScope";
 import { getOriginalAgentPermissionMode } from "../originalAgentPermissionMode";
 import { buildPermissionModeGuidance } from "./permissionModeGuidance";
 
@@ -550,6 +555,7 @@ function collectSkillGuidanceInstructions(
   const forcedSkillIds = new Set(request.forcedSkillIds || []);
   for (const skill of getAllSkills()) {
     if (!activeSkillIds.has(skill.id)) continue;
+    if (isSkillWithheldForEphemeralRequest(skill.id, request)) continue;
     const instruction = skill.instruction.trim();
     if (!instruction) continue;
     blocks.push(
@@ -649,12 +655,24 @@ export async function renderAgentPromptEnvelope(
       ],
     },
     {
+      id: "side-chat-read-only",
+      lines: [
+        isEphemeralConversationKey(request.conversationKey)
+          ? SIDE_CHAT_READ_ONLY_INSTRUCTION
+          : "",
+      ],
+    },
+    {
       id: "skill-inventory",
       lines: [
         `Installed skill inventory (workflow playbooks for multi-step tasks: notes, comparisons, reviews, imports, figure work; ordinary paper questions need no skill. When one matches and its guidance is not already active, call load_skill with its id): ${JSON.stringify(
           // Manual skills apply only when the user selects them.
           buildSkillInventory(getAllSkills())
-            .filter((skill) => skill.activation !== "manual")
+            .filter(
+              (skill) =>
+                skill.activation !== "manual" &&
+                !isSkillWithheldForEphemeralRequest(skill.id, request),
+            )
             .map(({ id, description }) => ({ id, description })),
         )}`,
       ],

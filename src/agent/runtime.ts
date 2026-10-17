@@ -913,6 +913,12 @@ export class AgentRuntime {
       ): Promise<boolean> => {
         if (!records.length) return false;
         const sanitized = turnPathRedactor.redactTerminalValue(records);
+        // A temporary side chat keeps its handles in memory (the store skips
+        // the database for its key), so tool_result_read can still open them.
+        if (isEphemeralConversationKey(request.conversationKey)) {
+          if (writeAllowed()) await upsertAgentToolResultHandles(sanitized);
+          return false;
+        }
         return (
           (await persistIfLive(() =>
             upsertAgentToolResultHandles(sanitized),
@@ -1617,12 +1623,20 @@ export class AgentRuntime {
        * still finishes a call: once stopped, the run writes only over the
        * transcript as it last saw it, never over what that turn wrote.
        */
-      const writeTranscriptSegment = (next: AgentTranscriptSegment) =>
-        persistIfLive(() =>
+      // A temporary side chat keeps its transcript in memory only: the
+      // write is accepted ("memory_only") without a row, so its checkpoints
+      // pass as a stored chat's do.
+      const writeTranscriptSegment = async (
+        next: AgentTranscriptSegment,
+      ): Promise<AgentTranscriptWriteResult | undefined> => {
+        if (isEphemeralConversationKey(request.conversationKey))
+          return writeAllowed() ? "memory_only" : undefined;
+        return persistIfLive(() =>
           params.signal?.aborted
             ? replaceAgentTranscriptSegmentIfUnchanged(transcriptSegment, next)
             : replaceAgentTranscriptSegment(next),
         );
+      };
       let latestProviderReplayTokens = 0;
       const commitSemanticCheckpoint = async (params: {
         sourceMessages: AgentModelMessage[];

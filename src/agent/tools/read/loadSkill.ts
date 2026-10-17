@@ -8,6 +8,7 @@ import type { AgentSkill, LoadedSkill } from "../../skills";
 import { SKILL_SCOPE_GUARD } from "../../skills/scopeGuard";
 import type { AgentRuntimeRequest, AgentToolDefinition } from "../../types";
 import { fail, ok, validateObject } from "../shared";
+import { isSkillWithheldForEphemeralRequest } from "../../skills/sideChatScope";
 
 export type LoadSkillInput = { id: string };
 
@@ -124,6 +125,22 @@ export function createLoadSkillTool(
     async execute(input, context) {
       const skills = getSkills();
       const skill = skills.find((candidate) => candidate.id === input.id);
+      if (
+        skill &&
+        context?.request &&
+        isSkillWithheldForEphemeralRequest(skill.id, context.request)
+      ) {
+        return {
+          found: false,
+          error: `Skill "${input.id}" changes the library, and this side chat is read-only. The main chat can run it.`,
+          availableSkillIds: skills
+            .map((candidate) => candidate.id)
+            .filter(
+              (id) => !isSkillWithheldForEphemeralRequest(id, context.request!),
+            )
+            .sort((left, right) => left.localeCompare(right)),
+        };
+      }
       if (!skill) {
         return {
           found: false,
