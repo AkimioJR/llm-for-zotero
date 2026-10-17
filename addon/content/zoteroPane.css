@@ -421,6 +421,12 @@
   flex: 0 0 auto;
 }
 
+/* Zotero's chrome gives buttons a -2px side margin, which overlapped these
+ * icons by 4px; with none they keep the left icons' spacing. */
+.llm-header-actions > .llm-btn-icon {
+  margin: 0;
+}
+
 .llm-header-icon {
   width: 18px;
   height: 18px;
