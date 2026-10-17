@@ -14,7 +14,10 @@ import {
 } from "../shared/conversationWriteFence";
 import { createTurnUsageRecorder } from "../utils/usageTurnRecorder";
 import type { UsageEventRuntime } from "../utils/usageStore";
-import { classifyConversationKey } from "../shared/conversationKeySpace";
+import {
+  classifyConversationKey,
+  isEphemeralConversationKey,
+} from "../shared/conversationKeySpace";
 import type { WebAttributionAssessment } from "../webAccess/attribution";
 import { clearWebSourcesForRun } from "../webAccess/runSources";
 import {
@@ -179,7 +182,10 @@ import {
   type AgentTranscriptWriteResult,
 } from "./store/transcriptStore";
 import { resolveAgentToolCallWorkCategory } from "./workCategory";
-import { AgentToolRegistry } from "./tools/registry";
+import {
+  AgentToolRegistry,
+  isToolWithheldForEphemeralRequest,
+} from "./tools/registry";
 import {
   createEmptyExecutionCheckpoint,
   latestExecutionCheckpoint,
@@ -662,12 +668,18 @@ export class AgentRuntime {
       model: request.model,
       provider: request.modelProviderLabel,
     });
+    // writeAllowed() gates delivery to the panel; persistAllowed() gates the
+    // durable stores. A temporary side chat (an ephemeral key) receives every
+    // event but writes no run, event, transcript, handle, evidence, coverage,
+    // or memory row: each turn starts from its in-memory chat history.
+    const persistAllowed = () =>
+      writeAllowed() && !isEphemeralConversationKey(request.conversationKey);
     const persistIfLive = async <T>(
       task: () => Promise<T>,
     ): Promise<T | undefined> => {
-      if (!writeAllowed()) return undefined;
+      if (!persistAllowed()) return undefined;
       return withConversationWriteLock(request.conversationKey, async () => {
-        if (!writeAllowed()) return undefined;
+        if (!persistAllowed()) return undefined;
         return task();
       });
     };
@@ -2624,7 +2636,8 @@ export class AgentRuntime {
           tool.spec.executionClass === "control" ||
           name === "zotero_script" ||
           tool.spec.exposure === "internal" ||
-          tool.isAvailable?.(request) === false
+          tool.isAvailable?.(request) === false ||
+          isToolWithheldForEphemeralRequest(tool, request)
         )
           throw new Error("Unknown or unavailable registered operation.");
         const outcome = await toolExecution.executeToolWorkflow(

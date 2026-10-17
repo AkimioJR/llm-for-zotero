@@ -1,0 +1,2035 @@
+/**
+ * The standalone window's side panel: a third column to the right of the main
+ * chat, opened from the tab row's trailing toggle.
+ *
+ * The panel holds tabs, like a browser:
+ * - Read-only tabs: a past chat picked from the History tab's Search history
+ *   list, drawn with the main chat's renderer, no handlers, and a composer
+ *   that cannot send.
+ * - Side chat tabs: each a full second chat panel on its own temporary
+ *   (ephemeral) key that follows the main chat's paper or library, reads the
+ *   main chat as background, and is never saved.
+ * - The History tab: the Search history field and list; a picked chat
+ *   replaces it with that chat's read-only tab.
+ * The "+" button shows the new-tab page: a "Side chat" row and a "History"
+ * row, which turns the New tab tab into the History tab.
+ *
+ * Pure decisions live in standaloneSidePanelState.ts; this module owns the
+ * DOM and the panel lifecycles.
+ */
+import { appLogger } from "../../core/logging";
+import { createElement } from "../../utils/domHelpers";
+import { t } from "../../utils/i18n";
+import type { ConversationSystem } from "../../shared/types";
+import { releaseClaudeRuntimeForBody } from "../../claudeCode/runtimeRetention";
+import { getContextSourceModeCssClassName } from "../../services/paperContent/contextSourceModes";
+import { resolvePaperContextRefFromItem } from "../../services/paperContent/paperAttribution";
+import { buildUI } from "./buildUI";
+import { createContextIcon } from "./contextIcons";
+import { composeContextStore } from "./contexts/composeContextStore";
+import {
+  copyRenderedMarkdownToClipboard,
+  disposeChatRendering,
+  ensureConversationLoaded,
+  loadConversationMessagesForReadOnlyView,
+  refreshChat,
+} from "./chat";
+import {
+  clearChatPanelExtensions,
+  setChatPanelExtensions,
+  updateChatPanelExtensions,
+} from "./chatPanelExtensions";
+import {
+  restoreChatScrollStateForConversationKey,
+  saveChatScrollStateForConversationKey,
+  type SavedChatScrollState,
+} from "./chatScrollSnapshots";
+import {
+  allocateEphemeralGlobalConversationKey,
+  allocateEphemeralPaperConversationKey,
+  clearEphemeralBackgroundContextProvider,
+  discardEphemeralConversation,
+  isEphemeralConversationBusy,
+  moveEphemeralConversation,
+  setEphemeralBackgroundContextProvider,
+} from "./ephemeralConversations";
+import { releaseInlineEdit } from "./inlineEditState";
+import { getPanelHandle } from "./panelHandle";
+import { clearPanelHostBinding, markSidePanelBody } from "./panelHostOwnership";
+import { mountPanelShell } from "./panelMount";
+import { createGlobalPortalItem, createPaperPortalItem } from "./portalScope";
+import { applyPanelFontScale } from "./prefHelpers";
+import { disposeSetupHandlers } from "./setupHandlers";
+import { formatPaperContextChipLabel } from "./setupHandlers/controllers/composeContextController";
+import type { ConversationHistoryEntry } from "./setupHandlers/controllers/conversationHistoryController";
+import {
+  createEmbeddedHistorySearchList,
+  type EmbeddedHistorySearchListDeps,
+  type EmbeddedHistorySearchListView,
+} from "./setupHandlers/controllers/historySearchPopupController";
+import { renderShortcuts } from "./shortcuts";
+import {
+  buildMainChatBackgroundContext,
+  buildSideChatTranscriptContext,
+} from "./sideChatContext";
+import {
+  CLOSED_SIDE_PANEL_TABS,
+  SIDE_PANEL_MAX_TABS,
+  appendSideChatContextNote,
+  buildSidePanelExcludedKeys,
+  canOpenSidePanelTab,
+  closeSidePanel,
+  closeSidePanelTab,
+  findLastFinishedAnswerText,
+  focusSidePanelTab,
+  hasFinishedAnswer,
+  isSameSideChatContext,
+  openHistorySidePanelTab,
+  moveSidePanelTab,
+  openReadOnlySidePanelTab,
+  openSideChatSidePanelTab,
+  openSidePanel,
+  resolveAskInSideChatTab,
+  resolveSideChatContext,
+  resolveSideChatContextNoteAnchors,
+  resolveSideChatTabTitle,
+  resolveSidePanelCloseDecision,
+  resolveSlashSideChatTab,
+  showSidePanelNewTabPage,
+  closeSidePanelNewTab,
+  type SideChatContext,
+  type SideChatContextNote,
+  type SidePanelTabsState,
+} from "./standaloneSidePanelState";
+import { openStandaloneResponseDocument } from "./standaloneResponseDocumentWindow";
+import {
+  computeStandaloneSidePanelSlideFrame,
+  computeStandaloneWindowWidthChange,
+  createCubicBezierEasing,
+  installStandaloneColumnResizeBehavior,
+  STANDALONE_PANEL_SLIDE_DURATION_MS,
+  STANDALONE_PANEL_SLIDE_EASING,
+  STANDALONE_SIDE_PANEL_DEFAULT_WIDTH_PX,
+  STANDALONE_SIDE_PANEL_MAX_WIDTH_PX,
+  STANDALONE_SIDE_PANEL_MIN_WIDTH_PX,
+  STANDALONE_SIDEBAR_SEPARATOR_LAYOUT_WIDTH_PX,
+} from "./standaloneWindowSizing";
+import {
+  chatHistory,
+  getAbortController,
+  loadedConversationKeys,
+  readOnlyBorrowedConversationKeys,
+  setResponseActionRunner,
+  unregisterContextPanel,
+} from "./state";
+import {
+  resetSideSurfaceChoices,
+  startSideSurfaceChoicesFromStandalone,
+} from "./surfaceChoices";
+import { setNeutralStatus, setStatus } from "./textUtils";
+
+export const SIDE_PANEL_WIDTH_VARIABLE = "--llm-standalone-side-panel-width";
+
+/** Workflow tests slow the open/close slide down to film it; null = normal. */
+let slideDurationOverrideMs: number | null = null;
+export function setStandaloneSidePanelSlideDurationForTest(
+  durationMs: number | null,
+): void {
+  slideDurationOverrideMs =
+    durationMs === null ? null : Math.max(0, Number(durationMs) || 0);
+}
+export const SIDE_PANEL_ID = "llm-standalone-side-panel";
+const SIDE_CHAT_CONTEXT_NOTE_CLASS = "llm-side-chat-context-note";
+const CONTEXT_FOLLOW_RETRY_MS = 400;
+
+/** What the window's main chat shows right now. */
+export type StandaloneSidePanelMainContext = {
+  mode: "open" | "paper";
+  conversationKey: number;
+  basePaperItem: Zotero.Item | null;
+  libraryID: number;
+  conversationSystem: ConversationSystem;
+};
+
+export type StandaloneSidePanelDeps = {
+  win: Window;
+  /** The window's columns row (History pane | main chat | side panel). */
+  lowerArea: HTMLElement;
+  /** The main chat's panel body (the window's content area). */
+  mainBody: HTMLElement;
+  /** The tab row's trailing slot that hosts the toggle. */
+  toggleHost: HTMLElement;
+  getMainContext: () => StandaloneSidePanelMainContext;
+  /** The same list sources the window's Search history popup uses. */
+  historyList: Pick<
+    EmbeddedHistorySearchListDeps,
+    | "loadEntries"
+    | "loadDocument"
+    | "searchEntries"
+    | "translate"
+    | "log"
+    | "resolveLabel"
+    | "resolveScopeLabel"
+  >;
+  /** The portal item a history entry's conversation renders on. */
+  buildHistoryEntryItem: (
+    entry: ConversationHistoryEntry,
+  ) => Zotero.Item | null;
+  /** A paper chat's paper, or null. */
+  resolveHistoryEntryPaper: (
+    entry: ConversationHistoryEntry,
+  ) => Zotero.Item | null;
+  /** Switch the main chat to the entry, as the Search history popup does. */
+  openAsMainChat: (entry: ConversationHistoryEntry) => Promise<boolean>;
+  /** Width the History pane takes from the columns row. */
+  getReservedLeftWidth: () => number;
+  /** The window's minimum outer width. */
+  minWindowWidth?: number;
+  /** The panel opened, closed, or changed width. */
+  onLayoutChanged: () => void;
+};
+
+export type StandaloneSidePanelController = {
+  toggleButton: HTMLButtonElement;
+  column: HTMLElement;
+  splitter: HTMLElement;
+  isOpen: () => boolean;
+  /** Width the panel and its divider take from the columns row. */
+  getOccupiedWidth: () => number;
+  /**
+   * Outer width the window is still about to gain (positive) or give back
+   * (negative) for the panel: a resize asked for but not yet applied.
+   */
+  getPendingWindowWidthChange: () => number;
+  relayout: () => void;
+  /** Called after every main-chat mount (mode, paper, or chat changed). */
+  onMainMounted: () => void;
+  /** Window close: drop everything without asking. */
+  dispose: () => void;
+};
+
+type TabViewBase = {
+  id: string;
+  /** The tab's content (title row and chat body), shown while active. */
+  root: HTMLElement;
+  body: HTMLElement;
+  /** The tab in the bar's strip. */
+  tab: HTMLElement;
+  tabTitle: HTMLElement;
+  /** The inline "close this side chat?" card, while it shows. */
+  confirm: HTMLElement | null;
+  disposed: boolean;
+};
+
+type ReadOnlyTabView = TabViewBase & {
+  kind: "readonly";
+  entry: ConversationHistoryEntry;
+  item: Zotero.Item;
+  conversationKey: number;
+  /**
+   * The messages this view put in chatHistory, so it removes them, and only
+   * them: a real load that replaced them owns the entry.
+   */
+  addedMessages: unknown[] | null;
+  /** The conversation's own scroll state, put back when the view closes. */
+  savedScroll: SavedChatScrollState;
+};
+
+type SideChatTabView = TabViewBase & {
+  kind: "sidechat";
+  clearButton: HTMLButtonElement;
+  conversationKey: number;
+  context: SideChatContext;
+  basePaperItem: Zotero.Item | null;
+  item: Zotero.Item | null;
+  notes: SideChatContextNote[];
+  followRetryTimer: number | null;
+};
+
+type HistoryTabView = TabViewBase & {
+  kind: "history";
+  list: EmbeddedHistorySearchListView;
+};
+
+type TabView = ReadOnlyTabView | SideChatTabView | HistoryTabView;
+
+function setButtonLabel(button: HTMLElement, label: string): void {
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+
+function createIconButton(
+  doc: Document,
+  iconClass: string,
+  label: string,
+): HTMLButtonElement {
+  const button = createElement(
+    doc,
+    "button",
+    `llm-standalone-title-action ${iconClass}`,
+    { type: "button" },
+  );
+  setButtonLabel(button, label);
+  return button;
+}
+
+function readPixelVariable(element: HTMLElement, name: string): number {
+  const value = Number.parseFloat(element.style.getPropertyValue(name) || "");
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function resolvePaperDisplayTitle(paper: Zotero.Item | null): string {
+  let title = "";
+  try {
+    title = String((paper as any)?.getField?.("title") || "").trim();
+  } catch {
+    title = "";
+  }
+  if (!title) return t("this paper");
+  return title.length > 80 ? `${title.slice(0, 79)}…` : title;
+}
+
+/** Tear down a full chat panel mounted on `body` (setupHandlers and all). */
+function disposeMountedPanelBody(body: HTMLElement): void {
+  disposeSetupHandlers(body);
+  releaseInlineEdit(body);
+  clearPanelHostBinding(body);
+  void releaseClaudeRuntimeForBody(body);
+  unregisterContextPanel(body);
+  disposeChatRendering(body);
+}
+
+export function createStandaloneSidePanel(
+  deps: StandaloneSidePanelDeps,
+): StandaloneSidePanelController {
+  const { win, lowerArea, mainBody } = deps;
+  const doc = lowerArea.ownerDocument;
+
+  let tabsState: SidePanelTabsState = CLOSED_SIDE_PANEL_TABS;
+  const views = new Map<string, TabView>();
+  let tabSequence = 0;
+  let newTabPage: {
+    root: HTMLElement;
+    sideChatRow: HTMLButtonElement;
+    historyRow: HTMLButtonElement;
+  } | null = null;
+  let panelConfirm: HTMLElement | null = null;
+  let disposed = false;
+
+  const nextTabId = (kind: "readonly" | "sidechat" | "history") =>
+    `${kind}-${++tabSequence}`;
+
+  // -- Toggle (tab row, trailing slot) --------------------------------------
+  const toggleButton = createElement(
+    doc,
+    "button",
+    "llm-standalone-title-action llm-standalone-side-panel-toggle",
+    { type: "button" },
+  );
+  toggleButton.setAttribute("aria-controls", SIDE_PANEL_ID);
+  toggleButton.setAttribute("aria-expanded", "false");
+  setButtonLabel(toggleButton, t("Open side panel"));
+  deps.toggleHost.appendChild(toggleButton);
+
+  // -- Column: divider + panel ---------------------------------------------
+  const splitter = createElement(
+    doc,
+    "div",
+    "llm-standalone-sidebar-resizer llm-standalone-side-panel-resizer",
+  );
+  splitter.setAttribute("role", "separator");
+  splitter.setAttribute("aria-orientation", "vertical");
+  splitter.setAttribute("aria-label", t("Resize side panel"));
+  splitter.tabIndex = 0;
+  splitter.hidden = true;
+
+  const column = createElement(doc, "aside", "llm-standalone-side-panel", {
+    id: SIDE_PANEL_ID,
+  });
+  column.setAttribute("aria-label", t("Side panel"));
+  column.hidden = true;
+
+  // The bar: browser-style tabs on a darker strip, the "+" button after
+  // the last tab, and the panel's close button at the far right.
+  const bar = createElement(doc, "div", "llm-standalone-side-panel-bar");
+  const strip = createElement(doc, "div", "llm-standalone-side-panel-tabs");
+  strip.setAttribute("role", "tablist");
+  strip.setAttribute("aria-label", t("Side panel tabs"));
+  const newTabButton = createIconButton(
+    doc,
+    "llm-standalone-side-panel-icon-new-tab",
+    t("New tab"),
+  );
+  const closeButton = createIconButton(
+    doc,
+    "llm-standalone-side-panel-icon-close",
+    t("Close side panel"),
+  );
+  closeButton.classList.add("llm-standalone-side-panel-close");
+  bar.append(strip, newTabButton, closeButton);
+
+  const viewHost = createElement(doc, "div", "llm-standalone-side-panel-view");
+  column.append(bar, viewHost);
+  lowerArea.append(splitter, column);
+
+  // -- Window width -------------------------------------------------------
+  // The panel widens the window instead of taking the main chat's room: the
+  // window keeps its left edge and grows to the right, as far as the screen
+  // allows, and gives that width back when the panel closes, unless the user
+  // resized the window in between. The window never moves. What the screen
+  // cannot give, the main column gives up.
+  let windowGrowth = 0;
+  /** The outer width last asked for, until the window reports it. */
+  let pendingOuterWidth: number | null = null;
+  /** The outer width the panel last gave the window. */
+  let lastSetOuterWidth: number | null = null;
+  let pendingTimer: number | null = null;
+  const PENDING_RESIZE_TIMEOUT_MS = 1000;
+  const outerWidthNow = () => Math.round(Number(win.outerWidth) || 0);
+  const settlePendingResize = () => {
+    if (pendingTimer !== null) win.clearTimeout(pendingTimer);
+    pendingTimer = null;
+    if (pendingOuterWidth === null) return;
+    // A window manager may refuse or trim the resize; keep what it gave.
+    windowGrowth = Math.max(
+      0,
+      windowGrowth + (outerWidthNow() - pendingOuterWidth),
+    );
+    lastSetOuterWidth = outerWidthNow();
+    pendingOuterWidth = null;
+  };
+  const getPendingWindowWidthChange = () =>
+    pendingOuterWidth === null ? 0 : pendingOuterWidth - outerWidthNow();
+  /**
+   * Asks for the window width that gives the panel `targetGrowth`; returns
+   * the outer width to slide to (the current one if nothing changes).
+   */
+  const planWindowWidthForPanel = (targetGrowth: number): number => {
+    const currentWidth = outerWidthNow();
+    const fromWidth = pendingOuterWidth ?? currentWidth;
+    if (!currentWidth || typeof win.resizeTo !== "function") return fromWidth;
+    const frame = computeStandaloneWindowWidthChange({
+      outerWidth: fromWidth,
+      screenX: Math.round(Number(win.screenX) || 0),
+      delta: targetGrowth - windowGrowth,
+      availLeft: (win.screen as any)?.availLeft,
+      availWidth: win.screen?.availWidth,
+      minWidth: deps.minWindowWidth,
+    });
+    if (frame.width === fromWidth) return fromWidth;
+    windowGrowth = Math.max(0, windowGrowth + frame.applied);
+    pendingOuterWidth = frame.width;
+    lastSetOuterWidth = frame.width;
+    if (pendingTimer !== null) win.clearTimeout(pendingTimer);
+    pendingTimer = null;
+    return frame.width;
+  };
+  const planGiveBackWindowWidth = (): number => {
+    // The window's real width: a resize the user made while a slide or its
+    // report was still pending counts too.
+    const width = outerWidthNow();
+    const untouched =
+      lastSetOuterWidth !== null && Math.abs(width - lastSetOuterWidth) <= 2;
+    if (!untouched && pendingOuterWidth !== null) {
+      if (pendingTimer !== null) win.clearTimeout(pendingTimer);
+      pendingTimer = null;
+      pendingOuterWidth = null;
+    }
+    // If the user resized the window, keep their width.
+    const target =
+      windowGrowth > 0 && untouched ? planWindowWidthForPanel(0) : width;
+    windowGrowth = 0;
+    return target;
+  };
+  const onWindowResizeSettle = () => {
+    if (
+      !slide &&
+      pendingOuterWidth !== null &&
+      Math.abs(outerWidthNow() - pendingOuterWidth) <= 1
+    ) {
+      settlePendingResize();
+    }
+  };
+  win.addEventListener("resize", onWindowResizeSettle);
+
+  // -- Open and close slide ---------------------------------------------------
+  // Like the History pane's width transition (same duration and easing):
+  // each frame the window's right edge moves and the main column takes an
+  // explicit width, so the main chat never jumps. The panel keeps its full
+  // width throughout; the window edge (and the main column, when the screen
+  // has no room) uncovers or covers it. On close the panel's content stays
+  // until the slide ends.
+  const mainColumn =
+    (Array.from(lowerArea.children).find((child) =>
+      child.contains(mainBody),
+    ) as HTMLElement | undefined) || null;
+  const slideEase = createCubicBezierEasing(...STANDALONE_PANEL_SLIDE_EASING);
+  let slide: {
+    frameId: number | null;
+    finish: () => void;
+  } | null = null;
+  const prefersReducedMotion = () => {
+    try {
+      return Boolean(
+        win.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches,
+      );
+    } catch {
+      return false;
+    }
+  };
+  const resolveSlideDuration = () =>
+    slideDurationOverrideMs ??
+    (prefersReducedMotion() ? 0 : STANDALONE_PANEL_SLIDE_DURATION_MS);
+  const finishSlide = () => slide?.finish();
+  const runSlide = (params: {
+    toOuterWidth: number;
+    fromMainWidth: number;
+    toMainWidth: number;
+    panelWidth: number;
+    onDone: () => void;
+  }) => {
+    finishSlide();
+    const fromOuterWidth = outerWidthNow();
+    const startedAt = Number(win.performance?.now?.() ?? Date.now());
+    const duration = resolveSlideDuration();
+    let lastOuterWidth = fromOuterWidth;
+    const pin = (mainWidth: number) => {
+      if (mainColumn) mainColumn.style.flex = `0 0 ${mainWidth}px`;
+      column.style.flex = `0 0 ${params.panelWidth}px`;
+    };
+    const unpin = () => {
+      if (mainColumn) mainColumn.style.removeProperty("flex");
+      column.style.removeProperty("flex");
+    };
+    const resizeTo = (width: number) => {
+      if (width === lastOuterWidth) return;
+      lastOuterWidth = width;
+      win.resizeTo(width, win.outerHeight);
+    };
+    const current = {
+      frameId: null as number | null,
+      finish: () => {
+        if (slide !== current) return;
+        if (current.frameId !== null)
+          win.cancelAnimationFrame?.(current.frameId);
+        slide = null;
+        resizeTo(params.toOuterWidth);
+        unpin();
+        if (pendingOuterWidth !== null) {
+          pendingTimer = win.setTimeout(
+            settlePendingResize,
+            PENDING_RESIZE_TIMEOUT_MS,
+          );
+          onWindowResizeSettle();
+        }
+        params.onDone();
+      },
+    };
+    slide = current;
+    const canAnimate =
+      duration > 0 &&
+      typeof win.requestAnimationFrame === "function" &&
+      (params.toOuterWidth !== fromOuterWidth ||
+        Math.abs(params.toMainWidth - params.fromMainWidth) >= 1);
+    if (!canAnimate) {
+      current.finish();
+      return;
+    }
+    const step = () => {
+      if (slide !== current) return;
+      const now = Number(win.performance?.now?.() ?? Date.now());
+      const frame = computeStandaloneSidePanelSlideFrame({
+        fromOuterWidth,
+        toOuterWidth: params.toOuterWidth,
+        fromMainWidth: params.fromMainWidth,
+        toMainWidth: params.toMainWidth,
+        progress: (now - startedAt) / duration,
+        ease: slideEase,
+      });
+      if (frame.done) {
+        current.finish();
+        return;
+      }
+      pin(frame.mainWidth);
+      resizeTo(frame.outerWidth);
+      current.frameId = win.requestAnimationFrame(step);
+    };
+    pin(params.fromMainWidth);
+    current.frameId = win.requestAnimationFrame(step);
+  };
+  /** The panel's current width plus its divider. */
+  const panelLayoutWidth = () =>
+    readPixelVariable(lowerArea, SIDE_PANEL_WIDTH_VARIABLE) +
+    STANDALONE_SIDEBAR_SEPARATOR_LAYOUT_WIDTH_PX;
+  const mainColumnWidth = () => mainColumn?.getBoundingClientRect().width || 0;
+
+  const resize = installStandaloneColumnResizeBehavior(
+    win,
+    lowerArea,
+    column,
+    splitter,
+    {
+      side: "right",
+      widthVariable: SIDE_PANEL_WIDTH_VARIABLE,
+      resizingClass: "llm-standalone-side-panel-resizing",
+      defaultWidth: STANDALONE_SIDE_PANEL_DEFAULT_WIDTH_PX,
+      minWidth: STANDALONE_SIDE_PANEL_MIN_WIDTH_PX,
+      maxWidth: STANDALONE_SIDE_PANEL_MAX_WIDTH_PX,
+      // Room the window is about to gain counts as room.
+      getReservedWidth: () =>
+        deps.getReservedLeftWidth() - getPendingWindowWidthChange(),
+      // The divider moves width between the main chat and the panel, like
+      // the History pane's; only opening and closing resize the window.
+      // Kept for this window only; no pref.
+      onWidthCommit: () => deps.onLayoutChanged(),
+    },
+  );
+
+  const isOpen = () => tabsState.open;
+
+  // -- The main column's chrome metrics and theme ---------------------------
+  // The main tab row's gap shrinks with the main column's width (a container
+  // query); the panel copies its resolved value, so the tabs and the bar
+  // buttons match Paper chat | Library chat exactly.
+  const syncChromeGap = () => {
+    const mainTabRow = doc.querySelector(
+      ".llm-standalone-tab-row",
+    ) as HTMLElement | null;
+    if (!mainTabRow) return;
+    const gap = Number.parseFloat(
+      win.getComputedStyle(mainTabRow)?.columnGap || "",
+    );
+    if (!Number.isFinite(gap) || gap < 0) return;
+    column.style.setProperty("--llm-standalone-chrome-gap", `${gap}px`);
+  };
+  const onWindowResize = () => {
+    if (isOpen()) syncChromeGap();
+  };
+  win.addEventListener("resize", onWindowResize);
+  // The list takes the Search history popup's theme class; follow the
+  // window's light/dark switch.
+  const chatRoot = doc.getElementById("llmforzotero-standalone-chat-root");
+  const MutationObserverCtor = (win as any).MutationObserver as
+    | typeof MutationObserver
+    | undefined;
+  const themeObserver =
+    chatRoot && MutationObserverCtor
+      ? new MutationObserverCtor(() => {
+          for (const view of views.values()) {
+            if (view.kind === "history") view.list.syncTheme();
+          }
+        })
+      : null;
+  if (chatRoot) {
+    themeObserver?.observe(chatRoot, {
+      attributes: true,
+      attributeFilter: ["data-standalone-theme"],
+    });
+  }
+  const getOccupiedWidth = () =>
+    isOpen()
+      ? readPixelVariable(lowerArea, SIDE_PANEL_WIDTH_VARIABLE) +
+        STANDALONE_SIDEBAR_SEPARATOR_LAYOUT_WIDTH_PX
+      : 0;
+
+  const mainHandle = () => getPanelHandle(mainBody);
+  const addTextToMainChat = (text: string): boolean => {
+    const value = String(text || "").trim();
+    if (!value) return false;
+    return (
+      mainHandle()?.addTextContext(value, {
+        source: "model",
+        focusInput: true,
+      }) === true
+    );
+  };
+  /** The tab limit, said in the main chat's footer. */
+  const reportTabLimit = () => {
+    const status = mainBody.querySelector("#llm-status") as HTMLElement | null;
+    if (status) {
+      setStatus(
+        status,
+        t(
+          "The side panel holds {count} tabs. Close one to open another.",
+        ).replace("{count}", `${SIDE_PANEL_MAX_TABS}`),
+        "warning",
+      );
+    }
+  };
+
+  const excludedKeys = () =>
+    buildSidePanelExcludedKeys(deps.getMainContext().conversationKey);
+
+  // -- Shared title row (same row as the main chat's title) -----------------
+  const createTitleRow = (title: string) => {
+    const row = createElement(doc, "div", "llm-standalone-content-title");
+    row.classList.add("llm-standalone-side-panel-title");
+    const text = createElement(
+      doc,
+      "span",
+      "llm-standalone-content-title-text",
+      { textContent: title },
+    );
+    const actions = createElement(
+      doc,
+      "div",
+      "llm-standalone-side-panel-title-actions",
+    );
+    row.append(text, actions);
+    return { row, text, actions };
+  };
+
+  const createPill = (label: string, variant: "read-only" | "temporary") => {
+    const pill = createElement(doc, "span", "llm-standalone-side-panel-pill", {
+      textContent: label,
+    });
+    pill.dataset.variant = variant;
+    return pill;
+  };
+
+  // -- Tabs in the strip ------------------------------------------------------
+  const createTab = (
+    id: string,
+    kind: "readonly" | "sidechat" | "history",
+    title: string,
+  ) => {
+    const tab = createElement(doc, "div", "llm-standalone-side-panel-tab");
+    tab.dataset.sideTabId = id;
+    tab.dataset.sideTabKind = kind;
+    tab.setAttribute("role", "tab");
+    tab.tabIndex = 0;
+    const icon = createElement(
+      doc,
+      "span",
+      `llm-standalone-side-panel-tab-icon ${
+        kind === "sidechat"
+          ? "llm-standalone-side-panel-icon-side-chat"
+          : "llm-standalone-side-panel-icon-history"
+      }`,
+    );
+    icon.setAttribute("aria-hidden", "true");
+    const tabTitle = createElement(
+      doc,
+      "span",
+      "llm-standalone-side-panel-tab-title",
+      { textContent: title },
+    );
+    tab.title = title;
+    const close = createElement(
+      doc,
+      "button",
+      "llm-standalone-side-panel-tab-close",
+      { type: "button" },
+    );
+    setButtonLabel(close, t("Close tab"));
+    tab.append(icon, tabTitle, close);
+    tab.addEventListener("click", (event) => {
+      if (
+        (event.target as Element | null)?.closest?.(
+          ".llm-standalone-side-panel-tab-close",
+        )
+      ) {
+        return;
+      }
+      focusTab(id);
+    });
+    tab.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        focusTab(id);
+      }
+    });
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      requestTabClose(id);
+    });
+    return { tab, tabTitle };
+  };
+
+  // The New tab tab: the new-tab page's own tab, with a house icon.
+  const newTabTab = (() => {
+    const tab = createElement(doc, "div", "llm-standalone-side-panel-tab");
+    tab.dataset.sideTabKind = "newtab";
+    tab.setAttribute("role", "tab");
+    tab.tabIndex = 0;
+    const icon = createElement(
+      doc,
+      "span",
+      "llm-standalone-side-panel-tab-icon llm-standalone-side-panel-icon-home",
+    );
+    icon.setAttribute("aria-hidden", "true");
+    const title = createElement(
+      doc,
+      "span",
+      "llm-standalone-side-panel-tab-title",
+      { textContent: t("New tab") },
+    );
+    tab.title = t("New tab");
+    const close = createElement(
+      doc,
+      "button",
+      "llm-standalone-side-panel-tab-close",
+      { type: "button" },
+    );
+    setButtonLabel(close, t("Close tab"));
+    tab.append(icon, title, close);
+    const show = () => setTabsState(showSidePanelNewTabPage(tabsState));
+    tab.addEventListener("click", (event) => {
+      if (
+        (event.target as Element | null)?.closest?.(
+          ".llm-standalone-side-panel-tab-close",
+        )
+      ) {
+        return;
+      }
+      show();
+    });
+    tab.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        show();
+      }
+    });
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (!tabsState.tabs.length) requestPanelClose();
+      else setTabsState(closeSidePanelNewTab(tabsState));
+    });
+    return tab;
+  })();
+
+  const setTabTitle = (view: TabView, title: string) => {
+    if (view.tabTitle.textContent === title) return;
+    view.tabTitle.textContent = title;
+    view.tab.title = title;
+    // A longer title can push the shown tab out of the strip's view.
+    if (view.tab.classList.contains("active")) revealActiveTab(view);
+  };
+  const revealActiveTab = (view: TabView) => {
+    const run = () =>
+      view.tab.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (typeof win.requestAnimationFrame === "function") {
+      win.requestAnimationFrame(run);
+    } else {
+      run();
+    }
+  };
+
+  // -- New-tab page -----------------------------------------------------------
+  // The chat start page (its title and tagline, centred in the panel) with
+  // two nav rows in the window's nav-row style in place of its notes:
+  // "Side chat" opens a new side chat tab; "History" turns this tab into
+  // the History tab.
+  // Two nav rows, in the window's nav-row style: "Side chat" opens a new
+  // side chat tab; "History" turns this tab into the History tab.
+  const createLaunchRow = (
+    kind: "sidechat" | "history",
+    iconClass: string,
+    label: string,
+    hint: string,
+  ) => {
+    const row = createElement(
+      doc,
+      "button",
+      "llm-standalone-nav-row llm-standalone-side-panel-launch-row",
+      { type: "button" },
+    );
+    row.dataset.sideLaunch = kind;
+    const icon = createElement(
+      doc,
+      "span",
+      `llm-standalone-nav-icon ${iconClass}`,
+    );
+    icon.setAttribute("aria-hidden", "true");
+    row.append(
+      icon,
+      createElement(doc, "span", "llm-standalone-nav-label", {
+        textContent: label,
+      }),
+      createElement(doc, "span", "llm-standalone-side-panel-launch-hint", {
+        textContent: hint,
+      }),
+    );
+    return row;
+  };
+  const ensureNewTabPage = () => {
+    if (newTabPage) return newTabPage;
+    const root = createElement(doc, "div", "llm-standalone-side-panel-newtab");
+    root.dataset.sideView = "newtab";
+    // As the side bodies: the standalone start page centres in its column.
+    root.dataset.standalone = "true";
+    const startPage = createElement(doc, "div", "llm-start-page");
+    startPage.append(
+      createElement(doc, "div", "llm-start-page-title", {
+        textContent: "LLM-for-Zotero",
+      }),
+      createElement(doc, "div", "llm-start-page-subtitle", {
+        textContent: t("Ask on the side, or read a past chat"),
+      }),
+    );
+    const nav = createElement(
+      doc,
+      "div",
+      "llm-standalone-primary-nav llm-standalone-side-panel-newtab-nav",
+    );
+    const sideChatRow = createLaunchRow(
+      "sidechat",
+      "llm-standalone-side-panel-icon-side-chat",
+      t("Side chat"),
+      t("Ask a quick side question. Not saved."),
+    );
+    sideChatRow.addEventListener("click", () => openNewSideChat());
+    const historyRow = createLaunchRow(
+      "history",
+      "llm-standalone-side-panel-icon-history",
+      t("History"),
+      t("Read another past chat, read-only"),
+    );
+    historyRow.addEventListener("click", () => openHistoryTab());
+    nav.append(sideChatRow, historyRow);
+    startPage.appendChild(nav);
+    root.appendChild(startPage);
+    viewHost.appendChild(root);
+    newTabPage = { root, sideChatRow, historyRow };
+    return newTabPage;
+  };
+  const destroyNewTabPage = () => {
+    newTabPage?.root.remove();
+    newTabPage = null;
+  };
+
+  // -- History tab ------------------------------------------------------------
+  // The Search history field (on the title line) and the list; a picked chat
+  // replaces this tab with its read-only tab.
+  const buildHistoryView = (id: string): HistoryTabView => {
+    const root = createElement(doc, "div", "llm-standalone-side-panel-history");
+    root.dataset.sideView = "history";
+    root.dataset.sideTabId = id;
+    const searchRow = createElement(
+      doc,
+      "div",
+      "llm-standalone-side-panel-search-row",
+    );
+    const listHost = createElement(
+      doc,
+      "div",
+      "llm-standalone-side-panel-history-list",
+    );
+    root.append(searchRow, listHost);
+    viewHost.appendChild(root);
+    const list = createEmbeddedHistorySearchList({
+      ...deps.historyList,
+      parent: listHost,
+      showSearch: true,
+      searchHost: searchRow,
+      getExcludedConversationKeys: excludedKeys,
+      onSelect: (entry) => openReadOnly(entry, id),
+    });
+    const { tab, tabTitle } = createTab(id, "history", t("History"));
+    return {
+      kind: "history",
+      id,
+      root,
+      body: root,
+      tab,
+      tabTitle,
+      confirm: null,
+      disposed: false,
+      list,
+    };
+  };
+  const disposeHistoryView = (view: HistoryTabView) => {
+    if (view.disposed) return;
+    view.disposed = true;
+    view.list.destroy();
+    view.root.remove();
+    view.tab.remove();
+  };
+  const historyView = (id: string | null) => {
+    const view = id ? views.get(id) : undefined;
+    return view?.kind === "history" ? view : null;
+  };
+  const openHistoryTab = () => {
+    const result = openHistorySidePanelTab(tabsState, nextTabId("history"));
+    if (result.refused) {
+      reportTabLimit();
+      return;
+    }
+    if (result.opened && result.tabId) {
+      views.set(result.tabId, buildHistoryView(result.tabId));
+    }
+    setTabsState(result.state);
+  };
+
+  // -- Read-only tabs -------------------------------------------------------
+  const disposeReadOnlyView = (view: ReadOnlyTabView) => {
+    if (view.disposed) return;
+    view.disposed = true;
+    // Another read-only tab never holds the same key (picking it focuses
+    // the open tab), so this view owns the borrowed copy.
+    const ownsHistory =
+      view.addedMessages !== null &&
+      chatHistory.get(view.conversationKey) === view.addedMessages;
+    if (ownsHistory) {
+      readOnlyBorrowedConversationKeys.delete(view.conversationKey);
+      if (!loadedConversationKeys.has(view.conversationKey)) {
+        chatHistory.delete(view.conversationKey);
+      }
+    }
+    // The view's renders wrote this conversation's scroll state; put back
+    // what the main chat had, or nothing if it had none. When the main chat
+    // now shows this conversation, its own scroll state stays.
+    if (deps.getMainContext().conversationKey !== view.conversationKey) {
+      restoreChatScrollStateForConversationKey(
+        view.conversationKey,
+        view.savedScroll,
+      );
+    }
+    disposeChatRendering(view.body);
+    clearChatPanelExtensions(view.body);
+    setResponseActionRunner(view.body, null);
+    view.root.remove();
+    view.tab.remove();
+  };
+
+  const configureReadOnlyComposer = (view: ReadOnlyTabView) => {
+    const body = view.body;
+    const inputSection = body.querySelector(
+      ".llm-input-section",
+    ) as HTMLElement | null;
+    if (inputSection) inputSection.dataset.sideReadOnly = "true";
+    for (const control of Array.from(
+      inputSection?.querySelectorAll("button, input, textarea, select") || [],
+    )) {
+      (control as HTMLButtonElement).disabled = true;
+    }
+    const input = body.querySelector(
+      "#llm-input",
+    ) as HTMLTextAreaElement | null;
+    if (input) {
+      input.placeholder = t(
+        "This chat is read-only. Open it as your main chat to keep going.",
+      );
+      input.readOnly = true;
+      input.disabled = true;
+    }
+    // No Chat/Agent switch, model, or send controls: nothing can be sent.
+    for (const selector of [
+      "#llm-runtime-mode-toggle",
+      ".llm-actions-left",
+      ".llm-actions-right",
+    ]) {
+      const element = body.querySelector(selector) as HTMLElement | null;
+      if (element) element.style.display = "none";
+    }
+    // The context row shows the chat's paper, as the main chat would, but
+    // greyed: nothing here can change it.
+    const paper = deps.resolveHistoryEntryPaper(view.entry);
+    const paperContext =
+      view.entry.kind === "paper"
+        ? resolvePaperContextRefFromItem(paper)
+        : null;
+    const paperPreview = body.querySelector(
+      "#llm-paper-context-preview",
+    ) as HTMLElement | null;
+    const paperList = body.querySelector(
+      "#llm-paper-context-list",
+    ) as HTMLElement | null;
+    if (paperContext && paperPreview && paperList) {
+      const mode = paperContext.contentSourceMode || "text";
+      const chip = createElement(
+        doc,
+        "div",
+        `llm-selected-context llm-paper-context-chip llm-paper-context-chip-static llm-paper-context-chip-autoloaded collapsed ${getContextSourceModeCssClassName(mode)}`,
+      );
+      chip.dataset.sideReadOnlyChip = "true";
+      chip.setAttribute("aria-disabled", "true");
+      const header = createElement(
+        doc,
+        "div",
+        "llm-image-preview-header llm-selected-context-header llm-paper-context-chip-header",
+      );
+      const label = createElement(doc, "span", "llm-paper-context-chip-label", {
+        title: paperContext.title || "",
+      });
+      label.append(
+        createContextIcon(doc, "paper", "llm-paper-context-chip-icon"),
+        createElement(doc, "span", "llm-paper-context-chip-text", {
+          textContent: formatPaperContextChipLabel(paperContext, mode),
+        }),
+      );
+      header.appendChild(label);
+      chip.appendChild(header);
+      paperList.replaceChildren(chip);
+      // As the main chat shows its chips (setupHandlers' preview render).
+      paperPreview.style.display = "contents";
+      paperList.style.display = "contents";
+    }
+    const actionsRow = body.querySelector(".llm-actions") as HTMLElement | null;
+    if (actionsRow) {
+      const group = createElement(
+        doc,
+        "div",
+        "llm-standalone-side-panel-readonly-actions",
+      );
+      if (view.entry.kind === "paper" && paper) {
+        const addPaper = createElement(
+          doc,
+          "button",
+          "llm-shortcut-btn llm-action-btn llm-action-btn-secondary",
+          { type: "button", textContent: t("Add this paper to main chat") },
+        );
+        addPaper.dataset.sideReadOnlyAction = "add-paper";
+        addPaper.addEventListener("click", () => {
+          void mainHandle()?.addItemsAsDefaultContext([paper]);
+        });
+        group.appendChild(addPaper);
+      }
+      const openMain = createElement(
+        doc,
+        "button",
+        "llm-shortcut-btn llm-action-btn llm-action-btn-primary",
+        { type: "button", textContent: t("Open as main chat") },
+      );
+      openMain.dataset.sideReadOnlyAction = "open-main";
+      openMain.addEventListener("click", () => {
+        const entry = view.entry;
+        const previousKey = deps.getMainContext().conversationKey;
+        const index = tabsState.tabs.findIndex((tab) => tab.id === view.id);
+        // Drop the read-only copy first so the main chat loads its own.
+        closeTabNow(view.id);
+        void (async () => {
+          if (!(await deps.openAsMainChat(entry))) {
+            // The switch failed (the main chat says why): the tab comes back.
+            restoreReadOnlyTab(entry, index);
+            return;
+          }
+          await showPreviousMainChat(previousKey, index);
+        })().catch((err) => {
+          appLogger.warn("LLM: side panel open as main chat failed", err);
+        });
+      });
+      group.appendChild(openMain);
+      actionsRow.appendChild(group);
+    }
+    const status = body.querySelector("#llm-status") as HTMLElement | null;
+    if (status) setNeutralStatus(status, t("Read-only"));
+    const footerControls = body.querySelector(
+      ".llm-footer-controls",
+    ) as HTMLElement | null;
+    if (footerControls) footerControls.style.display = "none";
+  };
+
+  const buildReadOnlyView = (
+    id: string,
+    entry: ConversationHistoryEntry,
+    item: Zotero.Item,
+  ): ReadOnlyTabView => {
+    const savedScroll = saveChatScrollStateForConversationKey(
+      entry.conversationKey,
+    );
+    const title = entry.title || t("Untitled chat");
+    const root = createElement(
+      doc,
+      "div",
+      "llm-standalone-side-panel-readonly",
+    );
+    root.dataset.sideView = "readonly";
+    root.dataset.sideTabId = id;
+    const { row, actions } = createTitleRow(title);
+    actions.appendChild(createPill(t("Read-only"), "read-only"));
+    const body = createElement(
+      doc,
+      "div",
+      "llm-standalone-side-body llm-standalone-side-readonly-body",
+    );
+    body.dataset.standalone = "true";
+    body.dataset.sideReadOnly = "true";
+    root.append(row, body);
+    viewHost.appendChild(root);
+    buildUI(body, item);
+    const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
+    if (panelRoot) panelRoot.dataset.standalone = "true";
+    applyPanelFontScale(panelRoot);
+    const { tab, tabTitle } = createTab(id, "readonly", title);
+    const view: ReadOnlyTabView = {
+      kind: "readonly",
+      id,
+      root,
+      body,
+      tab,
+      tabTitle,
+      confirm: null,
+      disposed: false,
+      entry,
+      item,
+      conversationKey: entry.conversationKey,
+      addedMessages: null,
+      savedScroll,
+    };
+    setChatPanelExtensions(body, {
+      readOnly: true,
+      extraAssistantActions: [
+        {
+          id: "quote-main",
+          label: t("Quote in main chat"),
+          run: (info) => {
+            addTextToMainChat(info.contentText);
+          },
+        },
+      ],
+    });
+    setResponseActionRunner(body, async (action, target) => {
+      if (!target) return;
+      const status = body.querySelector("#llm-status") as HTMLElement | null;
+      if (action === "copy" && target.contentText.trim()) {
+        await copyRenderedMarkdownToClipboard(
+          body,
+          target.contentText,
+          target.quoteCitations,
+        );
+        if (status) setStatus(status, t("Copied response"), "ready");
+      } else if (action === "expand") {
+        openStandaloneResponseDocument(body, target);
+      }
+    });
+    configureReadOnlyComposer(view);
+    void (async () => {
+      const key = view.conversationKey;
+      try {
+        if (!chatHistory.has(key) && !loadedConversationKeys.has(key)) {
+          const messages = await loadConversationMessagesForReadOnlyView(
+            key,
+            deps.getMainContext().conversationSystem,
+          );
+          if (view.disposed) return;
+          if (!chatHistory.has(key) && !loadedConversationKeys.has(key)) {
+            chatHistory.set(key, messages);
+            // Display-only copy: a real load must replace it, not trust it.
+            readOnlyBorrowedConversationKeys.add(key);
+            view.addedMessages = messages;
+          }
+        }
+        if (view.disposed) return;
+        refreshChat(body, item);
+      } catch (err) {
+        appLogger.warn("LLM: side panel read-only load failed", err);
+      }
+    })();
+    return view;
+  };
+
+  /**
+   * A past chat opens in a read-only tab, or focuses its open tab. Picked
+   * in the History tab, it replaces that tab.
+   */
+  const openReadOnly = (
+    entry: ConversationHistoryEntry,
+    fromHistoryId?: string,
+  ): boolean => {
+    const result = openReadOnlySidePanelTab(tabsState, {
+      id: nextTabId("readonly"),
+      conversationKey: entry.conversationKey,
+      replaceId: fromHistoryId,
+    });
+    if (result.refused) {
+      reportTabLimit();
+      return false;
+    }
+    if (result.opened && result.tabId) {
+      const item = deps.buildHistoryEntryItem(entry);
+      if (!item) return false;
+      views.set(result.tabId, buildReadOnlyView(result.tabId, entry, item));
+    }
+    const replaced = historyView(fromHistoryId ?? null);
+    if (replaced && !result.state.tabs.some((tab) => tab.id === replaced.id)) {
+      views.delete(replaced.id);
+      disposeHistoryView(replaced);
+    }
+    setTabsState(result.state);
+    return true;
+  };
+
+  /** Open `entry` read-only again at `index` in the strip. */
+  const restoreReadOnlyTab = (
+    entry: ConversationHistoryEntry,
+    index: number,
+  ) => {
+    if (disposed || !tabsState.open || !openReadOnly(entry)) return;
+    const tab = tabsState.tabs.find(
+      (candidate) =>
+        candidate.kind === "readonly" &&
+        candidate.conversationKey === entry.conversationKey,
+    );
+    if (tab && index >= 0)
+      setTabsState(moveSidePanelTab(tabsState, tab.id, index));
+  };
+
+  /**
+   * After "Open as main chat", the chat the main column showed before takes
+   * the opened chat's place as a read-only tab, so both stay in view. A
+   * chat with no saved turns has no history entry and opens no tab.
+   */
+  const showPreviousMainChat = async (previousKey: number, index: number) => {
+    if (disposed || !tabsState.open) return;
+    if (!Number.isFinite(previousKey) || previousKey <= 0) return;
+    if (previousKey === deps.getMainContext().conversationKey) return;
+    const entries = await deps.historyList.loadEntries();
+    if (disposed || !tabsState.open) return;
+    const previous = entries.find(
+      (candidate) => candidate.conversationKey === previousKey,
+    );
+    if (previous) restoreReadOnlyTab(previous, index);
+  };
+
+  // -- Side chat tabs -------------------------------------------------------
+  const sideChatMessages = (view: SideChatTabView | null | undefined) =>
+    view ? chatHistory.get(view.conversationKey) || [] : [];
+  const sideChatViews = () =>
+    [...views.values()].filter(
+      (view): view is SideChatTabView => view.kind === "sidechat",
+    );
+  const sideChatView = (id: string | null) => {
+    const view = id ? views.get(id) : undefined;
+    return view?.kind === "sidechat" ? view : null;
+  };
+
+  const registerBackgroundProvider = (conversationKey: number) => {
+    setEphemeralBackgroundContextProvider(conversationKey, () => {
+      const mainKey = deps.getMainContext().conversationKey;
+      const text = buildMainChatBackgroundContext(
+        chatHistory.get(mainKey) || [],
+      );
+      return text || null;
+    });
+  };
+
+  const renderContextNotes = (view: SideChatTabView, chatBox: HTMLElement) => {
+    if (view.disposed) return;
+    for (const old of Array.from(
+      chatBox.querySelectorAll(`.${SIDE_CHAT_CONTEXT_NOTE_CLASS}`),
+    ) as Element[]) {
+      old.remove();
+    }
+    view.clearButton.disabled = isEphemeralConversationBusy(
+      view.conversationKey,
+    );
+    // The tab is titled by the chat's first question once it is asked.
+    setTabTitle(
+      view,
+      resolveSideChatTabTitle(sideChatMessages(view), t("Side chat")),
+    );
+    if (!view.notes.length) return;
+    const wrappers = Array.from(
+      chatBox.querySelectorAll(".llm-message-wrapper[data-message-index]"),
+    ) as HTMLElement[];
+    if (!wrappers.length) return;
+    const byIndex = new Map<number, HTMLElement>();
+    for (const wrapper of wrappers) {
+      byIndex.set(Number(wrapper.dataset.messageIndex), wrapper);
+    }
+    const anchors = resolveSideChatContextNoteAnchors(view.notes, [
+      ...byIndex.keys(),
+    ]);
+    for (const anchor of anchors) {
+      const note = createElement(doc, "div", SIDE_CHAT_CONTEXT_NOTE_CLASS);
+      note.setAttribute("role", "note");
+      note.appendChild(
+        createElement(doc, "span", "llm-side-chat-context-note-text", {
+          textContent: anchor.text,
+        }),
+      );
+      if (anchor.afterMessageIndex === null) {
+        wrappers[0].before(note);
+      } else {
+        const wrapper = byIndex.get(anchor.afterMessageIndex);
+        // Keep notes in their own order when two share one anchor.
+        let after: Element | null = wrapper || null;
+        while (
+          after?.nextElementSibling?.classList.contains(
+            SIDE_CHAT_CONTEXT_NOTE_CLASS,
+          )
+        ) {
+          after = after.nextElementSibling;
+        }
+        after?.after(note);
+      }
+    }
+  };
+
+  const hideTabConfirm = (view: TabView) => {
+    view.confirm?.remove();
+    view.confirm = null;
+  };
+
+  const mountSideChatBody = (view: SideChatTabView) => {
+    hideTabConfirm(view);
+    const { body, context, conversationKey } = view;
+    if (body.childElementCount) {
+      disposeMountedPanelBody(body);
+      body.replaceChildren();
+    }
+    const item =
+      context.kind === "paper" && view.basePaperItem
+        ? createPaperPortalItem(view.basePaperItem, conversationKey, 1)
+        : createGlobalPortalItem(context.libraryID, conversationKey);
+    view.item = item;
+    markSidePanelBody(body);
+    const panelRoot = mountPanelShell({
+      body,
+      renderItem: item,
+      beforeRegister: () => markSidePanelBody(body, item),
+      getMountedItem: () => item,
+      rawItem: context.kind === "paper" ? view.basePaperItem : null,
+      setupItem: item,
+    });
+    setChatPanelExtensions(body, {
+      sideChat: true,
+      extraAssistantActions: [
+        {
+          id: "send-main",
+          label: t("Send to main chat"),
+          run: (info) => {
+            addTextToMainChat(info.contentText);
+          },
+        },
+      ],
+      afterRender: (chatBox) => renderContextNotes(view, chatBox),
+    });
+    refreshChat(body, item);
+    applyPanelFontScale(panelRoot);
+    if (context.kind === "paper") void renderShortcuts(body, item, "paper");
+    const input = body.querySelector(
+      "#llm-input",
+    ) as HTMLTextAreaElement | null;
+    if (input && !input.disabled) {
+      input.placeholder =
+        context.kind === "paper"
+          ? t("Ask a side question about this paper...")
+          : t("Ask a side question about your library...");
+    }
+    registerBackgroundProvider(conversationKey);
+    void ensureConversationLoaded(item, { body })
+      .then(() => {
+        if (view.disposed || view.item !== item) return;
+        refreshChat(body, item);
+      })
+      .catch((err) => {
+        appLogger.warn("LLM: side chat load failed", err);
+      });
+  };
+
+  const resolveCurrentSideChatContext = () => {
+    const main = deps.getMainContext();
+    return {
+      context: resolveSideChatContext({
+        mode: main.mode,
+        basePaperItemID: Number(main.basePaperItem?.id || 0),
+        libraryID: main.libraryID,
+      }),
+      basePaperItem: main.basePaperItem,
+    };
+  };
+
+  const buildSideChatView = (id: string): SideChatTabView => {
+    const { context, basePaperItem } = resolveCurrentSideChatContext();
+    const conversationKey =
+      context.kind === "paper"
+        ? allocateEphemeralPaperConversationKey()
+        : allocateEphemeralGlobalConversationKey();
+    const root = createElement(doc, "div", "llm-standalone-side-panel-chat");
+    root.dataset.sideView = "sidechat";
+    root.dataset.sideTabId = id;
+    const { row, actions } = createTitleRow(t("Side chat"));
+    row
+      .querySelector(".llm-standalone-content-title-text")
+      ?.after(createPill(t("Temporary"), "temporary"));
+    const clearButton = createIconButton(
+      doc,
+      "llm-standalone-side-panel-icon-clear",
+      t("Clear side chat"),
+    );
+    actions.appendChild(clearButton);
+    const body = createElement(doc, "div", "llm-standalone-side-body");
+    body.dataset.standalone = "true";
+    root.append(row, body);
+    viewHost.appendChild(root);
+    // The first side chat starts from the window's model and reasoning
+    // choices; later ones share the side chats' choices.
+    if (!sideChatViews().length) startSideSurfaceChoicesFromStandalone();
+    const { tab, tabTitle } = createTab(id, "sidechat", t("Side chat"));
+    const view: SideChatTabView = {
+      kind: "sidechat",
+      id,
+      root,
+      body,
+      tab,
+      tabTitle,
+      confirm: null,
+      disposed: false,
+      clearButton,
+      conversationKey,
+      context,
+      basePaperItem: context.kind === "paper" ? basePaperItem : null,
+      item: null,
+      notes: [],
+      followRetryTimer: null,
+    };
+    clearButton.addEventListener("click", () => clearSideChat(view));
+    return view;
+  };
+
+  const stopSideChatRequest = (view: SideChatTabView) => {
+    if (!isEphemeralConversationBusy(view.conversationKey)) return;
+    const cancel = view.body.querySelector(
+      "#llm-cancel",
+    ) as HTMLButtonElement | null;
+    try {
+      cancel?.click();
+    } catch (err) {
+      appLogger.warn("LLM: side chat cancel failed", err);
+    }
+    try {
+      getAbortController(view.conversationKey)?.abort();
+    } catch {
+      // Already aborted.
+    }
+  };
+
+  const clearSideChat = (view: SideChatTabView) => {
+    if (view.disposed || isEphemeralConversationBusy(view.conversationKey)) {
+      return;
+    }
+    hideTabConfirm(view);
+    discardEphemeralConversation(view.conversationKey);
+    chatHistory.set(view.conversationKey, []);
+    loadedConversationKeys.add(view.conversationKey);
+    registerBackgroundProvider(view.conversationKey);
+    view.notes = [];
+    if (view.item) refreshChat(view.body, view.item);
+  };
+
+  const disposeSideChatView = (view: SideChatTabView) => {
+    if (view.disposed) return;
+    if (view.followRetryTimer !== null) {
+      win.clearTimeout(view.followRetryTimer);
+      view.followRetryTimer = null;
+    }
+    stopSideChatRequest(view);
+    view.disposed = true;
+    disposeMountedPanelBody(view.body);
+    clearChatPanelExtensions(view.body);
+    clearEphemeralBackgroundContextProvider(view.conversationKey);
+    discardEphemeralConversation(view.conversationKey);
+    view.root.remove();
+    view.tab.remove();
+  };
+
+  const followMainContext = (view: SideChatTabView) => {
+    if (view.disposed || disposed) return;
+    const { context, basePaperItem } = resolveCurrentSideChatContext();
+    if (isSameSideChatContext(view.context, context)) return;
+    if (isEphemeralConversationBusy(view.conversationKey)) {
+      // Move the chat once its answer ends.
+      if (view.followRetryTimer === null) {
+        view.followRetryTimer = win.setTimeout(() => {
+          view.followRetryTimer = null;
+          followMainContext(view);
+        }, CONTEXT_FOLLOW_RETRY_MS);
+      }
+      return;
+    }
+    const nextKey =
+      context.kind === "paper"
+        ? allocateEphemeralPaperConversationKey()
+        : allocateEphemeralGlobalConversationKey();
+    if (!moveEphemeralConversation(view.conversationKey, nextKey)) {
+      appLogger.warn("LLM: side chat context move refused", {
+        from: view.conversationKey,
+        to: nextKey,
+      });
+      return;
+    }
+    const messageCount = (chatHistory.get(nextKey) || []).length;
+    const noteText =
+      context.kind === "paper"
+        ? t(
+            "Context switched to {paper}. New questions use this paper.",
+          ).replace("{paper}", resolvePaperDisplayTitle(basePaperItem))
+        : t(
+            "Context switched to My Library. New questions use your whole library.",
+          );
+    view.notes = appendSideChatContextNote(view.notes, messageCount, noteText);
+    // New questions use the new paper or library only: do not restore the
+    // earlier turns' paper chips into the composer.
+    composeContextStore.initializedConversations.mark(nextKey);
+    view.conversationKey = nextKey;
+    view.context = context;
+    view.basePaperItem = context.kind === "paper" ? basePaperItem : null;
+    mountSideChatBody(view);
+  };
+
+  /** Opens a new side chat tab; null when the panel is full. */
+  const openNewSideChat = (): SideChatTabView | null => {
+    const id = nextTabId("sidechat");
+    const result = openSideChatSidePanelTab(openSidePanel(tabsState), id);
+    if (result.refused) {
+      reportTabLimit();
+      return null;
+    }
+    const view = buildSideChatView(id);
+    views.set(id, view);
+    setTabsState(result.state);
+    // Mounted while shown, so the composer lays out at the panel's width.
+    mountSideChatBody(view);
+    return view;
+  };
+
+  const askInSideChat = (text: string) => {
+    const opened = openSidePanel(tabsState);
+    const targetId = resolveAskInSideChatTab(opened);
+    let view = sideChatView(targetId);
+    if (view) {
+      setTabsState(focusSidePanelTab(opened, view.id));
+    } else {
+      view = openNewSideChat();
+    }
+    if (!view) return;
+    getPanelHandle(view.body)?.addTextContext(text, {
+      source: "model",
+      focusInput: true,
+    });
+  };
+
+  // -- Closing a tab --------------------------------------------------------
+  const createConfirmCard = (params: {
+    className: string;
+    message: string;
+    actions: Array<{
+      label: string;
+      action: string;
+      variant: "secondary" | "danger";
+      disabled?: boolean;
+      run: () => void;
+    }>;
+  }) => {
+    const card = createElement(
+      doc,
+      "div",
+      `llm-action-inline-card ${params.className}`,
+    );
+    card.setAttribute("role", "alertdialog");
+    const content = createElement(doc, "div", "llm-agent-hitl-content");
+    const message = createElement(doc, "div", "llm-agent-hitl-description", {
+      textContent: params.message,
+    });
+    const actions = createElement(doc, "div", "llm-agent-hitl-actions");
+    const buttons = params.actions.map((entry) => {
+      const element = createElement(
+        doc,
+        "button",
+        `llm-agent-hitl-btn llm-agent-hitl-btn-${entry.variant}`,
+        { type: "button", textContent: entry.label },
+      );
+      element.dataset.confirmAction = entry.action;
+      element.disabled = entry.disabled === true;
+      element.addEventListener("click", () => entry.run());
+      return element;
+    });
+    actions.append(...buttons);
+    content.append(message, actions);
+    card.appendChild(content);
+    return { card, first: buttons[0] };
+  };
+
+  const showTabCloseConfirm = (view: SideChatTabView) => {
+    if (view.confirm?.isConnected) return;
+    const { card, first } = createConfirmCard({
+      className: "llm-side-chat-close-confirm",
+      message: t(
+        "Close this side chat? It is not saved, so these messages will be gone.",
+      ),
+      actions: [
+        {
+          label: t("Keep it open"),
+          action: "keep",
+          variant: "secondary",
+          run: () => hideTabConfirm(view),
+        },
+        {
+          label: t("Send last answer to main chat"),
+          action: "send-last",
+          variant: "secondary",
+          disabled: findLastFinishedAnswerText(sideChatMessages(view)) === null,
+          run: () => {
+            const text = findLastFinishedAnswerText(sideChatMessages(view));
+            if (text) addTextToMainChat(text);
+            closeTabNow(view.id);
+          },
+        },
+        {
+          label: t("Close and discard"),
+          action: "discard",
+          variant: "danger",
+          run: () => closeTabNow(view.id),
+        },
+      ],
+    });
+    const inputSection = view.body.querySelector(
+      ".llm-input-section",
+    ) as HTMLElement | null;
+    if (inputSection?.parentElement) {
+      inputSection.parentElement.insertBefore(card, inputSection);
+    } else {
+      view.body.appendChild(card);
+    }
+    view.confirm = card;
+    first?.focus();
+  };
+
+  const requestTabClose = (id: string) => {
+    const view = views.get(id);
+    if (!view) return;
+    if (
+      view.kind === "sidechat" &&
+      resolveSidePanelCloseDecision({
+        messageCount: sideChatMessages(view).length,
+      }) === "confirm"
+    ) {
+      focusTab(id);
+      showTabCloseConfirm(view);
+      return;
+    }
+    closeTabNow(id);
+  };
+
+  const disposeView = (view: TabView) => {
+    if (view.kind === "sidechat") disposeSideChatView(view);
+    else if (view.kind === "history") disposeHistoryView(view);
+    else disposeReadOnlyView(view);
+  };
+
+  const closeTabNow = (id: string) => {
+    const view = views.get(id);
+    if (!view) return;
+    views.delete(id);
+    disposeView(view);
+    setTabsState(closeSidePanelTab(tabsState, id));
+  };
+
+  const focusTab = (id: string) => {
+    setTabsState(focusSidePanelTab(tabsState, id));
+  };
+
+  // -- Closing the panel ------------------------------------------------------
+  const hidePanelConfirm = () => {
+    panelConfirm?.remove();
+    panelConfirm = null;
+  };
+
+  const showPanelCloseConfirm = (count: number) => {
+    hidePanelConfirm();
+    const message =
+      count === 1
+        ? t(
+            "Close the side panel? 1 side chat is not saved, so its messages will be gone.",
+          )
+        : t(
+            "Close the side panel? {count} side chats are not saved, so their messages will be gone.",
+          ).replace("{count}", `${count}`);
+    const { card, first } = createConfirmCard({
+      className: "llm-side-panel-close-confirm",
+      message,
+      actions: [
+        {
+          label: t("Keep it open"),
+          action: "panel-keep",
+          variant: "secondary",
+          run: () => hidePanelConfirm(),
+        },
+        {
+          label: t("Close and discard"),
+          action: "panel-discard",
+          variant: "danger",
+          run: () => closePanelNow(),
+        },
+      ],
+    });
+    column.insertBefore(card, viewHost);
+    panelConfirm = card;
+    first?.focus();
+  };
+
+  const requestPanelClose = () => {
+    const unsaved = sideChatViews().filter(
+      (view) =>
+        resolveSidePanelCloseDecision({
+          messageCount: sideChatMessages(view).length,
+        }) === "confirm",
+    ).length;
+    if (unsaved > 0) {
+      showPanelCloseConfirm(unsaved);
+      return;
+    }
+    closePanelNow();
+  };
+
+  const disposeAllViews = () => {
+    for (const view of [...views.values()]) disposeView(view);
+    views.clear();
+    destroyNewTabPage();
+    hidePanelConfirm();
+  };
+
+  /** Closes the panel; its tabs are dropped once the close slide ends. */
+  const closePanelNow = () => {
+    hidePanelConfirm();
+    setTabsState(closeSidePanel());
+  };
+
+  // -- Rendering ------------------------------------------------------------
+  /** The close slide runs: the panel still shows what it showed. */
+  let closing = false;
+  const renderToggle = () => {
+    const open = isOpen();
+    toggleButton.setAttribute("aria-expanded", open ? "true" : "false");
+    setButtonLabel(
+      toggleButton,
+      open ? t("Close side panel") : t("Open side panel"),
+    );
+  };
+  const render = () => {
+    renderToggle();
+    if (closing) return;
+    const open = isOpen();
+    column.hidden = !open;
+    if (open) syncChromeGap();
+    splitter.hidden = !open;
+    lowerArea.classList.toggle("llm-standalone-side-panel-open", open);
+    const activeView = tabsState.activeId
+      ? views.get(tabsState.activeId) || null
+      : null;
+    column.dataset.sideView = !open
+      ? "closed"
+      : activeView
+        ? activeView.kind
+        : "newtab";
+    // The strip lists the tabs in order; the "+" button follows it.
+    const tabs = tabsState.tabs
+      .map((tab) => views.get(tab.id))
+      .filter((view): view is TabView => Boolean(view));
+    for (const [index, view] of tabs.entries()) {
+      if (strip.children[index] !== view.tab) {
+        strip.insertBefore(view.tab, strip.children[index] || null);
+      }
+      const active = view === activeView;
+      view.tab.classList.toggle("active", active);
+      view.tab.setAttribute("aria-selected", active ? "true" : "false");
+      view.root.hidden = !active;
+    }
+    // The New tab tab, when open, is the last one; it is the shown tab
+    // whenever no other tab is.
+    if (tabsState.newTabOpen) {
+      if (strip.children[tabs.length] !== newTabTab) {
+        strip.insertBefore(newTabTab, strip.children[tabs.length] || null);
+      }
+      newTabTab.classList.toggle("active", !activeView);
+      newTabTab.setAttribute("aria-selected", !activeView ? "true" : "false");
+    } else {
+      newTabTab.remove();
+    }
+    strip.hidden = !open;
+    newTabButton.hidden = !open;
+    const full = !canOpenSidePanelTab(tabsState);
+    if (open && !activeView) {
+      const page = ensureNewTabPage();
+      page.root.hidden = false;
+      page.sideChatRow.disabled = full;
+      page.historyRow.disabled =
+        full && !tabsState.tabs.some((tab) => tab.kind === "history");
+    } else if (newTabPage) {
+      newTabPage.root.hidden = true;
+    }
+    if (activeView) revealActiveTab(activeView);
+    else if (open) {
+      const run = () =>
+        newTabTab.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      if (typeof win.requestAnimationFrame === "function") {
+        win.requestAnimationFrame(run);
+      } else {
+        run();
+      }
+    }
+  };
+
+  /** Opening: the window grows and uncovers the panel. */
+  const slideOpen = () => {
+    const fromMainWidth = mainColumnWidth();
+    const toOuterWidth = planWindowWidthForPanel(
+      resize.getPreferredWidth() + STANDALONE_SIDEBAR_SEPARATOR_LAYOUT_WIDTH_PX,
+    );
+    resize.relayout();
+    render();
+    const panelWidth = readPixelVariable(lowerArea, SIDE_PANEL_WIDTH_VARIABLE);
+    const gained = toOuterWidth - outerWidthNow();
+    runSlide({
+      toOuterWidth,
+      fromMainWidth,
+      // What the screen cannot give, the main column gives.
+      toMainWidth: Math.max(
+        0,
+        fromMainWidth - Math.max(0, panelLayoutWidth() - gained),
+      ),
+      panelWidth,
+      onDone: () => deps.onLayoutChanged(),
+    });
+  };
+
+  /**
+   * Closing: the window shrinks back (or the main column grows, if the user
+   * kept the width) over the panel, which keeps its content until the end.
+   */
+  const slideClose = () => {
+    const closingViews = [...views.values()];
+    const fromMainWidth = mainColumnWidth();
+    const panelWidth = readPixelVariable(lowerArea, SIDE_PANEL_WIDTH_VARIABLE);
+    const occupied = panelLayoutWidth();
+    const fromOuterWidth = pendingOuterWidth ?? outerWidthNow();
+    const toOuterWidth = planGiveBackWindowWidth();
+    const givenBack = Math.max(0, fromOuterWidth - toOuterWidth);
+    closing = true;
+    runSlide({
+      toOuterWidth,
+      fromMainWidth,
+      toMainWidth: fromMainWidth + Math.max(0, occupied - givenBack),
+      panelWidth,
+      onDone: () => {
+        closing = false;
+        for (const view of closingViews) {
+          if (views.get(view.id) === view) views.delete(view.id);
+          disposeView(view);
+        }
+        if (!isOpen()) {
+          destroyNewTabPage();
+          hidePanelConfirm();
+        }
+        render();
+        deps.onLayoutChanged();
+      },
+    });
+  };
+
+  const setTabsState = (next: SidePanelTabsState) => {
+    if (disposed) return;
+    const wasOpen = isOpen();
+    const wasActiveId = wasOpen ? tabsState.activeId : undefined;
+    // A slide still running ends at once before the next one starts.
+    if (next.open !== wasOpen) finishSlide();
+    tabsState = next;
+    if (isOpen() && !wasOpen) {
+      slideOpen();
+    } else if (!isOpen() && wasOpen) {
+      slideClose();
+      renderToggle();
+      deps.onLayoutChanged();
+      return;
+    }
+    render();
+    // The History tab's list reloads each time it comes into view.
+    if (isOpen() && tabsState.activeId !== wasActiveId) {
+      historyView(tabsState.activeId)?.list.refresh();
+    }
+    if (isOpen() !== wasOpen) deps.onLayoutChanged();
+  };
+
+  toggleButton.addEventListener("click", () => {
+    if (isOpen()) requestPanelClose();
+    else setTabsState(openSidePanel(tabsState));
+  });
+  closeButton.addEventListener("click", () => requestPanelClose());
+  newTabButton.addEventListener("click", () =>
+    setTabsState(showSidePanelNewTabPage(tabsState)),
+  );
+
+  // -- Main-chat registrations ---------------------------------------------
+  const slashSideChat = () =>
+    sideChatView(
+      resolveSlashSideChatTab(tabsState, (id) =>
+        hasFinishedAnswer(sideChatMessages(sideChatView(id))),
+      ),
+    );
+  const applyMainExtensions = () => {
+    updateChatPanelExtensions(mainBody, {
+      extraAssistantActions: [
+        {
+          id: "ask-side",
+          label: t("Ask in side chat"),
+          run: (info) => askInSideChat(info.contentText),
+        },
+      ],
+      sideChatSlashItem: {
+        getState: () => {
+          const view = slashSideChat();
+          return view
+            ? {
+                available: true,
+                title: resolveSideChatTabTitle(
+                  sideChatMessages(view),
+                  t("Side chat"),
+                ),
+              }
+            : { available: false };
+        },
+        attach: () => {
+          const text = buildSideChatTranscriptContext(
+            sideChatMessages(slashSideChat()),
+          );
+          if (!text) return;
+          mainHandle()?.addTextContext(text, {
+            source: "sidechat",
+            focusInput: true,
+          });
+        },
+      },
+    });
+  };
+  applyMainExtensions();
+  render();
+
+  return {
+    toggleButton,
+    column,
+    splitter,
+    isOpen,
+    getOccupiedWidth,
+    getPendingWindowWidthChange,
+    relayout: () => {
+      resize.relayout();
+      if (isOpen()) syncChromeGap();
+    },
+    onMainMounted: () => {
+      if (disposed) return;
+      applyMainExtensions();
+      for (const view of sideChatViews()) followMainContext(view);
+      if (isOpen()) historyView(tabsState.activeId)?.list.refresh();
+    },
+    dispose: () => {
+      if (disposed) return;
+      if (slide?.frameId != null) win.cancelAnimationFrame?.(slide.frameId);
+      slide = null;
+      closing = false;
+      disposeAllViews();
+      disposed = true;
+      resize.dispose();
+      themeObserver?.disconnect();
+      win.removeEventListener("resize", onWindowResize);
+      win.removeEventListener("resize", onWindowResizeSettle);
+      if (pendingTimer !== null) win.clearTimeout(pendingTimer);
+      updateChatPanelExtensions(mainBody, {
+        extraAssistantActions: undefined,
+        sideChatSlashItem: undefined,
+      });
+      resetSideSurfaceChoices();
+    },
+  };
+}

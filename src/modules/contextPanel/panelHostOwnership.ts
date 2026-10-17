@@ -12,7 +12,7 @@ import { getConversationKey } from "./conversationIdentity";
 import type { ConversationSystem } from "../../shared/types";
 import type { SelectionSurface } from "./conversationSelection";
 
-export type PanelHostSurface = "reader" | "library" | "standalone";
+export type PanelHostSurface = "reader" | "library" | "standalone" | "side";
 
 export type PanelHostBinding = {
   surface: PanelHostSurface;
@@ -181,6 +181,62 @@ export function bindStandalonePanelHost(
   });
 }
 
+/**
+ * The standalone window's temporary side chat. Like the window's own panel,
+ * its mount controller owns its changing target, so any scope belongs to it.
+ */
+export function bindSidePanelHost(
+  body: Element,
+  item: Zotero.Item | null | undefined,
+): PanelHostBinding {
+  return commitHostBinding(body, {
+    surface: "side",
+    tabType: "side",
+    tabID: "",
+    libraryID: normalizePositiveInt(item?.libraryID),
+    rawItemID: normalizePositiveInt(item?.id),
+    basePaperItemID: getRawBasePaperItemID(item),
+    noteID: 0,
+    noteParentItemID: 0,
+  });
+}
+
+/**
+ * The one way a panel body declares itself the window's side chat. It sets
+ * `data-side-panel` (and `data-standalone`, so it looks like the window's
+ * panel) on the body and on its `#llm-main` root when that exists, and, given
+ * the mounted item, binds the side host. A side body:
+ * - resolves to the "side" selection surface (no slot, no pref writes);
+ * - passes panel ownership like the window's panel;
+ * - does not restore a paper conversation on mount;
+ * - never registers as a Zotero "Add as context" target.
+ * Call it before buildUI/setupHandlers, and again with the item once mounted.
+ */
+export function markSidePanelBody(
+  body: Element,
+  item?: Zotero.Item | null,
+): void {
+  const marked = [
+    body as HTMLElement,
+    body.querySelector?.("#llm-main") as HTMLElement | null,
+  ];
+  for (const element of marked) {
+    if (!element?.dataset) continue;
+    element.dataset.standalone = "true";
+    element.dataset.sidePanel = "true";
+  }
+  if (item !== undefined) bindSidePanelHost(body, item);
+}
+
+/** Whether a body (or its panel root) was marked by markSidePanelBody. */
+export function isSidePanelBody(body: Element | null | undefined): boolean {
+  if (!body) return false;
+  if ((body as HTMLElement).dataset?.sidePanel === "true") return true;
+  if (hostBindings.get(body)?.surface === "side") return true;
+  const root = body.querySelector?.("#llm-main") as HTMLElement | null;
+  return root?.dataset?.sidePanel === "true";
+}
+
 /** Synthetic panels bypass Zotero lifecycle hooks, so tests bind explicitly. */
 export function bindTestPanelHost(
   body: Element,
@@ -204,14 +260,16 @@ export function getPanelHostBinding(
 /**
  * The selection surface a panel body reads and writes (see
  * conversationSelection.ts): the standalone window's panel is "standalone";
- * every sidebar panel — library item pane or reader tab — is "embedded". The
- * host binding decides once it exists; before that, the window marks its
- * content area and panel root with `data-standalone`.
+ * the window's side chat (markSidePanelBody) is "side"; every sidebar panel —
+ * library item pane or reader tab — is "embedded". The side marker decides
+ * first; then the host binding once it exists; before that, the window marks
+ * its content area and panel root with `data-standalone`.
  */
 export function resolveSelectionSurfaceForBody(
   body: Element | null | undefined,
 ): SelectionSurface {
   if (!body) return "embedded";
+  if (isSidePanelBody(body)) return "side";
   const binding = hostBindings.get(body);
   if (binding)
     return binding.surface === "standalone" ? "standalone" : "embedded";
@@ -288,7 +346,9 @@ function scopeBelongsToHost(
   binding: PanelHostBinding,
   scope: ConversationScopeIdentity,
 ): boolean {
-  if (binding.surface === "standalone") return true;
+  if (binding.surface === "standalone" || binding.surface === "side") {
+    return true;
+  }
   if (!binding.libraryID || scope.libraryID !== binding.libraryID) return false;
   if (binding.noteID) {
     return (
@@ -665,7 +725,9 @@ export function isPanelHostCompatibleWithPaper(
     return Boolean(paperItem) && !root?.dataset.handlersInitialized;
   }
   if (!paperItem) return false;
-  if (binding.surface === "standalone") return true;
+  if (binding.surface === "standalone" || binding.surface === "side") {
+    return true;
+  }
   if (binding.noteID) {
     return (
       binding.libraryID === normalizePositiveInt(paperItem.libraryID) &&

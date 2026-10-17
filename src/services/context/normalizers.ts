@@ -105,6 +105,7 @@ export function normalizeSelectedTextSource(
   if (value === "model") return "model";
   if (value === "note") return "note";
   if (value === "note-edit") return "note-edit";
+  if (value === "sidechat") return "sidechat";
   return "pdf";
 }
 

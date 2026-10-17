@@ -5,6 +5,8 @@ import {
   bindSurfaceChoices,
   clearStandaloneSurfaceChoices,
   demoteConversationSystemOnEverySurface,
+  resetSideSurfaceChoices,
+  startSideSurfaceChoicesFromStandalone,
   startStandaloneSurfaceChoicesFromSidebar,
   getSelectedModelEntryForSurface,
   setSelectedModelEntryForSurface,
@@ -364,5 +366,131 @@ describe("surfaceChoices: each chat surface keeps its own model and backend", fu
       resolvePreferredConversationSystem({ item: null }),
       "upstream",
     );
+  });
+
+  describe("the side chat surface", function () {
+    beforeEach(function () {
+      resetSideSurfaceChoices();
+      setModelProviderGroups([
+        {
+          id: "group-a",
+          authMode: "api_key",
+          apiBase: "https://surface-choices.invalid/v1",
+          apiKey: "key",
+          providerProtocol: "openai_chat_compat",
+          models: [
+            { id: "entry-a", model: "model-a" },
+            { id: "entry-b", model: "model-b" },
+          ],
+        },
+        {
+          id: "group-web",
+          authMode: "webchat",
+          apiBase: "",
+          apiKey: "",
+          providerProtocol: "web_sync",
+          models: [{ id: "entry-web", model: "chatgpt.com" }],
+        },
+      ] as any);
+    });
+
+    afterEach(function () {
+      resetSideSurfaceChoices();
+    });
+
+    it("starts from the window's model and keeps its own afterwards, writing no pref", function () {
+      setSelectedModelEntryForSurface("entry-b", "standalone");
+      startSideSurfaceChoicesFromStandalone();
+      assert.equal(getSelectedModelEntryForSurface("side")?.model, "model-b");
+
+      setSelectedModelEntryForSurface("entry-a", "side");
+      assert.equal(getSelectedModelEntryForSurface("side")?.model, "model-a");
+      assert.equal(
+        getSelectedModelEntryForSurface("standalone")?.model,
+        "model-b",
+      );
+      assert.equal(prefStore.get(pref("lastUsedModelEntryId")), "entry-a");
+
+      setSelectedModelEntryForSurface("entry-a", "standalone");
+      setSelectedModelEntryForSurface("entry-b", "side");
+      assert.equal(
+        getSelectedModelEntryForSurface("standalone")?.model,
+        "model-a",
+      );
+      assert.equal(prefStore.get(pref("lastUsedModelEntryId")), "entry-a");
+    });
+
+    it("never takes a WebChat model entry", function () {
+      setSelectedModelEntryForSurface("entry-web", "standalone");
+      startSideSurfaceChoicesFromStandalone();
+      assert.notEqual(
+        getSelectedModelEntryForSurface("side")?.authMode,
+        "webchat",
+      );
+
+      setSelectedModelEntryForSurface("entry-web", "side");
+      assert.notEqual(
+        getSelectedModelEntryForSurface("side")?.authMode,
+        "webchat",
+      );
+    });
+
+    it("always runs on the API runtime", function () {
+      prefStore.set(pref("enableClaudeCodeMode"), true);
+      surfaceChoices.conversationSystem.set("claude_code", "standalone");
+      startSideSurfaceChoicesFromStandalone();
+      assert.equal(surfaceChoices.conversationSystem.get("side"), "upstream");
+
+      surfaceChoices.conversationSystem.set("codex", "side");
+      assert.equal(surfaceChoices.conversationSystem.get("side"), "upstream");
+      assert.equal(
+        surfaceChoices.conversationSystem.get("standalone"),
+        "claude_code",
+      );
+      assert.equal(
+        resolvePreferredConversationSystem({ item: null, surface: "side" }),
+        "upstream",
+      );
+    });
+
+    it("keeps its reasoning and Chat/Agent choices apart from the other surfaces", function () {
+      prefStore.set(pref("lastUsedRuntimeMode"), "agent");
+      surfaceChoices.lastUsedReasoningLevelForProvider.set(
+        "openai",
+        "high",
+        "standalone",
+      );
+      startSideSurfaceChoicesFromStandalone();
+      assert.equal(surfaceChoices.lastUsedRuntimeMode.get("side"), "agent");
+      assert.equal(
+        surfaceChoices.lastUsedReasoningLevelForProvider.get("openai", "side"),
+        "high",
+      );
+
+      surfaceChoices.lastUsedRuntimeMode.set("chat", "side");
+      surfaceChoices.lastUsedReasoningLevelForProvider.set(
+        "openai",
+        "low",
+        "side",
+      );
+      surfaceChoices.lastUsedReasoningLevel.set("low", "side");
+      assert.equal(surfaceChoices.lastUsedRuntimeMode.get("side"), "chat");
+      assert.equal(
+        surfaceChoices.lastUsedReasoningLevelForProvider.get("openai", "side"),
+        "low",
+      );
+      assert.equal(prefStore.get(pref("lastUsedRuntimeMode")), "agent");
+      assert.isUndefined(prefStore.get(pref("lastUsedReasoningLevel")));
+      assert.equal(
+        surfaceChoices.lastUsedReasoningLevelForProvider.get(
+          "openai",
+          "standalone",
+        ),
+        "high",
+      );
+
+      resetSideSurfaceChoices();
+      assert.equal(surfaceChoices.lastUsedRuntimeMode.get("side"), "agent");
+    });
   });
 });

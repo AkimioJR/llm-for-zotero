@@ -3,6 +3,7 @@ import { createElement } from "../../../../utils/domHelpers";
 import { t } from "../../../../utils/i18n";
 import { createHistoryActivityIndicator } from "../../historyActivity";
 import type { ConversationSystem } from "../../../../shared/types";
+import { isEphemeralConversationKey } from "../../../../shared/conversationKeySpace";
 import { isConversationKeyForKind } from "../../../../shared/conversationKeySpace";
 import {
   loadTruncatedConversationIndexMatches,
@@ -3148,6 +3149,18 @@ export function createHistoryLifecycleController(
       if (status) setStatus(status, t("No deletable turn found"), "error");
       return;
     }
+    // A side chat lives only in memory: drop the turn there, with no
+    // write-ahead deletion row and so no Undo.
+    if (isEphemeralConversationKey(target.conversationKey)) {
+      for (const message of [pair.assistantMessage, pair.userMessage]) {
+        const index = history.indexOf(message);
+        if (index >= 0) history.splice(index, 1);
+      }
+      setActiveEditSession(null);
+      refreshChatPreservingScroll();
+      if (status) setStatus(status, t("Turn deleted"), "ready");
+      return;
+    }
 
     const catalog = await conversationRepository.getCatalogEntry({
       system: getConversationSystem(),
@@ -4230,8 +4243,10 @@ export function createHistoryLifecycleController(
             surface: selectionSurface(),
           })
         : (() => {
+            // The library lock is the sidebar's; the window and its side
+            // chat have none.
             const lockedKey =
-              selectionSurface() === "standalone"
+              selectionSurface() !== "embedded"
                 ? null
                 : getLockedGlobalConversationKey(libraryID);
             if (lockedKey !== null) return lockedKey;

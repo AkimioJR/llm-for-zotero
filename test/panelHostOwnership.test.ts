@@ -12,6 +12,8 @@ import {
   clearPanelHostBinding,
   evaluatePanelOwnership,
   isPanelHostCompatibleWithPaper,
+  isSidePanelBody,
+  markSidePanelBody,
   getConversationScopeIdentityForTests,
   requireCurrentPanelOwnership,
   resolveSelectionSurfaceForBody,
@@ -372,6 +374,37 @@ describe("panel host ownership", function () {
     for (const panel of [library, reader, window]) {
       clearPanelHostBinding(panel.body);
     }
+  });
+
+  it("puts a marked side chat body on the side surface and lets it own any scope", function () {
+    const paperA = fakePaper(101);
+    const paperB = fakePaper(202);
+    const side = fakePanel({
+      conversationKey: 1_900_000_001,
+      paperItemID: 202,
+    });
+    const window = fakePanel({
+      conversationKey: 101,
+      paperItemID: 101,
+      standalone: true,
+    });
+    assert.isFalse(isSidePanelBody(side.body));
+    markSidePanelBody(side.body);
+    assert.isTrue(isSidePanelBody(side.body));
+    assert.isFalse(isSidePanelBody(window.body));
+    assert.equal(side.root.dataset.standalone, "true");
+    assert.equal(side.root.dataset.sidePanel, "true");
+    // Before any binding, the marker alone decides the surface and ownership.
+    assert.equal(resolveSelectionSurfaceForBody(side.body), "side");
+    assert.equal(evaluatePanelOwnership(side.body), "match");
+    // Bound to paper A, the side chat may still show paper B's chat.
+    markSidePanelBody(side.body, paperA);
+    activeContextPanels.set(side.body, () => paperB);
+    assert.equal(resolveSelectionSurfaceForBody(side.body), "side");
+    assert.equal(evaluatePanelOwnership(side.body), "match");
+    assert.isTrue(isPanelHostCompatibleWithPaper(side.body, paperB));
+    assert.equal(resolveSelectionSurfaceForBody(window.body), "standalone");
+    clearPanelHostBinding(side.body);
   });
 });
 

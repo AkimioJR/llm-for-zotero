@@ -1,3 +1,4 @@
+import { isEphemeralConversationKey } from "../shared/conversationKeySpace";
 import { appLogger } from "../core/logging";
 import {
   ATTACHMENT_BLOBS_TABLE,
@@ -149,6 +150,13 @@ export async function replaceOwnerAttachmentRefs(
 ): Promise<void> {
   const normalizedOwnerId = normalizeOwnerId(ownerId);
   if (!normalizedOwnerId) return;
+  // A temporary side chat owns no attachment refs; its blobs are collected.
+  if (
+    ownerType === "conversation" &&
+    isEphemeralConversationKey(normalizedOwnerId)
+  ) {
+    return;
+  }
   const generation =
     ownerType === "conversation"
       ? Number.isFinite(Number(expectedGeneration))

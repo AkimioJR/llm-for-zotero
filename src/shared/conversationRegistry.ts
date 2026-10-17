@@ -1,5 +1,6 @@
 declare const Zotero: any;
 
+import { isEphemeralConversationKey } from "./conversationKeySpace";
 import { fnv1a32Raw } from "../utils/fnv1a";
 import type { ConversationSystem } from "./types";
 import { getConversationKeyLedgerEntry } from "./conversationKeyLedger";
@@ -729,6 +730,8 @@ export async function registerConversationScope(
   params: ConversationRegistryScope,
   options?: { inTransaction?: boolean },
 ): Promise<boolean> {
+  // A temporary side chat's key (reserved band) is never persisted.
+  if (isEphemeralConversationKey(params.conversationKey)) return false;
   const db = getZoteroDb();
   if (!db?.queryAsync) return false;
   const queryAsync = db.queryAsync.bind(db);
@@ -994,6 +997,8 @@ export async function repairRegisteredConversationScope(
   params: ConversationRegistryScope,
   options?: { inTransaction?: boolean },
 ): Promise<boolean> {
+  // A temporary side chat's key (reserved band) is never persisted.
+  if (isEphemeralConversationKey(params.conversationKey)) return false;
   const db = getZoteroDb();
   if (!db?.queryAsync) return false;
   const queryAsync = db.queryAsync.bind(db);

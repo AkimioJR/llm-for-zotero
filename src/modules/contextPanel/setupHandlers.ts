@@ -206,7 +206,9 @@ import {
   getWorkflowTestSendInterceptor,
   notifyWorkflowTestSendSettled,
 } from "./workflowTestHooks";
+import { isEphemeralConversationKey } from "../../shared/conversationKeySpace";
 import {
+  bindSidePanelHost,
   bindStandalonePanelHost,
   bindTestPanelHost,
   canCommitPanelConversation,
@@ -217,6 +219,7 @@ import {
   isPanelOperationLeaseCurrent,
   renderPanelOwnershipBlocked,
   requireCurrentPanelOwnership,
+  isSidePanelBody,
   resolveSelectionSurfaceForBody,
   shouldOwnershipFenceSwallowEvent,
 } from "./panelHostOwnership";
@@ -682,8 +685,12 @@ export function setupHandlers(
   // standalone window's own, or the one every sidebar panel shares.
   const selectionSurface = (): SelectionSurface =>
     resolveSelectionSurfaceForBody(body);
-  const isStandaloneSelectionSurface = () =>
-    selectionSurface() === "standalone";
+  // The window and its side chat: neither takes nor releases the sidebar's
+  // library lock. Only the sidebar (embedded) surface writes prefs.
+  const isStandaloneSelectionSurface = () => selectionSurface() !== "embedded";
+  // The window's temporary side chat (markSidePanelBody): API runtime only,
+  // never saved, and never a Zotero "Add as context" target.
+  const isSidePanel = isSidePanelBody(body);
   // The model and backend this panel's surface has chosen (surfaceChoices.ts):
   // the sidebar's are the saved prefs; the window's live in memory.
   const panelChoices = bindSurfaceChoices(selectionSurface);
@@ -695,7 +702,9 @@ export function setupHandlers(
   const rawPanelItem =
     activeContextPanelRawItems.get(body) || initialItem || null;
   if (__env__ !== "production" && !getPanelHostBinding(body)) {
-    if (existingPanelRoot?.dataset.standalone === "true") {
+    if (isSidePanel) {
+      bindSidePanelHost(body, rawPanelItem);
+    } else if (existingPanelRoot?.dataset.standalone === "true") {
       bindStandalonePanelHost(body, rawPanelItem);
     } else {
       bindTestPanelHost(body, rawPanelItem);
@@ -770,6 +779,7 @@ export function setupHandlers(
     slashReferenceOption,
     slashPdfPageOption,
     slashPdfMultiplePagesOption,
+    slashSideChatOption,
     imagePreview,
     contextPreviews,
     selectedContextList,
@@ -1022,8 +1032,12 @@ export function setupHandlers(
     });
   panelRoot.dataset.conversationSystem = currentConversationSystem;
   syncQueuedFollowUpRegistration();
-  const isClaudeModeAvailable = () => getClaudeCodeModeEnabled();
-  const isCodexModeAvailable = () => isCodexAppServerModeEnabled();
+  // A side chat is never saved, so it cannot use a runtime that keeps
+  // provider-side state (Claude Code, Codex): their switches stay hidden.
+  const isClaudeModeAvailable = () =>
+    !isSidePanel && getClaudeCodeModeEnabled();
+  const isCodexModeAvailable = () =>
+    !isSidePanel && isCodexAppServerModeEnabled();
   let claudeModelCatalogStatus: "idle" | "loading" | "ready" | "error" = "idle";
   let claudeModelCatalogError = "";
   let claudeModelCatalogModels: ClaudeModelCatalogEntry[] = [];
@@ -1604,7 +1618,7 @@ export function setupHandlers(
             : (() => {
                 // The library lock is the sidebar's; the window has none.
                 const lockedKey =
-                  surface === "standalone"
+                  surface !== "embedded"
                     ? null
                     : getLockedGlobalConversationKey(libraryID);
                 if (lockedKey !== null) return lockedKey;
@@ -1874,7 +1888,14 @@ export function setupHandlers(
     if (historyToggleBtn) {
       historyToggleBtn.style.display = "";
     }
-    if (item && libraryID > 0 && mode && !noteSession) {
+    if (
+      item &&
+      libraryID > 0 &&
+      mode &&
+      !noteSession &&
+      // A side chat's ephemeral conversation is never remembered.
+      !isEphemeralConversationKey(Number(conversationKey))
+    ) {
       // Each runtime writes a different set here: Claude Code only the mode;
       // Codex and upstream also the library chat (map and pref) and the
       // paper chat (map only). All of it goes to this panel's own surface:
@@ -1921,8 +1942,9 @@ export function setupHandlers(
           currentBasePaperItemID > 0
         ) {
           // A sidebar panel back in Paper chat releases the sidebar's library
-          // lock. The window has no lock and must not release the sidebar's.
-          if (surface !== "standalone") {
+          // lock. The window (and its side chat) has no lock and must not
+          // release the sidebar's.
+          if (surface === "embedded") {
             const lockedGlobalKey = getLockedGlobalConversationKey(libraryID);
             if (lockedGlobalKey !== null) {
               setLockedGlobalConversationKey(libraryID, null);
@@ -5100,7 +5122,10 @@ export function setupHandlers(
       ? getClaudeRuntimeModelEntries()
       : isCodexConversationSystem()
         ? getCodexRuntimeModelEntries()
-        : getAvailableModelEntries();
+        : getAvailableModelEntries().filter(
+            // A side chat is never saved, so it never runs on WebChat.
+            (entry) => !isSidePanel || entry.authMode !== "webchat",
+          );
     const groupedChoices: Array<{
       providerLabel: string;
       entries: RuntimeModelEntry[];
@@ -6516,9 +6541,29 @@ export function setupHandlers(
   });
 
   let setupHandlersCleaned = false;
+  // Set once the panel's context actions are wired, further below.
+  let addItemsAsDefaultContextForHandle: (
+    zoteroItems: Zotero.Item[],
+  ) => Promise<void> = async () => undefined;
   // Latest in-place paper switch; only it may re-enable the chat box.
   let paperItemSwitchToken = 0;
   const panelHandle: PanelHandle = {
+    addItemsAsDefaultContext: (zoteroItems) =>
+      addItemsAsDefaultContextForHandle(zoteroItems),
+    addTextContext: (text, options) => {
+      const textContextKey = getTextContextConversationKey();
+      if (setupHandlersCleaned || !item || !textContextKey) return false;
+      let outcome = "empty" as ReturnType<typeof addSelectedTextContext>;
+      withScrollGuard(chatBox, conversationKey, () => {
+        outcome = addSelectedTextContext(body, textContextKey, text, {
+          source: options.source,
+          focusInput: options.focusInput,
+        });
+      });
+      if (outcome !== "added") return false;
+      updateSelectedTextPreviewPreservingScroll();
+      return true;
+    },
     refreshContextSourceForCurrentItem: () => {
       withScrollGuard(chatBox, conversationKey, () => {
         refreshAutoLoadedPaperContextForCurrentItem();
@@ -6539,6 +6584,7 @@ export function setupHandlers(
       if (
         setupHandlersCleaned ||
         isStandalonePanel ||
+        isSidePanel ||
         !item ||
         !panelRoot.isConnected ||
         panelRoot.dataset.ownershipBlocked ||
@@ -6807,7 +6853,8 @@ export function setupHandlers(
     // conversation loading.  The parameter-less auto-fire would race with it
     // and resolve to a different (default) conversation, overwriting the
     // explicitly targeted one.
-    if (!isStandalonePanel) {
+    // A side chat's mount controller owns its ephemeral conversation too.
+    if (!isStandalonePanel && !isSidePanel) {
       void switchPaperConversation().catch((err) => {
         appLogger.warn(
           "LLM: Failed to restore paper conversation session",
@@ -8064,6 +8111,7 @@ export function setupHandlers(
     slashReferenceOption,
     slashPdfPageOption,
     slashPdfMultiplePagesOption,
+    slashSideChatOption,
     modelMenu,
     reasoningMenu,
     retryModelMenu,
@@ -8259,55 +8307,65 @@ export function setupHandlers(
     },
   });
 
-  const unregisterContextSurfaceActions = registerContextSurfaceActionTarget(
-    body,
-    {
-      surfaceKind: isStandalonePanel ? "standalone" : "embedded",
-      addItemsAsDefaultContext: async (zoteroItems) => {
-        const result = await addZoteroItemsAsDefaultContext(
-          {
-            item,
-            resolveAutoLoadedPaperContext,
-            getManualPaperContextsForItem,
-            isPaperContextMineru,
-            getTextContextConversationKey,
-            updatePaperPreviewPreservingScroll,
-            updateSelectedTextPreviewPreservingScroll,
-          },
-          zoteroItems,
-        );
-        if (result.statusMessage && status) {
-          setStatus(
-            status,
-            result.statusMessage,
-            result.statusLevel || "ready",
-          );
-        }
-        inputBox.focus({ preventScroll: true });
-        return result;
+  // Adds Zotero items as default context to this panel's current
+  // conversation (no new conversation). The Zotero "Add as context" action
+  // and the panel handle both use it.
+  const addItemsAsDefaultContextForPanel = async (
+    zoteroItems: Zotero.Item[],
+  ) => {
+    const result = await addZoteroItemsAsDefaultContext(
+      {
+        item,
+        resolveAutoLoadedPaperContext,
+        getManualPaperContextsForItem,
+        isPaperContextMineru,
+        getTextContextConversationKey,
+        updatePaperPreviewPreservingScroll,
+        updateSelectedTextPreviewPreservingScroll,
       },
-      afterItemsAsDefaultContextAdded: (result) => {
-        if (!isStandalonePanel || !result.changed) return;
-        flushPanelStateRefreshNow();
-        hooks?.onDefaultContextRendered?.();
-      },
-      prepareItemsAsDefaultContextTarget: isStandalonePanel
-        ? hooks?.prepareItemsAsDefaultContextTarget
-        : async () => {
-            if (isNoteSession() || isWebChatMode()) return false;
-            const lease = capturePanelOperationLease(body);
-            const libraryID = getCurrentLibraryID();
-            if (!lease || !libraryID) return false;
-            const summary = await conversationRepository.createCatalogEntry({
-              system: getConversationSystem(),
-              kind: "global",
-              libraryID,
-            });
-            if (!summary || !isPanelOperationLeaseCurrent(lease)) return false;
-            return switchGlobalConversation(summary.conversationKey);
-          },
-    },
-  );
+      zoteroItems,
+    );
+    if (result.statusMessage && status) {
+      setStatus(status, result.statusMessage, result.statusLevel || "ready");
+    }
+    inputBox.focus({ preventScroll: true });
+    return result;
+  };
+  addItemsAsDefaultContextForHandle = async (zoteroItems) => {
+    if (setupHandlersCleaned || !item) return;
+    const result = await addItemsAsDefaultContextForPanel(zoteroItems);
+    if (result.changed) flushPanelStateRefreshNow();
+  };
+
+  // The side chat never captures Zotero's "Add as context": that action
+  // always goes to the window's main chat (or a sidebar panel).
+  const unregisterContextSurfaceActions = isSidePanel
+    ? () => undefined
+    : registerContextSurfaceActionTarget(body, {
+        surfaceKind: isStandalonePanel ? "standalone" : "embedded",
+        addItemsAsDefaultContext: addItemsAsDefaultContextForPanel,
+        afterItemsAsDefaultContextAdded: (result) => {
+          if (!isStandalonePanel || !result.changed) return;
+          flushPanelStateRefreshNow();
+          hooks?.onDefaultContextRendered?.();
+        },
+        prepareItemsAsDefaultContextTarget: isStandalonePanel
+          ? hooks?.prepareItemsAsDefaultContextTarget
+          : async () => {
+              if (isNoteSession() || isWebChatMode()) return false;
+              const lease = capturePanelOperationLease(body);
+              const libraryID = getCurrentLibraryID();
+              if (!lease || !libraryID) return false;
+              const summary = await conversationRepository.createCatalogEntry({
+                system: getConversationSystem(),
+                kind: "global",
+                libraryID,
+              });
+              if (!summary || !isPanelOperationLeaseCurrent(lease))
+                return false;
+              return switchGlobalConversation(summary.conversationKey);
+            },
+      });
 
   const cancelActiveAgentAction = (options?: {
     requireVisibleReviewCard?: boolean;

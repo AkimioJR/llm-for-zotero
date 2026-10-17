@@ -36,6 +36,10 @@ export const MESSAGE_WORD_SPACING_DEFAULT_PX = 0;
 export const MESSAGE_WORD_SPACING_MIN_PX = 0;
 export const MESSAGE_WORD_SPACING_MAX_PX = 8;
 export const SELECTED_TEXT_MAX_LENGTH = 4000;
+/** A side-chat transcript attached to the main chat ("sidechat" source). */
+export const SIDECHAT_SELECTED_TEXT_MAX_LENGTH = 24000;
+/** The main chat given to a side chat's model as background. */
+export const MAIN_CHAT_BACKGROUND_CONTEXT_MAX_LENGTH = 24000;
 export const SELECTED_TEXT_PREVIEW_LENGTH = 240;
 export const MAX_SELECTED_TEXT_CONTEXTS = 5;
 // Total visible editable shortcuts: built-in plus user-created custom shortcuts.

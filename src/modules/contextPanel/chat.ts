@@ -228,6 +228,12 @@ import type {
   ResolvedContextSource,
 } from "./types";
 import { resolveTargetedAssistantRerenders } from "./targetedRerender";
+import {
+  getChatPanelExtensions,
+  isChatPanelReadOnly,
+  isChatPanelTurnRewriteDisabled,
+  type ChatPanelAssistantAction,
+} from "./chatPanelExtensions";
 import { withConversationWriteLock } from "../../shared/conversationWriteFence";
 import {
   createTurnUsageRecorder,
@@ -237,6 +243,7 @@ import {
   chatHistory,
   conversationForkLinks,
   loadedConversationKeys,
+  readOnlyBorrowedConversationKeys,
   loadingConversationTasks,
   webChatIsolatedConversationKeys,
   webChatSessionConversationKeys,
@@ -457,6 +464,11 @@ import {
 } from "./conversationProvisioning";
 
 export { getConversationKey } from "./conversationIdentity";
+import {
+  classifyConversationKey,
+  isEphemeralConversationKey,
+} from "../../shared/conversationKeySpace";
+import { buildEphemeralBackgroundContextBlock } from "../../shared/ephemeralBackgroundContext";
 export { renderAssistantMarkdownHtmlForChat } from "./renderedMarkdown";
 
 /** Get AbortController constructor from global scope */
@@ -537,9 +549,10 @@ function resolveSurfaceForMountedItem(
   let shownInWindow = false;
   for (const [body, getItem] of activeContextPanels) {
     if (getItem() !== item) continue;
-    if (resolveSelectionSurfaceForBody(body) !== "standalone") {
-      return "embedded";
-    }
+    const surface = resolveSelectionSurfaceForBody(body);
+    if (surface === "embedded") return "embedded";
+    // The side chat shows its own ephemeral item, never another surface's.
+    if (surface === "side") return "side";
     shownInWindow = true;
   }
   return shownInWindow ? "standalone" : "embedded";
@@ -703,6 +716,14 @@ async function validateConversationScopeForItem(params: {
   conversationKey: number;
   conversationSystem?: ConversationSystem | null;
 }): Promise<boolean> {
+  // A temporary side chat has no catalog or registry row: it is valid for an
+  // item of its own kind (paper or library) and is never provisioned.
+  if (isEphemeralConversationKey(params.conversationKey)) {
+    return (
+      classifyConversationKey(params.conversationKey)?.kind ===
+      resolveDisplayConversationKind(params.item)
+    );
+  }
   await provisionConversationScopeForItem({
     item: params.item,
     conversationSystem: params.conversationSystem,
@@ -1491,6 +1512,8 @@ function canShowForkActionForAssistantTurn(
   assistantTimestamp: unknown,
   assistantMessage?: Message | null,
 ): boolean {
+  // A read-only body or a side chat never forks (chatPanelExtensions).
+  if (isChatPanelTurnRewriteDisabled(body)) return false;
   return shouldShowForkActionForAssistantTurn({
     body,
     item,
@@ -1610,6 +1633,39 @@ export function appendUserMessageCopyAction(params: {
     if (status) setStatus(status, t("Copied query"), "ready");
   });
   return button;
+}
+
+function appendExtraAssistantActionButtons(params: {
+  doc: Document;
+  actions: HTMLElement;
+  extraActions: readonly ChatPanelAssistantAction[];
+  info: { contentText: string; conversationKey: number; timestamp?: number };
+}): void {
+  for (const action of params.extraActions) {
+    const id = action.id.replace(/[^A-Za-z0-9_-]/g, "");
+    if (!id) continue;
+    const button = appendMessageMetaActionButton({
+      doc: params.doc,
+      actions: params.actions,
+      className: `llm-message-action-${id}`,
+      title: action.label,
+      conversationKey: params.info.conversationKey,
+      assistantTimestamp: params.info.timestamp,
+    });
+    button.dataset.extraAction = id;
+    button.addEventListener("click", (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+      try {
+        action.run({ ...params.info });
+      } catch (err) {
+        appLogger.warn("LLM: chat panel extra action failed", err);
+      }
+    });
+  }
 }
 
 export function appendAssistantResponseExpandAction(params: {
@@ -1915,6 +1971,8 @@ async function updateStoredLatestUserMessageByConversationUnlocked(
   conversationSystem?: ConversationSystem | null,
   options?: UpdateLatestUserMessageOptions,
 ): Promise<void> {
+  // A temporary side chat's key (reserved band) is never persisted.
+  if (isEphemeralConversationKey(conversationKey)) return;
   const expectedGeneration = Number(
     (message as StoredChatMessage).conversationGeneration,
   );
@@ -1962,6 +2020,7 @@ async function publishPersistedPlanDocumentIfPresent(params: {
   documentId?: string;
   planDocumentId?: string;
 }): Promise<void> {
+  if (isEphemeralConversationKey(params.conversationKey)) return;
   const visibleMarkdown = params.text || "";
   if (!visibleMarkdown) return;
   const document = await deliverPendingPlanDocumentMessage({
@@ -2051,6 +2110,8 @@ async function updateStoredLatestAssistantMessageByConversationUnlocked(
   conversationSystem?: ConversationSystem | null,
   options?: UpdateLatestAssistantMessageOptions,
 ): Promise<boolean> {
+  // A temporary side chat's key (reserved band) is never persisted.
+  if (isEphemeralConversationKey(conversationKey)) return false;
   const expectedGeneration = Number(
     (message as StoredChatMessage).conversationGeneration,
   );
@@ -2169,6 +2230,8 @@ export async function updateStoredAssistantQuoteLocations(
   const conversationKey = Math.floor(Number(request.conversationKey));
   if (!Number.isFinite(conversationKey) || conversationKey <= 0) return false;
   if (!request.writes.length) return false;
+  // A temporary side chat's key (reserved band) is never persisted.
+  if (isEphemeralConversationKey(conversationKey)) return false;
   return withConversationWriteLock(conversationKey, async () => {
     if (
       !isConversationWriteGenerationCurrent(
@@ -2241,6 +2304,8 @@ async function persistConversationMessage(
   conversationSystem?: ConversationSystem | null,
   options: { rethrow?: boolean } = {},
 ): Promise<void> {
+  // A temporary side chat's key (reserved band) is never persisted.
+  if (isEphemeralConversationKey(conversationKey)) return;
   try {
     const expectedGeneration = Number(message.conversationGeneration);
     if (
@@ -2459,6 +2524,23 @@ export function restoreConversationComposeContext(item: Zotero.Item): boolean {
   return true;
 }
 
+/**
+ * A stored conversation's messages for display only (the window's side
+ * panel shows a past chat read-only): no provisioning, no selection or
+ * scope writes, no document outbox, and nothing put in chatHistory.
+ */
+export async function loadConversationMessagesForReadOnlyView(
+  conversationKey: number,
+  conversationSystem?: ConversationSystem | null,
+): Promise<Message[]> {
+  const stored = await loadStoredConversationByKey(
+    conversationKey,
+    PERSISTED_HISTORY_LIMIT,
+    conversationSystem,
+  );
+  return stored.map((message) => toPanelMessage(message));
+}
+
 function toPanelMessage(message: StoredChatMessage): Message {
   const screenshotImages = Array.isArray(message.screenshotImages)
     ? message.screenshotImages.filter((entry) => Boolean(entry))
@@ -2589,6 +2671,16 @@ export async function ensureConversationLoaded(
     ? resolveSelectionSurfaceForBody(options.body)
     : undefined;
   const isWebChatForCaller = () => isEffectiveWebChatRequest(item, surface);
+  // A temporary side chat lives in memory only: no provisioning, no stored
+  // history, no plan-document outbox.
+  const ephemeralKey = getConversationKey(item);
+  if (isEphemeralConversationKey(ephemeralKey)) {
+    blockedConversationLoadKeys.delete(ephemeralKey);
+    if (!chatHistory.has(ephemeralKey)) chatHistory.set(ephemeralKey, []);
+    loadedConversationKeys.add(ephemeralKey);
+    restoreConversationComposeContext(item);
+    return;
+  }
   // Provision first.  A paper's historical default key may have been
   // permanently retired; provisioning then allocates a fresh key and updates
   // the active scope before this function captures the key used by all load,
@@ -2647,17 +2739,23 @@ export async function ensureConversationLoaded(
   }
   if (
     chatHistory.has(conversationKey) &&
-    !blockedConversationLoadKeys.has(conversationKey)
+    !blockedConversationLoadKeys.has(conversationKey) &&
+    !readOnlyBorrowedConversationKeys.has(conversationKey)
   ) {
     await loadConversationForkLinkCache(conversationKey, loadGeneration);
     loadedConversationKeys.add(conversationKey);
     restoreConversationComposeContext(item);
     return;
   }
-  if (blockedConversationLoadKeys.has(conversationKey)) {
+  if (
+    blockedConversationLoadKeys.has(conversationKey) ||
+    readOnlyBorrowedConversationKeys.has(conversationKey)
+  ) {
+    // A read-only view's display copy is not a load: replace it.
     chatHistory.delete(conversationKey);
     conversationForkLinks.delete(conversationKey);
     blockedConversationLoadKeys.delete(conversationKey);
+    readOnlyBorrowedConversationKeys.delete(conversationKey);
   }
 
   const existingTask = loadingConversationTasks.get(conversationKey);
@@ -4196,26 +4294,42 @@ async function prepareFinalContextPlanChatRequest(params: {
   requestParams: ChatParams;
   contextPlan: ContextPlanForRequest;
   combinedContext: string;
+  /** The conversation sent on; a side chat's adds its background block. */
+  conversationKey?: number;
 }): Promise<PreparedContextPlanChatRequest> {
-  const previewSystemMessages = buildContextPlanSystemMessages({
-    strategy: params.contextPlan.strategy,
-    assistantInstruction: params.contextPlan.assistantInstruction,
-    coverageReceiptText:
-      params.contextPlan.fullReadReceipt?.text ||
-      params.contextPlan.coverageReceipt?.text,
-  });
+  // A temporary side chat reads the window's main chat as background, as a
+  // system message: never a chip, never a user message, never stored.
+  const ephemeralBackgroundBlock =
+    params.conversationKey === undefined
+      ? ""
+      : buildEphemeralBackgroundContextBlock(params.conversationKey);
+  const withEphemeralBackground = (messages: string[]): string[] =>
+    ephemeralBackgroundBlock
+      ? [...messages, ephemeralBackgroundBlock]
+      : messages;
+  const previewSystemMessages = withEphemeralBackground(
+    buildContextPlanSystemMessages({
+      strategy: params.contextPlan.strategy,
+      assistantInstruction: params.contextPlan.assistantInstruction,
+      coverageReceiptText:
+        params.contextPlan.fullReadReceipt?.text ||
+        params.contextPlan.coverageReceipt?.text,
+    }),
+  );
   const preview = prepareChatRequest({
     ...params.requestParams,
     systemMessages: previewSystemMessages,
   });
-  const systemMessages = buildContextPlanSystemMessages({
-    strategy: params.contextPlan.strategy,
-    assistantInstruction: params.contextPlan.assistantInstruction,
-    coverageReceiptText:
-      params.contextPlan.fullReadReceipt?.text ||
-      params.contextPlan.coverageReceipt?.text,
-    inputCapEffects: preview.inputCap.effects,
-  });
+  const systemMessages = withEphemeralBackground(
+    buildContextPlanSystemMessages({
+      strategy: params.contextPlan.strategy,
+      assistantInstruction: params.contextPlan.assistantInstruction,
+      coverageReceiptText:
+        params.contextPlan.fullReadReceipt?.text ||
+        params.contextPlan.coverageReceipt?.text,
+      inputCapEffects: preview.inputCap.effects,
+    }),
+  );
   const finalPrepared = prepareChatRequest({
     ...params.requestParams,
     systemMessages,
@@ -6523,6 +6637,7 @@ export async function retryLatestAssistantResponse(
         requestParams,
         contextPlan,
         combinedContext,
+        conversationKey,
       });
     if (await stopRetryPreparation()) return;
     if (workflowTestIntercepted) {
@@ -9347,6 +9462,7 @@ export async function sendQuestion(
         requestParams,
         contextPlan,
         combinedContext,
+        conversationKey,
       });
     if (await stopInactiveRequest()) return;
     if (workflowTestIntercepted) {
@@ -10052,6 +10168,7 @@ function updateMountedAssistantViews(
         userMessage: view.user,
         events,
         previous: view.trace,
+        readOnly: isChatPanelReadOnly(body),
         actionSummaryHost: view.actionSummaryHost,
         onInterleavedText: () => {
           interleaved = true;
@@ -10116,6 +10233,23 @@ export function refreshChat(
   item?: Zotero.Item | null,
   options: RefreshChatOptions = {},
 ) {
+  renderChatForPanel(body, item, options);
+  const afterRender = getChatPanelExtensions(body)?.afterRender;
+  if (!afterRender) return;
+  const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
+  if (!chatBox) return;
+  try {
+    afterRender(chatBox);
+  } catch (err) {
+    appLogger.warn("LLM: chat panel afterRender failed", err);
+  }
+}
+
+function renderChatForPanel(
+  body: Element,
+  item?: Zotero.Item | null,
+  options: RefreshChatOptions = {},
+) {
   if (item && !isPanelConversationCurrent(body, item)) return;
   const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
   if (!chatBox) return;
@@ -10136,6 +10270,13 @@ export function refreshChat(
     if (updatedInPlace) return;
   }
   const doc = body.ownerDocument!;
+  const panelExtensions = getChatPanelExtensions(body);
+  // A read-only body shows a conversation without any control that writes
+  // to it or starts an edit; display toggles, copy, note, and expand stay.
+  const readOnly = panelExtensions?.readOnly === true;
+  // A side chat's turns are in memory only: no inline edit, retry, or fork.
+  const turnRewriteDisabled = readOnly || panelExtensions?.sideChat === true;
+  const extraAssistantActions = panelExtensions?.extraAssistantActions || [];
   setPromptMenuTarget(body, null);
   const paperContextDisplayCache: PaperContextDisplayCache = new Map();
   const resolvePaperContextForCardDisplay = (
@@ -10330,6 +10471,7 @@ export function refreshChat(
   }).providerProtocol;
   const conversationIsIdle = !history.some((m) => m.streaming);
   const canEditPromptAt = (index: number) =>
+    !turnRewriteDisabled &&
     canEditUserPromptTurn({
       isUser: history[index]?.role === "user",
       hasItem: Boolean(item),
@@ -10367,7 +10509,8 @@ export function refreshChat(
     const assistantPairMsg = history[index + 1];
     const hasAssistantPair = isUser && assistantPairMsg?.role === "assistant";
     const canEditUserPrompt = canEditPromptAt(index);
-    const isInlineEditBubble = panelEditIndex >= 0 && index === panelEditIndex;
+    const isInlineEditBubble =
+      !turnRewriteDisabled && panelEditIndex >= 0 && index === panelEditIndex;
     let hasUserContext = false;
     const wrapper = doc.createElement("div") as HTMLDivElement;
     wrapper.className = `llm-message-wrapper ${isUser ? "user" : "assistant"}`;
@@ -11229,7 +11372,7 @@ export function refreshChat(
         bubble.style.display = "none";
         // The hidden body no longer carries the edit entry; each expanded
         // question does.
-        if (hasAssistantPair) {
+        if (hasAssistantPair && !turnRewriteDisabled) {
           const questionEls = Array.from(
             wrapper.querySelectorAll(
               ".llm-user-selected-text-expanded .llm-selected-context-question",
@@ -11249,13 +11392,13 @@ export function refreshChat(
       } else {
         renderUserBubbleContent(bubble, sanitizeText(msg.text || ""), doc);
         bubble.classList.toggle("llm-bubble-editable", canEditUserPrompt);
-        if (hasAssistantPair) {
+        if (hasAssistantPair && !turnRewriteDisabled) {
           bubble.addEventListener("click", (e: Event) =>
             startInlineEditFromClick(e, bubble),
           );
         }
       }
-      if (hasPromptTurnPair) {
+      if (hasPromptTurnPair && !readOnly) {
         // A hidden body leaves the turn's chips as the prompt surface.
         const promptMenuSurface = bubble.hidden ? wrapper : bubble;
         promptMenuSurface.addEventListener("contextmenu", (e: Event) => {
@@ -11361,6 +11504,7 @@ export function refreshChat(
               message: msg,
               userMessage: previousUserMessage,
               events: traceEvents,
+              readOnly: isChatPanelReadOnly(body),
               actionSummaryHost,
               onTraceMissing:
                 agentRunId && !hasCachedTrace
@@ -11553,7 +11697,7 @@ export function refreshChat(
         bubble.appendChild(typing);
       }
 
-      if (!msg.compactMarker && !agentTraceReplacesAssistantTurn) {
+      if (!msg.compactMarker && !agentTraceReplacesAssistantTurn && !readOnly) {
         attachAssistantResponseContextMenu({
           body,
           doc,
@@ -11617,6 +11761,7 @@ export function refreshChat(
       actions.className = "llm-message-actions";
 
       if (
+        !turnRewriteDisabled &&
         index === latestAssistantIndex &&
         msg.text.trim() &&
         msg.runMode !== "agent" &&
@@ -11659,6 +11804,7 @@ export function refreshChat(
       }
 
       const canShowForkAction =
+        !readOnly &&
         actionUserTimestamp > 0 &&
         canShowForkActionForAssistantTurn(
           body,
@@ -11681,7 +11827,7 @@ export function refreshChat(
           assistantTimestamp: actionAssistantTimestamp,
         });
       }
-      if (actionUserTimestamp > 0) {
+      if (!readOnly && actionUserTimestamp > 0) {
         appendMessageMetaActionButton({
           body,
           doc,
@@ -11693,6 +11839,18 @@ export function refreshChat(
           conversationKey: actionConversationKey,
           userTimestamp: actionUserTimestamp,
           assistantTimestamp: actionAssistantTimestamp,
+        });
+      }
+      if (extraAssistantActions.length && actionContent?.contentText) {
+        appendExtraAssistantActionButtons({
+          doc,
+          actions,
+          extraActions: extraAssistantActions,
+          info: {
+            contentText: actionContent.contentText,
+            conversationKey: actionConversationKey,
+            timestamp: actionAssistantTimestamp,
+          },
         });
       }
       if (actionResponseTarget) {
@@ -11778,7 +11936,9 @@ export function refreshChat(
             }, 2000);
           }
         });
-        webchatStatusRow.appendChild(refreshBtn);
+        // Re-fetching replaces the stored history, so a read-only body
+        // leaves it out.
+        if (!readOnly) webchatStatusRow.appendChild(refreshBtn);
       }
     }
 
@@ -11862,7 +12022,7 @@ export function refreshChat(
           { continueIncomplete: true },
         );
       });
-      outputLimitRow.appendChild(continueButton);
+      if (!readOnly) outputLimitRow.appendChild(continueButton);
     }
 
     if (isUser && inlineEditEl) {

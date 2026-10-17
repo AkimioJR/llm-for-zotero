@@ -1,4 +1,5 @@
 import { clearStandaloneSelection } from "./conversationSelection";
+import { setStandaloneSidePanelSlideDurationForTest } from "./standaloneSidePanel";
 import {
   clearStandaloneSurfaceChoices,
   getSelectedModelEntryForSurface,
@@ -74,6 +75,7 @@ import {
   chatHistory,
   selectedRuntimeModeCache,
   loadedConversationKeys,
+  readOnlyBorrowedConversationKeys,
   webChatIsolatedConversationKeys,
   paperContextModeOverrides,
   paperContentSourceOverrides,
@@ -82,6 +84,7 @@ import {
   selectedTagContextCache,
   initializedConversationComposeContextKeys,
   isRequestPending,
+  selectedTextCache,
 } from "./state";
 import type { ResolvedContextSource, SendQuestionOptions } from "./types";
 import type {
@@ -120,6 +123,14 @@ import type {
   WorkflowTestHistorySearchResult,
   WorkflowTestSeededTurn,
   WorkflowTestConversationPersistenceSnapshot,
+  WorkflowTestEphemeralConversationRowCounts,
+  WorkflowTestSidePanel,
+  WorkflowTestStandaloneSidePanelControl,
+  WorkflowTestStandaloneSidePanelSlideFrame,
+  WorkflowTestStandaloneSidePanelDiagnostics,
+  WorkflowTestComposerMetrics,
+  WorkflowTestSegmentedTabMetrics,
+  WorkflowTestHistoryChipColors,
   WorkflowTestCrossPaperHistoryIsolationResult,
   WorkflowTestStaleAgentTraceIsolationResult,
 } from "./workflowTestTypes";
@@ -166,9 +177,18 @@ import {
   setSelectedTextExpandedIndex,
 } from "./contextResolution";
 import {
+  createGlobalPortalItem,
+  createPaperPortalItem,
   resolveConversationBaseItem,
   resolveInitialPanelItemState,
 } from "./portalScope";
+import {
+  allocateEphemeralGlobalConversationKey,
+  allocateEphemeralPaperConversationKey,
+  discardEphemeralConversation,
+  setEphemeralBackgroundContextProvider,
+} from "./ephemeralConversations";
+import { startSideSurfaceChoicesFromStandalone } from "./surfaceChoices";
 import { syncNoteEditingSelectedText } from "./noteEditing/selectionController";
 import {
   decorateAssistantCitationLinks,
@@ -225,6 +245,7 @@ import {
   bindEmbeddedPanelHost,
   bindTestPanelHost,
   capturePanelOperationLease,
+  markSidePanelBody,
   resolveSelectionSurfaceForBody,
 } from "./panelHostOwnership";
 import {
@@ -1124,6 +1145,151 @@ async function createStandaloneNoteFixture(input: {
 
 async function renderPanelForItem(itemId: number): Promise<WorkflowTestPanel> {
   return renderPanelForItemInternal(itemId);
+}
+
+/**
+ * Mounts a temporary side chat the way the window's side panel does: a full
+ * panel on a fresh ephemeral key, marked as a side body before it is built,
+ * on a paper portal item (Paper chat) or a global portal item (Library chat).
+ */
+async function renderSidePanelForItem(input: {
+  itemId: number;
+  mode: "paper" | "global";
+  /** Background text the side chat's model reads (the main chat). */
+  backgroundContext?: string;
+}): Promise<WorkflowTestSidePanel> {
+  assertWorkflowTestEnabled();
+  const item = Zotero.Items.get(input.itemId);
+  if (!item) throw new Error(`Unable to find Zotero item ${input.itemId}`);
+  const basePaper = resolveConversationBaseItem(item) || item;
+  const conversationKey =
+    input.mode === "global"
+      ? allocateEphemeralGlobalConversationKey()
+      : allocateEphemeralPaperConversationKey();
+  const sideItem =
+    input.mode === "global"
+      ? createGlobalPortalItem(item.libraryID, conversationKey)
+      : createPaperPortalItem(basePaper, conversationKey, 1);
+  if (input.backgroundContext !== undefined) {
+    const text = input.backgroundContext;
+    setEphemeralBackgroundContextProvider(conversationKey, () => text);
+  }
+  startSideSurfaceChoicesFromStandalone();
+  const doc = getWorkflowDocument();
+  const body = appendHost(doc);
+  const panelId = `workflow-side-panel-${++panelCounter}`;
+  body.dataset.workflowPanelId = panelId;
+  markSidePanelBody(body);
+  mountPanelShell({
+    body,
+    renderItem: sideItem,
+    getMountedItem: () => sideItem,
+    rawItem: item,
+    setupItem: sideItem,
+    beforeRegister: () => markSidePanelBody(body, sideItem),
+  });
+  await ensureConversationLoaded(sideItem, { body });
+  refreshChat(body, sideItem);
+  await Zotero.Promise.delay(50);
+  const contextSnapshot = await resolveContextSourceItemAsync(sideItem);
+  activeContextPanelStateSync.get(body)?.();
+  panels.set(panelId, { id: panelId, body, item: sideItem, contextSnapshot });
+  const root = body.querySelector("#llm-main") as HTMLElement | null;
+  return {
+    panelId,
+    itemId: input.itemId,
+    contextSnapshot,
+    conversationKey,
+    surface: resolveSelectionSurfaceForBody(body),
+    mountedConversationKey: Math.floor(Number(root?.dataset.itemId || 0)),
+    conversationSystem: root?.dataset.conversationSystem || "",
+  };
+}
+
+/** Drops a side chat's in-memory state (what closing the side chat does). */
+function discardSidePanelConversation(conversationKey: number): void {
+  assertWorkflowTestEnabled();
+  discardEphemeralConversation(conversationKey);
+}
+
+/**
+ * Rows any store holds for one conversation key, across the catalog,
+ * registry, ledger, message, search, fork, deletion, agent, document,
+ * attachment, and usage tables. A side chat's key must have none.
+ */
+async function getEphemeralConversationRowCounts(
+  conversationKey: number,
+  runIds: string[] = [],
+): Promise<WorkflowTestEphemeralConversationRowCounts> {
+  assertWorkflowTestEnabled();
+  const key = Math.floor(Number(conversationKey));
+  const count = async (
+    table: string,
+    whereSql: string,
+    params: unknown[],
+  ): Promise<number> => {
+    try {
+      return await countWorkflowRows(table, whereSql, params);
+    } catch (error) {
+      // A store that never initialized has no table, so it holds no rows.
+      if (/no such table/i.test(String(error))) return 0;
+      throw error;
+    }
+  };
+  const byKey = (table: string) => count(table, "conversation_key = ?", [key]);
+  return {
+    globalCatalog: await byKey("llm_for_zotero_global_conversations"),
+    paperCatalog: await byKey("llm_for_zotero_paper_conversations"),
+    messages: await byKey("llm_for_zotero_chat_messages"),
+    registry: await count(
+      "llm_for_zotero_conversation_registry",
+      "legacy_conversation_key = ?",
+      [key],
+    ),
+    searchIndex: await count(
+      "llm_for_zotero_conversation_search_index",
+      "legacy_conversation_key = ?",
+      [key],
+    ),
+    ledger: await byKey("llm_for_zotero_conversation_key_ledger"),
+    forkLinks: await count(
+      "llm_for_zotero_conversation_fork_links",
+      "source_conversation_key = ? OR target_conversation_key = ?",
+      [key, key],
+    ),
+    pendingDeletions: await byKey(PENDING_DELETIONS_TABLE),
+    agentRuns: await byKey("llm_for_zotero_agent_runs"),
+    // Events of a run row for the key, or of a run the caller names (an
+    // agent answer's run ID), in case events were written without a run row.
+    agentRunEvents: await count(
+      "llm_for_zotero_agent_run_events",
+      `run_id IN (SELECT run_id FROM llm_for_zotero_agent_runs WHERE conversation_key = ?)${
+        runIds.length
+          ? ` OR run_id IN (${runIds.map(() => "?").join(", ")})`
+          : ""
+      }`,
+      [key, ...runIds],
+    ),
+    agentTranscript: await byKey("llm_for_zotero_agent_transcript"),
+    agentToolResultHandles: await byKey(
+      "llm_for_zotero_agent_tool_result_handles",
+    ),
+    agentMemory: await byKey("llm_for_zotero_agent_memory"),
+    agentEvidence: await byKey("llm_for_zotero_agent_evidence"),
+    agentCoverage: await count(
+      "llm_for_zotero_agent_coverage",
+      "origin_conversation_key = ?",
+      [key],
+    ),
+    planDocuments: await byKey("llm_for_zotero_plan_documents"),
+    planDocumentOwners: await byKey("llm_for_zotero_plan_document_owners"),
+    attachmentRefs: await count(
+      "llm_for_zotero_attachment_refs",
+      "owner_type = 'conversation' AND owner_id = ?",
+      [key],
+    ),
+    usageEvents: await byKey("llm_for_zotero_usage_events"),
+  };
 }
 
 async function exerciseBackgroundAgentPublication(input: {
@@ -4269,6 +4435,955 @@ async function closeStandalone(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Standalone side panel (History / Side chat column)
+// ---------------------------------------------------------------------------
+
+/** Box metrics of a segmented tab group and of its tabs. */
+function segmentedMetrics(
+  win: Window | null,
+  group: HTMLElement | null,
+): WorkflowTestSegmentedTabMetrics | null {
+  if (!win || !group || !group.getClientRects().length) return null;
+  const groupStyle = win.getComputedStyle(group);
+  const tabs = Array.from(
+    group.querySelectorAll(".llm-standalone-tab"),
+  ) as HTMLElement[];
+  return {
+    groupPadding: groupStyle?.padding || "",
+    groupGap: groupStyle?.columnGap || "",
+    groupRadius: groupStyle?.borderRadius || "",
+    groupHeightPx: group.getBoundingClientRect().height,
+    tabs: tabs.map((tab) => {
+      const style = win.getComputedStyle(tab);
+      return {
+        paddingLeft: style?.paddingLeft || "",
+        paddingRight: style?.paddingRight || "",
+        paddingTop: style?.paddingTop || "",
+        minWidth: style?.minWidth || "",
+        heightPx: tab.getBoundingClientRect().height,
+        widthPx: tab.getBoundingClientRect().width,
+        fontSize: style?.fontSize || "",
+        radius: style?.borderRadius || "",
+        active: tab.classList.contains("active"),
+        fontWeight: style?.fontWeight || "",
+        background: style?.backgroundColor || "",
+        color: style?.color || "",
+      };
+    }),
+  };
+}
+
+/** The first visible history chip of each label type, with its colours. */
+function readHistoryChipColors(
+  win: Window | null,
+  root: ParentNode | null,
+): WorkflowTestHistoryChipColors[] {
+  if (!win || !root) return [];
+  const seen = new Set<string>();
+  const out: WorkflowTestHistoryChipColors[] = [];
+  for (const chip of Array.from(
+    root.querySelectorAll(".llm-standalone-search-label[data-label-type]"),
+  ) as HTMLElement[]) {
+    const type = chip.dataset.labelType || "";
+    if (seen.has(type) || !chip.getClientRects().length) continue;
+    seen.add(type);
+    const item = chip.closest(".llm-standalone-search-item");
+    const meta = item?.querySelector(
+      ".llm-standalone-search-meta, .llm-standalone-search-preview",
+    ) as HTMLElement | null;
+    const title = item?.querySelector(
+      ".llm-standalone-search-title",
+    ) as HTMLElement | null;
+    const style = win.getComputedStyle(chip);
+    out.push({
+      type,
+      color: style?.color || "",
+      background: style?.backgroundColor || "",
+      metaColor: (meta && win.getComputedStyle(meta)?.color) || "",
+      titleColor: (title && win.getComputedStyle(title)?.color) || "",
+    });
+  }
+  return out.sort((a, b) => a.type.localeCompare(b.type));
+}
+
+async function readStandaloneSearchPopupChipColors(): Promise<
+  WorkflowTestHistoryChipColors[]
+> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const win = doc.defaultView!;
+  const opener = doc
+    .querySelector(".llm-standalone-sidebar .llm-standalone-nav-icon-search")
+    ?.closest(
+      "button, [role='button'], .llm-standalone-nav-row",
+    ) as HTMLElement | null;
+  if (!opener) throw new Error("The Search history nav row was not rendered");
+  opener.click();
+  const overlaySelector = ".llm-standalone-search-overlay";
+  const deadline = Date.now() + 5000;
+  let chips: WorkflowTestHistoryChipColors[] = [];
+  while (Date.now() < deadline) {
+    const overlay = Array.from(doc.querySelectorAll(overlaySelector)).find(
+      (element) => (element as HTMLElement).style.display !== "none",
+    ) as HTMLElement | undefined;
+    chips = readHistoryChipColors(win, overlay || null);
+    if (chips.length) break;
+    await Zotero.Promise.delay(50);
+  }
+  const input = doc.querySelector(
+    `${overlaySelector} .llm-standalone-search-input`,
+  ) as HTMLElement | null;
+  input?.dispatchEvent(
+    new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+  );
+  await Zotero.Promise.delay(150);
+  return chips;
+}
+
+function readComposerMetrics(
+  win: Window | null,
+  body: HTMLElement | null,
+): WorkflowTestComposerMetrics | null {
+  if (!win || !body) return null;
+  const section = body.querySelector(
+    ".llm-input-section",
+  ) as HTMLElement | null;
+  if (!section || !section.getClientRects().length) return null;
+  const shown = (element: Element | null): element is HTMLElement =>
+    Boolean(
+      element &&
+      (element as HTMLElement).getClientRects().length &&
+      win.getComputedStyle(element as HTMLElement)?.display !== "none" &&
+      win.getComputedStyle(element as HTMLElement)?.visibility !== "hidden",
+    );
+  const height = (element: Element | null) =>
+    shown(element) ? element.getBoundingClientRect().height : 0;
+  const input = section.querySelector("#llm-input") as HTMLElement | null;
+  const actions = section.querySelector(".llm-actions");
+  const toolButtons = (
+    Array.from(actions?.querySelectorAll("button") || []) as HTMLElement[]
+  ).filter(shown);
+  const status = body.querySelector("#llm-status") as HTMLElement | null;
+  const modelButton = section.querySelector(
+    "#llm-model-toggle",
+  ) as HTMLElement | null;
+  let placeholderFontStyle = "";
+  try {
+    placeholderFontStyle =
+      (input && win.getComputedStyle(input, "::placeholder")?.fontStyle) || "";
+  } catch {
+    placeholderFontStyle = "";
+  }
+  return {
+    boxHeightPx: section.getBoundingClientRect().height,
+    contextRowHeightPx: height(section.querySelector(".llm-context-previews")),
+    inputHeightPx: height(input),
+    toolRowHeightPx: height(actions),
+    placeholderFontStyle,
+    contextChips: (
+      Array.from(
+        section.querySelectorAll(
+          ".llm-context-previews .llm-paper-context-chip-label",
+        ),
+      ) as HTMLElement[]
+    )
+      .filter(shown)
+      .map((chip) => (chip.textContent || "").trim()),
+    toolButtons: toolButtons.map((button) => (button.textContent || "").trim()),
+    toolButtonHeightsPx: toolButtons.map(
+      (button) => button.getBoundingClientRect().height,
+    ),
+    statusText: (status?.textContent || "").trim(),
+    statusClass: status?.className || "",
+    statusColor: (status && win.getComputedStyle(status)?.color) || "",
+    modelNameShown: shown(modelButton)
+      ? !modelButton.classList.contains("llm-model-btn-collapsed") &&
+        Boolean((modelButton.textContent || "").trim())
+      : null,
+  };
+}
+
+function readStandaloneSidePanelDiagnostics(): WorkflowTestStandaloneSidePanelDiagnostics {
+  const win = getStandaloneWindowForTest();
+  const doc = win?.document || null;
+  const query = <T extends Element = HTMLElement>(
+    root: ParentNode | null | undefined,
+    selector: string,
+  ) => (root?.querySelector(selector) as T | null) || null;
+  const queryAll = (root: ParentNode | null | undefined, selector: string) =>
+    Array.from(root?.querySelectorAll(selector) || []) as HTMLElement[];
+  const textOf = (element: Element | null | undefined) =>
+    (element?.textContent || "").trim();
+  const toggle = query<HTMLButtonElement>(
+    doc,
+    ".llm-standalone-side-panel-toggle",
+  );
+  const column = query(doc, ".llm-standalone-side-panel");
+  const contentWrapper = query(doc, ".llm-standalone-content-wrapper");
+  const contentArea = query(doc, ".llm-standalone-content");
+  const visible = (element: HTMLElement | null) =>
+    Boolean(element && !element.hidden && element.getClientRects().length);
+  const keysIn = (root: Element | null) =>
+    queryAll(root, ".llm-standalone-search-item[data-conversation-key]").map(
+      (row) => Number(row.dataset.conversationKey),
+    );
+  const countIn = (root: Element | null, selector: string) =>
+    queryAll(root, selector).length;
+  const assistantMessageTexts = (body: Element | null) =>
+    queryAll(body, "#llm-chat-box .llm-message-wrapper").map((wrapper) =>
+      textOf(wrapper.querySelector(".llm-bubble") || wrapper),
+    );
+
+  // The shown tab's content; other tabs stay mounted but hidden.
+  const readOnlyRoot = query(
+    column,
+    ".llm-standalone-side-panel-readonly:not([hidden])",
+  );
+  const readOnlyBody = query(readOnlyRoot, ".llm-standalone-side-body");
+  const readOnlyInput = query<HTMLTextAreaElement>(readOnlyBody, "#llm-input");
+  const sideRoot = query(
+    column,
+    ".llm-standalone-side-panel-chat:not([hidden])",
+  );
+  const sideBody = query(sideRoot, ".llm-standalone-side-body");
+  const sidePanelRoot = query(sideBody, "#llm-main");
+  const sideInput = query<HTMLTextAreaElement>(sideBody, "#llm-input");
+  const confirm = query(sideBody, ".llm-side-chat-close-confirm");
+  const mainInput = query<HTMLTextAreaElement>(contentArea, "#llm-input");
+  const mainItem = contentArea
+    ? activeContextPanels.get(contentArea)?.() || null
+    : null;
+  const mainKey = mainItem ? getConversationKey(mainItem) : 0;
+  const mainSelected = selectedTextCache.get(mainKey) || [];
+  return {
+    open: Boolean(column && !column.hidden),
+    toggleExpanded: toggle?.getAttribute("aria-expanded") ?? null,
+    toggleLabel: toggle?.getAttribute("aria-label") || "",
+    toggleControls: toggle?.getAttribute("aria-controls") ?? null,
+    view: column?.dataset.sideView || "",
+    activeTab:
+      query(
+        column,
+        ".llm-standalone-side-panel-tab.active:not([data-side-tab-kind='newtab'])",
+      )?.dataset.sideTabId || null,
+    stripTabCount: queryAll(column, ".llm-standalone-side-panel-tab").length,
+    newTabTab: (() => {
+      const tab = query(
+        column,
+        ".llm-standalone-side-panel-tab[data-side-tab-kind='newtab']",
+      );
+      const close = query(tab, ".llm-standalone-side-panel-tab-close");
+      return {
+        present: visible(tab),
+        active: Boolean(tab?.classList.contains("active")),
+        title: textOf(query(tab, ".llm-standalone-side-panel-tab-title")),
+        closeVisible: visible(close),
+        /** Its index among all strip tabs, the real ones first. */
+        index: queryAll(column, ".llm-standalone-side-panel-tab").indexOf(
+          tab as HTMLElement,
+        ),
+      };
+    })(),
+    tabs: queryAll(
+      column,
+      ".llm-standalone-side-panel-tab:not([data-side-tab-kind='newtab'])",
+    ).map((tab) => {
+      const close = query(tab, ".llm-standalone-side-panel-tab-close");
+      return {
+        id: tab.dataset.sideTabId || "",
+        kind: tab.dataset.sideTabKind || "",
+        title: textOf(query(tab, ".llm-standalone-side-panel-tab-title")),
+        active: tab.classList.contains("active"),
+        closeVisible: Boolean(
+          close &&
+          win &&
+          visible(close) &&
+          win.getComputedStyle(close)?.visibility !== "hidden",
+        ),
+      };
+    }),
+    newTabButton: (() => {
+      const button = query(
+        column,
+        ".llm-standalone-side-panel-bar > .llm-standalone-side-panel-icon-new-tab",
+      );
+      return {
+        visible: visible(button),
+        pressed: button?.getAttribute("aria-pressed") === "true",
+      };
+    })(),
+    panelConfirm: (() => {
+      const card = query(column, ".llm-side-panel-close-confirm");
+      return {
+        visible: visible(card),
+        text: textOf(query(card, ".llm-agent-hitl-description")),
+      };
+    })(),
+    titleText: textOf(
+      queryAll(column, ".llm-standalone-content-title-text").find(visible),
+    ),
+    design: (() => {
+      const metrics = (element: HTMLElement | null | undefined) => {
+        if (!element || !win || !visible(element)) return null;
+        const style = win.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return {
+          fontSize: style?.fontSize || "",
+          fontWeight: style?.fontWeight || "",
+          topPx: rect.top,
+          heightPx: rect.height,
+        };
+      };
+      const firstVisible = (root: ParentNode | null, selector: string) =>
+        queryAll(root, selector).find(visible) || null;
+      const mainScale = (element: HTMLElement | null) =>
+        element && win
+          ? (
+              win
+                .getComputedStyle(element)
+                ?.getPropertyValue("--llm-font-scale") || ""
+            ).trim()
+          : "";
+      return {
+        mainTitle: metrics(
+          firstVisible(contentWrapper, ".llm-standalone-content-title-text"),
+        ),
+        sideTitle: metrics(
+          firstVisible(column, ".llm-standalone-content-title-text"),
+        ),
+        tabRowHeightPx:
+          query(doc, ".llm-standalone-tab-row")?.getBoundingClientRect()
+            .height || 0,
+        barHeightPx:
+          query(
+            column,
+            ".llm-standalone-side-panel-bar",
+          )?.getBoundingClientRect().height || 0,
+        navRow: metrics(
+          firstVisible(doc, ".llm-standalone-sidebar .llm-standalone-nav-row"),
+        ),
+        launchRow: metrics(firstVisible(column, "[data-side-launch]")),
+        startTitle: metrics(firstVisible(column, ".llm-start-page-title")),
+        newTabPage: (() => {
+          const root = firstVisible(
+            column,
+            ".llm-standalone-side-panel-newtab",
+          );
+          const title = query(root, ".llm-start-page-title");
+          const subtitle = query(root, ".llm-start-page-subtitle");
+          const nav = query(root, ".llm-standalone-side-panel-newtab-nav");
+          if (!win || !root || !title || !nav) return null;
+          const box = root.getBoundingClientRect();
+          const top = title.getBoundingClientRect().top;
+          const navRect = nav.getBoundingClientRect();
+          return {
+            title: textOf(title),
+            subtitle: textOf(subtitle),
+            subtitleFontStyle:
+              (subtitle && win.getComputedStyle(subtitle)?.fontStyle) || "",
+            /** Content centre minus the page's centre. */
+            centreDxPx:
+              navRect.left + navRect.width / 2 - (box.left + box.width / 2),
+            centreDyPx: (top + navRect.bottom) / 2 - (box.top + box.height / 2),
+            rowLefts: queryAll(nav, "[data-side-launch]").map(
+              (row) => row.getBoundingClientRect().left,
+            ),
+          };
+        })(),
+        dayLabel: metrics(
+          firstVisible(
+            doc,
+            ".llm-standalone-sidebar .llm-standalone-day-label",
+          ),
+        ),
+        sectionLabel: null,
+        mainFontScale: mainScale(query(contentArea, "#llm-main")),
+        sideFontScales: queryAll(column, "#llm-main").map(mainScale),
+        mainTabs: segmentedMetrics(
+          win,
+          query(doc, ".llm-standalone-tab-row .llm-standalone-tab-group"),
+        ),
+        browserTabs: (() => {
+          const strip = query(column, ".llm-standalone-side-panel-tabs");
+          const bar = query(column, ".llm-standalone-side-panel-bar");
+          const toggle = query(doc, ".llm-standalone-side-panel-toggle");
+          const viewHost = query(column, ".llm-standalone-side-panel-view");
+          if (!win || !strip || !bar || !toggle || !viewHost || !column)
+            return null;
+          if (!visible(strip)) return null;
+          const flare = (tab: HTMLElement, pseudo: string) => {
+            const style = win.getComputedStyle(tab, pseudo);
+            return {
+              widthPx: Number.parseFloat(style?.width || "") || 0,
+              image: style?.backgroundImage || "",
+            };
+          };
+          const middle = (element: Element | null | undefined) => {
+            if (!element || !(element as HTMLElement).getClientRects().length)
+              return null;
+            const rect = element.getBoundingClientRect();
+            return rect.top + rect.height / 2;
+          };
+          return {
+            toggleTopPx: toggle.getBoundingClientRect().top,
+            toggleBottomPx: toggle.getBoundingClientRect().bottom,
+            mainSwitchTopPx:
+              query(
+                doc,
+                ".llm-standalone-tab-row .llm-standalone-tab-group",
+              )?.getBoundingClientRect().top ?? 0,
+            centres: {
+              tabRow: middle(query(doc, ".llm-standalone-tab-row")) ?? 0,
+              toggle: middle(toggle) ?? 0,
+              mainSwitch:
+                middle(
+                  query(
+                    doc,
+                    ".llm-standalone-tab-row .llm-standalone-tab-group",
+                  ),
+                ) ?? 0,
+              strip: middle(bar) ?? 0,
+              newTabButton:
+                middle(
+                  query(
+                    bar,
+                    ":scope > .llm-standalone-side-panel-icon-new-tab",
+                  ),
+                ) ?? 0,
+              closeButton:
+                middle(query(bar, ".llm-standalone-side-panel-close")) ?? 0,
+              tabs: queryAll(strip, ".llm-standalone-side-panel-tab").map(
+                (tab) => ({
+                  icon:
+                    middle(query(tab, ".llm-standalone-side-panel-tab-icon")) ??
+                    0,
+                  title:
+                    middle(
+                      query(tab, ".llm-standalone-side-panel-tab-title"),
+                    ) ?? 0,
+                  close: middle(
+                    query(tab, ".llm-standalone-side-panel-tab-close"),
+                  ),
+                }),
+              ),
+            },
+            panelLeftPx: column.getBoundingClientRect().left,
+            stripTopPx: bar.getBoundingClientRect().top,
+            stripBottomPx: bar.getBoundingClientRect().bottom,
+            tabRowTopPx:
+              query(doc, ".llm-standalone-tab-row")?.getBoundingClientRect()
+                .top || 0,
+            tabRowBottomPx:
+              query(doc, ".llm-standalone-tab-row")?.getBoundingClientRect()
+                .bottom || 0,
+            stripBackground: win.getComputedStyle(bar)?.backgroundColor || "",
+            contentTopPx: viewHost.getBoundingClientRect().top,
+            tabs: queryAll(strip, ".llm-standalone-side-panel-tab").map(
+              (tab) => {
+                const rect = tab.getBoundingClientRect();
+                const style = win.getComputedStyle(tab);
+                return {
+                  leftPx: rect.left,
+                  rightPx: rect.right,
+                  topPx: rect.top,
+                  bottomPx: rect.bottom,
+                  active: tab.classList.contains("active"),
+                  background: style?.backgroundColor || "",
+                  color: style?.color || "",
+                  radius: `${style?.borderTopLeftRadius} ${style?.borderTopRightRadius} ${style?.borderBottomRightRadius} ${style?.borderBottomLeftRadius}`,
+                  flareBefore: flare(tab, "::before"),
+                  flareAfter: flare(tab, "::after"),
+                };
+              },
+            ),
+          };
+        })(),
+        sideChips: readHistoryChipColors(win, column),
+        searchField: (() => {
+          const field = firstVisible(
+            column,
+            ".llm-standalone-side-panel-search-row .llm-standalone-search-header",
+          );
+          if (!field || !win) return null;
+          const style = win.getComputedStyle(field);
+          const rect = field.getBoundingClientRect();
+          return {
+            topPx: rect.top,
+            heightPx: rect.height,
+            hasLens: Boolean(
+              field.querySelector(".llm-standalone-nav-icon-search"),
+            ),
+            background: style?.backgroundColor || "",
+            placeholder:
+              query<HTMLInputElement>(field, "input")?.placeholder || "",
+          };
+        })(),
+      };
+    })(),
+    panelWidthPx: column?.getBoundingClientRect().width || 0,
+    splitter: (() => {
+      const splitter = query(doc, ".llm-standalone-side-panel-resizer");
+      return {
+        visible: visible(splitter),
+        widthPx: splitter?.getBoundingClientRect().width || 0,
+        lineColor:
+          (splitter &&
+            win?.getComputedStyle(splitter, "::before")?.backgroundColor) ||
+          "",
+        cursor: (splitter && win?.getComputedStyle(splitter)?.cursor) || "",
+      };
+    })(),
+    panelBackground:
+      (column && win?.getComputedStyle(column)?.backgroundColor) || "",
+    mainBackground:
+      (contentWrapper &&
+        win?.getComputedStyle(contentWrapper)?.backgroundColor) ||
+      "",
+    mainContentWidthPx: contentWrapper?.getBoundingClientRect().width || 0,
+    window: {
+      outerWidth: win?.outerWidth || 0,
+      screenX: win?.screenX || 0,
+      screenY: win?.screenY || 0,
+      availLeft: Number((win?.screen as any)?.availLeft) || 0,
+      availWidth: win?.screen?.availWidth || 0,
+    },
+    sidebarState:
+      (query(doc, ".llm-standalone-sidebar") as HTMLElement | null)?.dataset
+        .sidebarState || "",
+    launchRows: queryAll(column, ".llm-standalone-side-panel-launch-row").map(
+      (row) => row.dataset.sideLaunch || "",
+    ),
+    historyKeys: visible(query(column, ".llm-standalone-side-panel-history"))
+      ? keysIn(query(column, ".llm-standalone-side-panel-history"))
+      : [],
+    sideChats: queryAll(column, ".llm-standalone-side-panel-chat").map(
+      (root) => {
+        const body = query(root, ".llm-standalone-side-body");
+        return {
+          tabId: root.dataset.sideTabId || "",
+          conversationKey: Number(
+            query(body, "#llm-main")?.dataset.itemId || 0,
+          ),
+          messageTexts: assistantMessageTexts(body),
+          shown: !root.hidden,
+        };
+      },
+    ),
+    readOnly:
+      readOnlyRoot && readOnlyBody && !readOnlyRoot.hidden
+        ? {
+            title: textOf(
+              query(readOnlyRoot, ".llm-standalone-content-title-text"),
+            ),
+            pill: textOf(
+              query(readOnlyRoot, ".llm-standalone-side-panel-pill"),
+            ),
+            conversationKey: Number(
+              query(readOnlyBody, "#llm-main")?.dataset.itemId || 0,
+            ),
+            messageTexts: assistantMessageTexts(readOnlyBody),
+            inputDisabled: Boolean(readOnlyInput?.disabled),
+            placeholder: readOnlyInput?.placeholder || "",
+            actionButtons: queryAll(
+              readOnlyBody,
+              "[data-side-read-only-action]",
+            ).map((button) => button.dataset.sideReadOnlyAction || ""),
+            statusText: textOf(query(readOnlyBody, "#llm-status")),
+            editableBubbles: countIn(readOnlyBody, ".llm-bubble-editable"),
+            retryButtons: countIn(readOnlyBody, ".llm-message-action-retry"),
+            deleteButtons: countIn(readOnlyBody, ".llm-message-action-delete"),
+            forkButtons: countIn(readOnlyBody, ".llm-message-action-fork"),
+            quoteButtons: countIn(
+              readOnlyBody,
+              ".llm-message-action-quote-main",
+            ),
+            copyButtons: countIn(readOnlyBody, ".llm-message-action-copy"),
+            composer: readComposerMetrics(win, readOnlyBody),
+          }
+        : null,
+    sideChat:
+      sideRoot && sideBody
+        ? {
+            conversationKey: Number(sidePanelRoot?.dataset.itemId || 0),
+            conversationKind: sidePanelRoot?.dataset.conversationKind || "",
+            messageTexts: assistantMessageTexts(sideBody),
+            pill: textOf(query(sideRoot, ".llm-standalone-side-panel-pill")),
+            placeholder: sideInput?.placeholder || "",
+            statusText: textOf(query(sideBody, "#llm-status")),
+            inputHeightPx: sideInput?.getBoundingClientRect().height || 0,
+            sendMainButtons: countIn(sideBody, ".llm-message-action-send-main"),
+            retryButtons: countIn(sideBody, ".llm-message-action-retry"),
+            editableBubbles: countIn(sideBody, ".llm-bubble-editable"),
+            forkButtons: countIn(sideBody, ".llm-message-action-fork"),
+            deleteButtons: countIn(sideBody, ".llm-message-action-delete"),
+            contextNotes: queryAll(sideBody, ".llm-side-chat-context-note").map(
+              (note) => textOf(note),
+            ),
+            selectedContextTexts: (
+              selectedTextCache.get(
+                Number(sidePanelRoot?.dataset.itemId || 0),
+              ) || []
+            ).map((entry) => entry.text),
+            confirmVisible: Boolean(confirm),
+            confirmText: textOf(query(confirm, ".llm-agent-hitl-description")),
+            clearDisabled: Boolean(
+              query<HTMLButtonElement>(
+                sideRoot,
+                ".llm-standalone-side-panel-icon-clear",
+              )?.disabled,
+            ),
+            composer: readComposerMetrics(win, sideBody),
+          }
+        : null,
+    main: {
+      conversationKey: mainKey,
+      inputHeightPx: mainInput?.getBoundingClientRect().height || 0,
+      statusText: textOf(query(contentArea, "#llm-status")),
+      selectedContextSources: mainSelected.map((entry) => String(entry.source)),
+      selectedContextTexts: mainSelected.map((entry) => entry.text),
+      askSideButtons: countIn(contentArea, ".llm-message-action-ask-side"),
+      composer: readComposerMetrics(win, contentArea),
+    },
+  };
+}
+
+async function getStandaloneSidePanelDiagnostics(): Promise<WorkflowTestStandaloneSidePanelDiagnostics> {
+  assertWorkflowTestEnabled();
+  await waitForStandaloneReady();
+  return readStandaloneSidePanelDiagnostics();
+}
+
+const STANDALONE_SIDE_PANEL_CONTROL_SELECTORS: Record<
+  WorkflowTestStandaloneSidePanelControl,
+  string
+> = {
+  toggle: ".llm-standalone-side-panel-toggle",
+  close: ".llm-standalone-side-panel-bar .llm-standalone-side-panel-close",
+  "new-tab":
+    ".llm-standalone-side-panel-bar > .llm-standalone-side-panel-icon-new-tab",
+  "newtab-tab": ".llm-standalone-side-panel-tab[data-side-tab-kind='newtab']",
+  "newtab-tab-close":
+    ".llm-standalone-side-panel-tab[data-side-tab-kind='newtab'] .llm-standalone-side-panel-tab-close",
+  "new-sidechat":
+    ".llm-standalone-side-panel-newtab:not([hidden]) [data-side-launch='sidechat']",
+  "new-history":
+    ".llm-standalone-side-panel-newtab:not([hidden]) [data-side-launch='history']",
+  clear:
+    ".llm-standalone-side-panel-chat:not([hidden]) .llm-standalone-side-panel-icon-clear",
+  "confirm-keep":
+    ".llm-standalone-side-panel-chat:not([hidden]) .llm-side-chat-close-confirm [data-confirm-action='keep']",
+  "confirm-send-last":
+    ".llm-standalone-side-panel-chat:not([hidden]) .llm-side-chat-close-confirm [data-confirm-action='send-last']",
+  "confirm-discard":
+    ".llm-standalone-side-panel-chat:not([hidden]) .llm-side-chat-close-confirm [data-confirm-action='discard']",
+  "panel-confirm-keep":
+    ".llm-side-panel-close-confirm [data-confirm-action='panel-keep']",
+  "panel-confirm-discard":
+    ".llm-side-panel-close-confirm [data-confirm-action='panel-discard']",
+  "readonly-add-paper":
+    ".llm-standalone-side-panel-readonly:not([hidden]) [data-side-read-only-action='add-paper']",
+  "readonly-open-main":
+    ".llm-standalone-side-panel-readonly:not([hidden]) [data-side-read-only-action='open-main']",
+};
+
+async function clickStandaloneSidePanelControl(
+  control: WorkflowTestStandaloneSidePanelControl,
+): Promise<WorkflowTestStandaloneSidePanelDiagnostics> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const selector = STANDALONE_SIDE_PANEL_CONTROL_SELECTORS[control];
+  const target = doc.querySelector(selector) as HTMLElement | null;
+  if (!target)
+    throw new Error(`Side panel control ${control} was not rendered`);
+  target.click();
+  await Zotero.Promise.delay(250);
+  return readStandaloneSidePanelDiagnostics();
+}
+
+/** Slows (or restores, with null) the side panel's open/close slide. */
+function setStandaloneSidePanelSlideDuration(durationMs: number | null): void {
+  assertWorkflowTestEnabled();
+  setStandaloneSidePanelSlideDurationForTest(durationMs);
+}
+
+/**
+ * Clicks a side panel control and samples every animation frame for
+ * `sampleMs`: the window's width and position, the main column's and the
+ * panel's widths, and whether the panel still shows its tabs.
+ */
+async function recordStandaloneSidePanelSlide(
+  control: WorkflowTestStandaloneSidePanelControl,
+  sampleMs = 700,
+): Promise<WorkflowTestStandaloneSidePanelSlideFrame[]> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const win = doc.defaultView!;
+  const target = doc.querySelector(
+    STANDALONE_SIDE_PANEL_CONTROL_SELECTORS[control],
+  ) as HTMLElement | null;
+  if (!target)
+    throw new Error(`Side panel control ${control} was not rendered`);
+  const main = doc.querySelector(
+    ".llm-standalone-content-wrapper",
+  ) as HTMLElement | null;
+  const column = doc.querySelector(
+    ".llm-standalone-side-panel",
+  ) as HTMLElement | null;
+  const frames: WorkflowTestStandaloneSidePanelSlideFrame[] = [];
+  const startedAt = win.performance.now();
+  const sample = () => {
+    const shown = Boolean(
+      column && !column.hidden && column.getClientRects().length,
+    );
+    frames.push({
+      timeMs: win.performance.now() - startedAt,
+      outerWidth: win.outerWidth,
+      innerWidth: win.innerWidth,
+      screenX: win.screenX,
+      screenY: win.screenY,
+      mainWidthPx: main?.getBoundingClientRect().width || 0,
+      mainLeftPx: main?.getBoundingClientRect().left || 0,
+      columnsScrollLeft:
+        (doc.querySelector(".llm-standalone-lower") as HTMLElement | null)
+          ?.scrollLeft || 0,
+      panelWidthPx: shown ? column!.getBoundingClientRect().width : 0,
+      panelLeftPx: shown ? column!.getBoundingClientRect().left : 0,
+      panelShown: shown,
+      panelTabCount: shown
+        ? column!.querySelectorAll(".llm-standalone-side-panel-tab").length
+        : 0,
+    });
+  };
+  sample();
+  target.click();
+  await new Promise<void>((resolve) => {
+    const step = () => {
+      sample();
+      if (win.performance.now() - startedAt >= sampleMs) resolve();
+      else win.requestAnimationFrame(step);
+    };
+    win.requestAnimationFrame(step);
+  });
+  return frames;
+}
+
+async function dragStandaloneSidePanelSplitter(
+  deltaX: number,
+): Promise<WorkflowTestStandaloneSidePanelDiagnostics> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const win = doc.defaultView!;
+  const splitter = doc.querySelector(
+    ".llm-standalone-side-panel-resizer",
+  ) as HTMLElement | null;
+  if (!splitter) throw new Error("The side panel divider was not rendered");
+  const startX = 600;
+  splitter.dispatchEvent(
+    new win.MouseEvent("mousedown", {
+      bubbles: true,
+      button: 0,
+      screenX: startX,
+    }),
+  );
+  win.dispatchEvent(
+    new win.MouseEvent("mousemove", {
+      bubbles: true,
+      screenX: startX + deltaX,
+    }),
+  );
+  win.dispatchEvent(
+    new win.MouseEvent("mouseup", { bubbles: true, screenX: startX + deltaX }),
+  );
+  await Zotero.Promise.delay(100);
+  return readStandaloneSidePanelDiagnostics();
+}
+
+async function clickStandaloneSidePanelTab(
+  index: number,
+  part: "tab" | "close" = "tab",
+): Promise<WorkflowTestStandaloneSidePanelDiagnostics> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const tab = doc.querySelectorAll(
+    ".llm-standalone-side-panel-tab:not([data-side-tab-kind='newtab'])",
+  )[index] as HTMLElement | undefined;
+  if (!tab) {
+    throw new Error(
+      `Side panel tab ${index} was not rendered: ${JSON.stringify(readStandaloneSidePanelDiagnostics().tabs)}`,
+    );
+  }
+  const target =
+    part === "close"
+      ? (tab.querySelector(
+          ".llm-standalone-side-panel-tab-close",
+        ) as HTMLElement | null)
+      : tab;
+  if (!target) throw new Error(`Side panel tab ${index} has no ${part}`);
+  target.click();
+  await Zotero.Promise.delay(300);
+  return readStandaloneSidePanelDiagnostics();
+}
+
+async function clickStandaloneSidePanelHistoryRow(
+  conversationKey: number,
+): Promise<WorkflowTestStandaloneSidePanelDiagnostics> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const list = "History tab";
+  const selector = `.llm-standalone-side-panel-history:not([hidden]) .llm-standalone-search-item[data-conversation-key='${Math.floor(conversationKey)}']`;
+  const deadline = Date.now() + 5000;
+  let row = doc.querySelector(selector) as HTMLElement | null;
+  while (!row && Date.now() < deadline) {
+    await Zotero.Promise.delay(50);
+    row = doc.querySelector(selector) as HTMLElement | null;
+  }
+  if (!row) {
+    throw new Error(
+      `Side panel ${list} row ${conversationKey} was not rendered: ${JSON.stringify(readStandaloneSidePanelDiagnostics())}`,
+    );
+  }
+  row.click();
+  await Zotero.Promise.delay(400);
+  return readStandaloneSidePanelDiagnostics();
+}
+
+function resolveStandaloneChatScopeBody(
+  doc: Document,
+  scope: "main" | "readonly" | "sidechat",
+): HTMLElement | null {
+  if (scope === "main") {
+    return doc.querySelector(".llm-standalone-content") as HTMLElement | null;
+  }
+  // The shown tab of that kind.
+  return doc.querySelector(
+    scope === "readonly"
+      ? ".llm-standalone-side-panel-readonly:not([hidden]) .llm-standalone-side-body"
+      : ".llm-standalone-side-panel-chat:not([hidden]) .llm-standalone-side-body",
+  ) as HTMLElement | null;
+}
+
+/** Forgets a non-active conversation's in-memory history (stored rows stay). */
+async function evictStandaloneConversationFromMemory(
+  conversationKey: number,
+): Promise<void> {
+  assertWorkflowTestEnabled();
+  chatHistory.delete(conversationKey);
+  loadedConversationKeys.delete(conversationKey);
+  readOnlyBorrowedConversationKeys.delete(conversationKey);
+}
+
+/**
+ * While a past chat is open read-only in the side panel, runs the real
+ * conversation load for the same key (as the main chat would) and reports
+ * whether the read-only display copy was replaced by a real load.
+ */
+async function probeStandaloneReadOnlyBorrowedLoad(
+  paperItemId: number,
+): Promise<{
+  conversationKey: number;
+  borrowedBefore: boolean;
+  loadedBefore: boolean;
+  borrowedAfter: boolean;
+  loadedAfter: boolean;
+}> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const body = resolveStandaloneChatScopeBody(doc, "readonly");
+  const keyText = (body?.querySelector("#llm-main") as HTMLElement | null)
+    ?.dataset.itemId;
+  const conversationKey = Number(keyText || 0);
+  const paper = Zotero.Items.get(paperItemId) as Zotero.Item | null;
+  if (!body || !conversationKey || !paper) {
+    throw new Error("No read-only view is open");
+  }
+  // The same portal item the window builds for this key's main-chat load.
+  const item = createPaperPortalItem(paper, conversationKey, 1);
+  const borrowedBefore = readOnlyBorrowedConversationKeys.has(conversationKey);
+  const loadedBefore = loadedConversationKeys.has(conversationKey);
+  await ensureConversationLoaded(item);
+  return {
+    conversationKey,
+    borrowedBefore,
+    loadedBefore,
+    borrowedAfter: readOnlyBorrowedConversationKeys.has(conversationKey),
+    loadedAfter: loadedConversationKeys.has(conversationKey),
+  };
+}
+
+async function clickStandaloneChatMessageAction(
+  scope: "main" | "readonly" | "sidechat",
+  actionClass: string,
+): Promise<WorkflowTestStandaloneSidePanelDiagnostics> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const body = resolveStandaloneChatScopeBody(doc, scope);
+  const buttons = Array.from(
+    body?.querySelectorAll(`.${actionClass}`) || [],
+  ) as HTMLElement[];
+  const button = buttons[buttons.length - 1];
+  if (!button) {
+    throw new Error(`No ${actionClass} button in the ${scope} chat`);
+  }
+  button.click();
+  await Zotero.Promise.delay(300);
+  return readStandaloneSidePanelDiagnostics();
+}
+
+async function sendStandaloneSideChat(text: string): Promise<void> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const body = resolveStandaloneChatScopeBody(doc, "sidechat");
+  const input = body?.querySelector("#llm-input") as HTMLTextAreaElement | null;
+  const send = body?.querySelector("#llm-send") as HTMLButtonElement | null;
+  if (!body || !input || !send) {
+    throw new Error("The side chat composer was not rendered");
+  }
+  input.value = text;
+  const EventCtor = doc.defaultView?.Event ?? Event;
+  input.dispatchEvent(new EventCtor("input", { bubbles: true }));
+  const startedAt = Date.now();
+  while (send.disabled && Date.now() - startedAt < 5000) {
+    await Zotero.Promise.delay(25);
+  }
+  send.click();
+}
+
+async function openStandaloneSlashSideChatItem(): Promise<{
+  visible: boolean;
+  disabled: boolean;
+  hint: string;
+}> {
+  assertWorkflowTestEnabled();
+  const { contentArea } = await ensureStandaloneWorkflowPanelReady();
+  dispatchWorkflowClick(contentArea, "#llm-upload-file", "Slash menu button");
+  await Zotero.Promise.delay(150);
+  const option = contentArea.querySelector(
+    "#llm-slash-side-chat-option",
+  ) as HTMLButtonElement | null;
+  if (!option) throw new Error("The Add side chat item was not rendered");
+  return {
+    visible:
+      option.style.display !== "none" && option.getClientRects().length > 0,
+    disabled: option.disabled,
+    hint: (
+      option.querySelector(".llm-action-picker-hint")?.textContent || ""
+    ).trim(),
+  };
+}
+
+async function clickStandaloneSlashSideChatItem(): Promise<WorkflowTestStandaloneSidePanelDiagnostics> {
+  assertWorkflowTestEnabled();
+  const { contentArea } = await ensureStandaloneWorkflowPanelReady();
+  dispatchWorkflowClick(
+    contentArea,
+    "#llm-slash-side-chat-option",
+    "Add side chat item",
+  );
+  await Zotero.Promise.delay(250);
+  return readStandaloneSidePanelDiagnostics();
+}
+
 async function getDiagnostics(
   panelId?: string,
 ): Promise<WorkflowTestDiagnostics> {
@@ -7269,6 +8384,9 @@ export function installWorkflowTestHarness(targetAddon: {
     createItemNoteFixture,
     createStandaloneNoteFixture,
     renderPanelForItem,
+    renderSidePanelForItem,
+    discardSidePanelConversation,
+    getEphemeralConversationRowCounts,
     refreshActiveConversationPanels,
     exerciseBackgroundAgentPublication,
     exerciseNativeQuestionReview: (panelId: string) => {
@@ -7708,6 +8826,20 @@ export function installWorkflowTestHarness(targetAddon: {
     getConversationHistoryTexts,
     getStandaloneDiagnostics,
     closeStandalone,
+    getStandaloneSidePanelDiagnostics,
+    clickStandaloneSidePanelControl,
+    setStandaloneSidePanelSlideDuration,
+    recordStandaloneSidePanelSlide,
+    clickStandaloneSidePanelHistoryRow,
+    dragStandaloneSidePanelSplitter,
+    clickStandaloneSidePanelTab,
+    readStandaloneSearchPopupChipColors,
+    clickStandaloneChatMessageAction,
+    evictStandaloneConversationFromMemory,
+    probeStandaloneReadOnlyBorrowedLoad,
+    sendStandaloneSideChat,
+    openStandaloneSlashSideChatItem,
+    clickStandaloneSlashSideChatItem,
     getLastSend: () => lastSend,
     getDiagnostics,
     configurePermissionCatalogs,

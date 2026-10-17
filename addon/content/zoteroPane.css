@@ -1538,6 +1538,14 @@
     var(--material-background) 96%,
     black 4%
   );
+  /* The side panel column: a step lighter than the main chat (dark theme;
+   * the light theme's is a step darker), so it reads apart from it without
+   * taking the History pane's tone. */
+  --llm-standalone-side-panel-surface-bg: color-mix(
+    in srgb,
+    var(--material-sidepane) 96%,
+    white 4%
+  );
   --llm-popup-surface-bg: color-mix(
     in srgb,
     var(--material-sidepane, var(--material-background, #ffffff)) 94%,
@@ -1580,12 +1588,15 @@
 
 /* --- Lower area: sidebar + content side by side --- */
 
+/* clip, not hidden: the row is never a scroll container, so a tab brought
+ * into view (scrollIntoView) cannot shift the columns while the side panel
+ * slides past the window's edge. */
 .llm-standalone-lower {
   display: flex;
   flex-direction: row;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+  overflow: clip;
 }
 
 /* --- Unified expandable sidebar --- */
@@ -1691,7 +1702,8 @@
   -webkit-mask-image: url("icons/action-export.svg");
 }
 
-.llm-standalone-icon-clear::before {
+.llm-standalone-icon-clear::before,
+.llm-standalone-side-panel-icon-clear::before {
   mask-image: url("icons/action-clear.svg");
   -webkit-mask-image: url("icons/action-clear.svg");
 }
@@ -1792,7 +1804,8 @@
   padding-top: 12vh;
 }
 
-.llm-standalone-search-overlay.llm-history-search-theme-light {
+.llm-standalone-search-overlay.llm-history-search-theme-light,
+.llm-standalone-search-embedded.llm-history-search-theme-light {
   --llm-history-paper-chip-text: #1d4ed8;
   --llm-history-paper-chip-bg: rgba(59, 130, 246, 0.12);
   --llm-history-library-chip-text: #b45309;
@@ -1801,7 +1814,8 @@
   --llm-history-orphan-chip-bg: rgba(239, 68, 68, 0.12);
 }
 
-.llm-standalone-search-overlay.llm-history-search-theme-dark {
+.llm-standalone-search-overlay.llm-history-search-theme-dark,
+.llm-standalone-search-embedded.llm-history-search-theme-dark {
   --llm-history-paper-chip-text: #93c5fd;
   --llm-history-paper-chip-bg: rgba(59, 130, 246, 0.15);
   --llm-history-library-chip-text: #fdba74;
@@ -2040,6 +2054,75 @@
   overflow: hidden;
   text-overflow: ellipsis;
   margin-top: 2px;
+}
+
+/* Embedded history list: the same rows, rendered inline in a panel. */
+.llm-standalone-search-popup.llm-standalone-search-embedded {
+  width: 100%;
+  max-height: none;
+  min-height: 0;
+  flex: 1 1 auto;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  box-sizing: border-box;
+}
+
+/* Embedded search field: a soft field on the panel surface, with the
+ * History pane's search lens. Row metrics follow the nav rows (8px inset,
+ * 8px padding, 6px icon gap), so the lens lines up with the row icons. */
+.llm-standalone-search-header.llm-standalone-search-embedded-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 6px;
+  height: calc(8px + var(--llm-standalone-ui-line-height));
+  margin: 0;
+  padding: 0 8px;
+  box-sizing: border-box;
+  background: var(--fill-quinary);
+  /* --stroke-secondary is not set in this window; the popup's border
+   * variable carries its fallback. */
+  border: 1px solid var(--llm-popup-surface-border) !important;
+  border-radius: 8px;
+  cursor: text;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease;
+}
+
+.llm-standalone-search-header.llm-standalone-search-embedded-field:hover {
+  background: color-mix(
+    in srgb,
+    var(--fill-quinary) 70%,
+    var(--fill-quaternary)
+  );
+}
+
+.llm-standalone-search-header.llm-standalone-search-embedded-field:focus-within {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.llm-standalone-search-header.llm-standalone-search-embedded-field::after {
+  display: none;
+}
+
+/* The lens is the History pane's "Search history" nav icon, muted like the
+ * placeholder beside it. */
+.llm-standalone-nav-icon.llm-standalone-search-icon {
+  color: var(--fill-tertiary);
+}
+
+/* Inline, the field takes the window's row text size, not the popup's. */
+.llm-standalone-search-embedded-field .llm-standalone-search-input {
+  font-size: var(--llm-standalone-ui-font-size);
+  line-height: var(--llm-standalone-ui-line-height);
+}
+
+.llm-standalone-search-embedded .llm-standalone-search-results {
+  min-height: 0;
+  background: transparent;
 }
 
 /* ── Skills popup ─────────────────────────────────────────────── */
@@ -2809,6 +2892,565 @@
   }
 }
 
+/* --- Side panel: a third column right of the main chat ------------------
+ * Opened from the tab row's trailing toggle. Its bar, title rows, tabs and
+ * panels reuse the main column's classes; the rules below only place them.
+ */
+
+.llm-standalone-tab-row-trailing {
+  position: relative;
+  z-index: 21;
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: var(--llm-standalone-chrome-gap);
+  min-width: 0;
+}
+
+.llm-standalone-tab-row .llm-standalone-side-panel-toggle,
+.llm-standalone-side-panel-bar .llm-standalone-title-action {
+  width: calc(24px + 2 * var(--llm-standalone-chrome-gap));
+  min-width: calc(24px + 2 * var(--llm-standalone-chrome-gap));
+}
+
+.llm-standalone-side-panel-toggle::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h13M11 6l6 6-6 6M21 5v14'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h13M11 6l6 6-6 6M21 5v14'/%3E%3C/svg%3E");
+}
+
+/* Open: the arrow points back toward the panel's edge. */
+.llm-standalone-side-panel-toggle[aria-expanded="true"]::before {
+  transform: scaleX(-1);
+}
+
+.llm-standalone-side-panel-toggle[aria-expanded="true"] {
+  background: var(--fill-quinary);
+  color: var(--fill-primary);
+}
+
+.llm-standalone-side-panel-icon-close::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 6l12 12M18 6 6 18'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 6l12 12M18 6 6 18'/%3E%3C/svg%3E");
+}
+
+.llm-standalone-side-panel-icon-history::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12a9 9 0 1 0 3-6.7L3 8'/%3E%3Cpath d='M3 3v5h5M12 7v5l3 2'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12a9 9 0 1 0 3-6.7L3 8'/%3E%3Cpath d='M3 3v5h5M12 7v5l3 2'/%3E%3C/svg%3E");
+}
+
+/* The "+" (new tab) button: the History pane's "New chat" plus. */
+.llm-standalone-side-panel-icon-new-tab::before {
+  mask-image: url("icons/action-history-new.svg");
+  -webkit-mask-image: url("icons/action-history-new.svg");
+}
+
+/* The New tab tab: a house outline (roof and walls, no door), the new-tab
+ * page being the panel's home. The strip's separate "+" button keeps the plus. */
+.llm-standalone-side-panel-icon-home::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/%3E%3C/svg%3E");
+}
+
+/* Side chat, everywhere it shows (new-tab row, side chat tabs, "Ask in
+ * side chat"): a dashed speech bubble, for a chat that is not kept. */
+.llm-standalone-side-panel-icon-side-chat::before,
+.llm-message-action-ask-side::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' stroke-dasharray='2.4 2.4'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' stroke-dasharray='2.4 2.4'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3C/svg%3E");
+}
+
+/* The divider is the History pane's resizer (.llm-standalone-sidebar-resizer)
+ * placed as a flex item between the main chat and the side panel. */
+.llm-standalone-sidebar-resizer.llm-standalone-side-panel-resizer {
+  margin-inline-start: 0;
+  /* The strip is the main chat's edge; nothing else paints behind it. */
+  background: var(--material-sidepane);
+}
+
+.llm-standalone-side-panel-resizing .llm-standalone-side-panel-resizer::before {
+  background: var(--stroke-primary, var(--fill-secondary, #7a7a7a));
+}
+
+.llm-standalone-side-panel-resizing,
+.llm-standalone-side-panel-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* The chrome gap (tab and button padding) is the main column's: the panel
+ * script copies the main tab row's resolved gap onto the column. */
+.llm-standalone-side-panel {
+  container-type: inline-size;
+  --llm-standalone-chrome-gap: 4px;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--llm-standalone-side-panel-width, 420px);
+  width: var(--llm-standalone-side-panel-width, 420px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* Everything inside (bars, lists, chat panels, composer surround) paints
+   * with the side panel's own surface. */
+  --material-sidepane: var(--llm-standalone-side-panel-surface-bg);
+  background: var(--llm-standalone-side-panel-surface-bg);
+}
+
+.llm-standalone-side-panel[hidden],
+.llm-standalone-side-panel-resizer[hidden],
+.llm-standalone-side-panel-bar [hidden],
+.llm-standalone-side-panel-view > [hidden] {
+  display: none !important;
+}
+
+/* Browser-style tabs. The bar is a strip a step darker than the panel, as
+ * tall as the main tab row, so its middle line is the row's: the tabs'
+ * icons and titles, the "+" and the close button sit on it, level with the
+ * →| toggle and Paper chat | Library chat. A tab starts a small gap below
+ * the strip's top and runs to its bottom, where the panel surface starts,
+ * so the active tab (in the surface colour) runs straight into the
+ * content; its content keeps the same gap at the bottom, which puts it on
+ * the strip's middle line. */
+.llm-standalone-side-panel {
+  --llm-side-tab-height: 28px;
+  /* Tabs start where the Paper chat | Library chat toggle starts: the
+   * toggle is the line height plus 4px (its padding and border), centred in
+   * the row. */
+  --llm-side-tab-top: calc(
+    (
+        var(--llm-standalone-toolbar-row-height) - 4px -
+          var(--llm-standalone-ui-line-height)
+      ) /
+      2
+  );
+  --llm-side-tab-radius: 8px;
+  --llm-side-strip-bg: color-mix(
+    in srgb,
+    var(--llm-standalone-side-panel-surface-bg) 95%,
+    black 5%
+  );
+}
+
+/* The dark theme needs a slightly deeper strip for the raised tab to read;
+ * both stay light so the strip does not read as a heavy band. */
+@media (prefers-color-scheme: dark) {
+  .llm-standalone-side-panel {
+    --llm-side-strip-bg: color-mix(
+      in srgb,
+      var(--llm-standalone-side-panel-surface-bg) 88%,
+      black 12%
+    );
+  }
+}
+
+.llm-standalone-side-panel-bar {
+  display: flex;
+  column-gap: var(--llm-standalone-chrome-gap);
+  align-items: center;
+  height: var(--llm-standalone-toolbar-row-height);
+  min-height: var(--llm-standalone-toolbar-row-height);
+  padding: 0 12px 0 0;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  background: var(--llm-side-strip-bg);
+}
+
+.llm-standalone-side-panel-bar > .llm-standalone-title-action {
+  height: var(--llm-side-tab-height);
+  min-height: var(--llm-side-tab-height);
+}
+
+.llm-standalone-side-panel-close {
+  margin-inline-start: auto;
+}
+
+/* The tabs scroll sideways when they overflow. The first tab sits 8px
+ * in, as the content does, so its left flare has the same room as its
+ * right one. */
+.llm-standalone-side-panel-tabs {
+  display: flex;
+  align-self: stretch;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: var(--llm-side-tab-top) var(--llm-side-tab-radius) 0;
+  box-sizing: border-box;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+/* Tabs share the strip's width equally, down to a minimum; past that the
+ * strip scrolls. Inactive tabs have no fill and muted text. */
+.llm-standalone-side-panel-tab {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 180px;
+  gap: 6px;
+  min-width: 84px;
+  height: calc(
+    var(--llm-standalone-toolbar-row-height) - var(--llm-side-tab-top)
+  );
+  padding: 0 4px var(--llm-side-tab-top) 10px;
+  box-sizing: border-box;
+  border-radius: var(--llm-side-tab-radius);
+  color: var(--fill-secondary);
+  font-size: var(--llm-standalone-ui-font-size);
+  line-height: var(--llm-standalone-ui-line-height);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+/* An inactive tab's hover fill is a pill on the strip's middle line, the
+ * same gap from the strip's top and bottom. */
+.llm-standalone-side-panel-tab:not(.active)::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 var(--llm-side-tab-top);
+  z-index: -1;
+  border-radius: var(--llm-side-tab-radius);
+  background: transparent;
+  pointer-events: none;
+  transition: background 0.15s;
+}
+
+.llm-standalone-side-panel-tab:hover:not(.active) {
+  color: var(--fill-primary);
+}
+
+.llm-standalone-side-panel-tab:hover:not(.active)::before {
+  background: var(--fill-quinary);
+}
+
+.llm-standalone-side-panel-tab:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+/* The active tab is raised: the panel surface, rounded top corners, and
+ * a concave flare at each bottom corner, so it joins the content with no
+ * seam or step. */
+.llm-standalone-side-panel-tab.active {
+  background: var(--llm-standalone-side-panel-surface-bg);
+  color: var(--fill-primary);
+  border-radius: var(--llm-side-tab-radius) var(--llm-side-tab-radius) 0 0;
+}
+
+.llm-standalone-side-panel-tab.active::before,
+.llm-standalone-side-panel-tab.active::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  width: var(--llm-side-tab-radius);
+  height: var(--llm-side-tab-radius);
+  pointer-events: none;
+}
+
+.llm-standalone-side-panel-tab.active::before {
+  right: 100%;
+  background: radial-gradient(
+    circle at 0 0,
+    transparent calc(var(--llm-side-tab-radius) - 0.5px),
+    var(--llm-standalone-side-panel-surface-bg) var(--llm-side-tab-radius)
+  );
+}
+
+.llm-standalone-side-panel-tab.active::after {
+  left: 100%;
+  background: radial-gradient(
+    circle at 100% 0,
+    transparent calc(var(--llm-side-tab-radius) - 0.5px),
+    var(--llm-standalone-side-panel-surface-bg) var(--llm-side-tab-radius)
+  );
+}
+
+.llm-standalone-side-panel-tab-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.llm-standalone-side-panel-tab-icon::before {
+  content: "";
+  display: block;
+  width: 18px;
+  height: 18px;
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+}
+
+.llm-standalone-side-panel-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The tab's close button shows on hover and on the active tab. */
+.llm-standalone-side-panel-tab-close {
+  appearance: none;
+  -moz-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+  display: none;
+}
+
+.llm-standalone-side-panel-tab-close::before {
+  content: "";
+  display: block;
+  width: 10px;
+  height: 10px;
+  background-color: currentColor;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 6l12 12M18 6 6 18'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 6l12 12M18 6 6 18'/%3E%3C/svg%3E");
+  mask-size: contain;
+  -webkit-mask-size: contain;
+}
+
+.llm-standalone-side-panel-tab:hover .llm-standalone-side-panel-tab-close,
+.llm-standalone-side-panel-tab:focus-within
+  .llm-standalone-side-panel-tab-close,
+.llm-standalone-side-panel-tab.active .llm-standalone-side-panel-tab-close {
+  display: inline-flex;
+}
+
+.llm-standalone-side-panel-tab-close:hover {
+  background: var(--fill-quinary);
+  color: var(--fill-primary);
+}
+
+/* "Close the side panel?" sits under the bar, across the panel. */
+.llm-action-inline-card.llm-side-panel-close-confirm {
+  margin: 0 12px 8px;
+  flex-shrink: 0;
+}
+
+.llm-standalone-side-panel-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.llm-standalone-side-panel-view > div {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Title rows reuse .llm-standalone-content-title; a pill sits after the
+ * title, the actions at the end. */
+.llm-standalone-side-panel-title {
+  gap: 8px;
+}
+
+.llm-standalone-side-panel-title .llm-standalone-content-title-text {
+  flex: 0 1 auto;
+}
+
+.llm-standalone-side-panel-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--llm-standalone-chrome-gap) / 2);
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+}
+
+.llm-standalone-side-panel-title .llm-standalone-title-action {
+  width: calc(24px + var(--llm-standalone-chrome-gap));
+  min-width: calc(24px + var(--llm-standalone-chrome-gap));
+}
+
+/* Same metrics as the history list's scope chip (.llm-standalone-search-label). */
+.llm-standalone-side-panel-pill {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: var(--llm-fs-10);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  background: var(--fill-quinary);
+  color: var(--fill-secondary);
+}
+
+.llm-standalone-side-panel-pill[data-variant="temporary"] {
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+}
+
+#llmforzotero-standalone-chat-root[data-standalone-theme="dark"]
+  .llm-standalone-side-panel-pill[data-variant="temporary"] {
+  color: #e9b864;
+}
+
+/* Panel bodies take the main content area's layout. */
+.llm-standalone-side-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* New-tab page: the chat start page, centred, with its two nav rows in
+ * place of the notes; the rows keep their own left alignment. */
+.llm-standalone-side-panel-newtab-nav {
+  align-self: center;
+  width: max-content;
+  max-width: 100%;
+  padding: 0;
+  text-align: start;
+}
+
+.llm-standalone-side-panel-launch-row {
+  align-items: baseline;
+  padding-block: calc(
+    (
+        var(--llm-standalone-item-row-height) -
+          var(--llm-standalone-ui-line-height)
+      ) /
+      2
+  );
+}
+
+.llm-standalone-side-panel-launch-row .llm-standalone-nav-icon {
+  align-self: center;
+}
+
+.llm-standalone-side-panel-launch-row .llm-standalone-nav-label {
+  flex: 0 0 auto;
+}
+
+.llm-standalone-side-panel-launch-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-inline-start: 4px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-10);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The History tab: the search field, with the nav rows' 8px inset, is
+ * centred on the main title's line. */
+.llm-standalone-side-panel-search-row {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  flex-shrink: 0;
+  min-height: var(--llm-standalone-title-row-height);
+  padding: 0 8px;
+  box-sizing: border-box;
+}
+
+.llm-standalone-side-panel-history-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-top: 8px;
+}
+
+/* Read-only past chat: no Save as note (no handlers), greyed composer. */
+.llm-standalone-side-readonly-body .llm-message-action-note {
+  display: none;
+}
+
+/* The input keeps the main composer's look (no dimming, plain
+ * placeholder); only the cursor says it takes no text. */
+.llm-input-section[data-side-read-only="true"] .llm-input {
+  cursor: not-allowed;
+}
+
+.llm-input-section[data-side-read-only="true"] .llm-input:disabled {
+  opacity: 1;
+}
+
+/* The paper chip shows what the chat was about, greyed like a disabled
+ * control. */
+.llm-input-section[data-side-read-only="true"]
+  .llm-paper-context-chip[data-side-read-only-chip] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* The tool row's two buttons replace the composer tools, right-aligned on
+ * one line, with the tool buttons' size. */
+.llm-standalone-side-panel-readonly-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.llm-standalone-side-panel-readonly-actions > .llm-action-btn {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* "Context switched" divider between side chat turns. */
+.llm-side-chat-context-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11);
+  line-height: 1.4;
+}
+
+.llm-side-chat-context-note::before,
+.llm-side-chat-context-note::after {
+  content: "";
+  flex: 1 1 0;
+  height: 1px;
+  background: var(--stroke-secondary, rgba(120, 120, 120, 0.35));
+}
+
+.llm-side-chat-context-note-text {
+  flex: 0 1 auto;
+  max-width: 80%;
+  text-align: center;
+}
+
+.llm-side-chat-close-confirm {
+  margin: 6px 0 8px;
+}
+
 /* --- Main area (content) --- */
 
 /* Tab row — centers the tab group at top of content area */
@@ -2816,7 +3458,10 @@
   display: grid;
   /* Center when there is room; reserve the controls' actual width before
    * giving spare space to the empty trailing track. */
-  grid-template-columns: minmax(max-content, 1fr) max-content minmax(0, 1fr);
+  grid-template-columns: minmax(max-content, 1fr) max-content minmax(
+      max-content,
+      1fr
+    );
   column-gap: var(--llm-standalone-chrome-gap);
   align-items: center;
   height: var(--llm-standalone-toolbar-row-height);
@@ -2922,6 +3567,14 @@
     in srgb,
     var(--material-background) 90%,
     var(--fill-primary) 10%
+  );
+  /* In the light theme the side panel is a step darker than the main
+   * chat, so its white composer stands out (the dark theme's is a step
+   * lighter). */
+  --llm-standalone-side-panel-surface-bg: color-mix(
+    in srgb,
+    var(--material-sidepane) 96%,
+    black 4%
   );
 }
 
@@ -3046,6 +3699,12 @@
   );
   clip-path: polygon(100% 0, 100% 100%, 0 100%);
   opacity: 0.75;
+}
+
+/* The window's vertical resize controller is bound to the main column only,
+   so the side panel's chat and composer handles would do nothing. */
+.llm-standalone-side-body .llm-standalone-resize-handle {
+  display: none;
 }
 
 .llm-standalone-resizing,
@@ -5540,6 +6199,18 @@
 .llm-message-action-expand::before {
   mask-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m9%206-6%206%206%206%22%2F%3E%3Cpath%20d%3D%22m15%206%206%206-6%206%22%2F%3E%3C%2Fsvg%3E");
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m9%206-6%206%206%206%22%2F%3E%3Cpath%20d%3D%22m15%206%206%206-6%206%22%2F%3E%3C%2Fsvg%3E");
+}
+
+/* Panel-registered footer actions (chatPanelExtensions): side chat and main chat hand-offs. */
+
+.llm-message-action-send-main::before {
+  mask-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M19%2012H5%22%2F%3E%3Cpath%20d%3D%22m11%206-6%206%206%206%22%2F%3E%3C%2Fsvg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M19%2012H5%22%2F%3E%3Cpath%20d%3D%22m11%206-6%206%206%206%22%2F%3E%3C%2Fsvg%3E");
+}
+
+.llm-message-action-quote-main::before {
+  mask-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M7%207h4v4c0%203-1%205-4%206%22%2F%3E%3Cpath%20d%3D%22M14%207h4v4c0%203-1%205-4%206%22%2F%3E%3C%2Fsvg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M7%207h4v4c0%203-1%205-4%206%22%2F%3E%3Cpath%20d%3D%22M14%207h4v4c0%203-1%205-4%206%22%2F%3E%3C%2Fsvg%3E");
 }
 
 .llm-edit-latest:hover:not(:disabled),
@@ -12605,6 +13276,27 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   min-width: 0;
 }
 
+.llm-action-picker-item.llm-action-picker-item-stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.llm-action-picker-item-stacked .llm-action-picker-title {
+  max-width: 100%;
+}
+
+.llm-action-picker-hint {
+  font-size: var(--llm-fs-11);
+  font-weight: 400;
+  color: var(--fill-secondary, #888);
+  line-height: 1.3;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .llm-action-picker-badge {
   font-size: calc(10px * var(--llm-font-scale, 1));
   font-weight: 500;
@@ -14171,6 +14863,17 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   text-overflow: clip;
 }
 
+/* The side composer never wraps the model name; it truncates. */
+.llm-standalone-side-panel
+  .llm-model-btn.llm-model-btn-wrap-2line:not(.llm-model-btn-collapsed) {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+  line-height: 1;
+  max-height: none;
+  text-overflow: ellipsis;
+}
+
 .llm-action-slot.llm-model-dropdown > .llm-model-btn.llm-model-btn-collapsed {
   width: var(--llm-action-dropdown-icon-width);
   min-width: var(--llm-action-dropdown-icon-width);
@@ -15016,6 +15719,18 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 :root[customtitlebar] .llm-standalone-nav-toggle,
 :root[customtitlebar] .llm-standalone-tab-group,
 :root[customtitlebar] .llm-standalone-runtime-system-controls {
+  -moz-window-dragging: no-drag;
+}
+
+/* The side panel's bar drags the window like the tab row beside it; its
+ * buttons and the toggle stay clickable. */
+:root[customtitlebar] .llm-standalone-side-panel-bar {
+  -moz-window-dragging: drag;
+}
+
+:root[customtitlebar] .llm-standalone-side-panel-toggle,
+:root[customtitlebar] .llm-standalone-side-panel-tabs,
+:root[customtitlebar] .llm-standalone-side-panel-bar button {
   -moz-window-dragging: no-drag;
 }
 

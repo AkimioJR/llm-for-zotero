@@ -44,6 +44,336 @@ export type WorkflowTestPanel = {
   contextSnapshot: ResolvedContextSource | null;
 };
 
+export type WorkflowTestSidePanel = WorkflowTestPanel & {
+  /** The ephemeral key the side chat was mounted on. */
+  conversationKey: number;
+  /** The selection surface the side body resolves to. */
+  surface: string;
+  /** The key the mounted panel root shows. */
+  mountedConversationKey: number;
+  conversationSystem: string;
+};
+
+export type WorkflowTestStandaloneSidePanelControl =
+  | "toggle"
+  | "close"
+  /** The "+" button after the last tab. */
+  | "new-tab"
+  /** The strip's New tab tab, and its close button. */
+  | "newtab-tab"
+  | "newtab-tab-close"
+  /** The new-tab page's "Side chat" and "History" rows. */
+  | "new-sidechat"
+  | "new-history"
+  /** The shown side chat's clear button. */
+  | "clear"
+  /** The shown side chat's "close this side chat?" card. */
+  | "confirm-keep"
+  | "confirm-send-last"
+  | "confirm-discard"
+  /** The panel's "close the side panel?" card. */
+  | "panel-confirm-keep"
+  | "panel-confirm-discard"
+  | "readonly-add-paper"
+  | "readonly-open-main";
+
+export type WorkflowTestTextMetrics = {
+  fontSize: string;
+  fontWeight: string;
+  topPx: number;
+  heightPx: number;
+};
+
+export type WorkflowTestSegmentedTabMetrics = {
+  groupPadding: string;
+  groupGap: string;
+  groupRadius: string;
+  groupHeightPx: number;
+  tabs: {
+    paddingLeft: string;
+    paddingRight: string;
+    paddingTop: string;
+    minWidth: string;
+    heightPx: number;
+    widthPx: number;
+    fontSize: string;
+    radius: string;
+    active: boolean;
+    fontWeight: string;
+    background: string;
+    color: string;
+  }[];
+};
+
+/** A history row's scope chip colours, with the row's text colours. */
+export type WorkflowTestHistoryChipColors = {
+  type: string;
+  color: string;
+  background: string;
+  metaColor: string;
+  titleColor: string;
+};
+
+/** A chat body's composer box, rows, and footer status line. */
+export type WorkflowTestComposerMetrics = {
+  boxHeightPx: number;
+  contextRowHeightPx: number;
+  inputHeightPx: number;
+  toolRowHeightPx: number;
+  /** Font style of the input's placeholder ("normal", "italic"). */
+  placeholderFontStyle: string;
+  /** Visible chip labels in the context row. */
+  contextChips: string[];
+  /** The visible tool-row buttons' text, left to right. */
+  toolButtons: string[];
+  /** Height of each visible tool-row button. */
+  toolButtonHeightsPx: number[];
+  statusText: string;
+  statusClass: string;
+  statusColor: string;
+  /** The model button shows its name (not the icon-only fallback). */
+  modelNameShown: boolean | null;
+};
+
+/** One animation frame sampled while the side panel opens or closes. */
+export type WorkflowTestStandaloneSidePanelSlideFrame = {
+  timeMs: number;
+  outerWidth: number;
+  innerWidth: number;
+  screenX: number;
+  screenY: number;
+  mainWidthPx: number;
+  mainLeftPx: number;
+  /** The columns row's scroll offset; the row never scrolls. */
+  columnsScrollLeft: number;
+  panelWidthPx: number;
+  panelLeftPx: number;
+  panelShown: boolean;
+  /** Strip tabs (the New tab tab included) while the panel shows. */
+  panelTabCount: number;
+};
+
+export type WorkflowTestStandaloneSidePanelDiagnostics = {
+  open: boolean;
+  toggleExpanded: string | null;
+  toggleLabel: string;
+  toggleControls: string | null;
+  /**
+   * "closed", "newtab", "history", "readonly", or "sidechat" (the shown
+   * tab's kind).
+   */
+  view: string;
+  /** The shown tab's id; null on the new-tab page. */
+  activeTab: string | null;
+  /** The bar's tabs, left to right. */
+  tabs: {
+    id: string;
+    kind: string;
+    title: string;
+    active: boolean;
+    /** The tab's close button is visible. */
+    closeVisible: boolean;
+  }[];
+  /** The "+" button after the last tab. */
+  newTabButton: { visible: boolean; pressed: boolean };
+  /** Every tab in the strip, the New tab tab included. */
+  stripTabCount: number;
+  /** The New tab tab; `tabs` lists only the other tabs. */
+  newTabTab: {
+    present: boolean;
+    active: boolean;
+    title: string;
+    closeVisible: boolean;
+    index: number;
+  };
+  /** The panel's "close the side panel?" card. */
+  panelConfirm: { visible: boolean; text: string };
+  /** The visible view's title row text. */
+  titleText: string;
+  /**
+   * Computed type and box metrics of the panel's parts and their main-window
+   * counterparts, for the "same design language" checks.
+   */
+  design: {
+    mainTitle: WorkflowTestTextMetrics | null;
+    sideTitle: WorkflowTestTextMetrics | null;
+    tabRowHeightPx: number;
+    barHeightPx: number;
+    navRow: WorkflowTestTextMetrics | null;
+    launchRow: WorkflowTestTextMetrics | null;
+    /** The visible chat start page title (New tab, or an empty chat). */
+    startTitle: WorkflowTestTextMetrics | null;
+    /** The New tab page: the chat start page with two nav rows. */
+    newTabPage: {
+      title: string;
+      subtitle: string;
+      subtitleFontStyle: string;
+      centreDxPx: number;
+      centreDyPx: number;
+      rowLefts: number[];
+    } | null;
+    dayLabel: WorkflowTestTextMetrics | null;
+    sectionLabel: WorkflowTestTextMetrics | null;
+    /** --llm-font-scale on the main chat and on each panel chat. */
+    mainFontScale: string;
+    sideFontScales: string[];
+    /** Paper chat | Library chat. */
+    mainTabs: WorkflowTestSegmentedTabMetrics | null;
+    /** The panel's browser-style tab strip, and the main row's →| toggle. */
+    browserTabs: {
+      toggleTopPx: number;
+      toggleBottomPx: number;
+      /** Top of Paper chat | Library chat; the tabs start on this line. */
+      mainSwitchTopPx: number;
+      /** Middle lines (y of the box's centre) of the strip and its parts. */
+      centres: {
+        /** The main tab row, the →| toggle and Paper chat | Library chat. */
+        tabRow: number;
+        toggle: number;
+        mainSwitch: number;
+        strip: number;
+        /** The "+" button and the panel's close button. */
+        newTabButton: number;
+        closeButton: number;
+        /** Each strip tab's icon, title and (when shown) close button. */
+        tabs: { icon: number; title: number; close: number | null }[];
+      };
+      panelLeftPx: number;
+      stripTopPx: number;
+      stripBottomPx: number;
+      /** The main column's tab row (→| toggle, Paper chat | Library chat). */
+      tabRowTopPx: number;
+      tabRowBottomPx: number;
+      stripBackground: string;
+      /** Top of the panel content under the strip. */
+      contentTopPx: number;
+      tabs: {
+        leftPx: number;
+        rightPx: number;
+        topPx: number;
+        bottomPx: number;
+        active: boolean;
+        background: string;
+        color: string;
+        radius: string;
+        /** The bottom flares' size and paint (active tab only). */
+        flareBefore: { widthPx: number; image: string };
+        flareAfter: { widthPx: number; image: string };
+      }[];
+    } | null;
+    /** Chips in the panel's visible history lists, one per label type. */
+    sideChips: WorkflowTestHistoryChipColors[];
+    /** The History view's search field, when it shows. */
+    searchField: {
+      topPx: number;
+      heightPx: number;
+      hasLens: boolean;
+      background: string;
+      placeholder: string;
+    } | null;
+  };
+  panelWidthPx: number;
+  mainContentWidthPx: number;
+  /** The standalone window's outer box and its screen. */
+  window: {
+    outerWidth: number;
+    screenX: number;
+    screenY: number;
+    availLeft: number;
+    availWidth: number;
+  };
+  /** The History pane: "expanded" or "collapsed". */
+  sidebarState: string;
+  /** The divider between the main chat and the panel. */
+  splitter: {
+    visible: boolean;
+    widthPx: number;
+    lineColor: string;
+    cursor: string;
+  };
+  panelBackground: string;
+  mainBackground: string;
+  /** The new-tab page's launch rows ("sidechat", "history"). */
+  launchRows: string[];
+  /** The History tab's Search history rows, while it shows. */
+  historyKeys: number[];
+  /** Every side chat tab, shown or not. */
+  sideChats: {
+    tabId: string;
+    conversationKey: number;
+    messageTexts: string[];
+    shown: boolean;
+  }[];
+  readOnly: {
+    title: string;
+    pill: string;
+    conversationKey: number;
+    messageTexts: string[];
+    inputDisabled: boolean;
+    placeholder: string;
+    actionButtons: string[];
+    statusText: string;
+    editableBubbles: number;
+    retryButtons: number;
+    deleteButtons: number;
+    forkButtons: number;
+    quoteButtons: number;
+    copyButtons: number;
+    composer: WorkflowTestComposerMetrics | null;
+  } | null;
+  sideChat: {
+    conversationKey: number;
+    conversationKind: string;
+    messageTexts: string[];
+    pill: string;
+    placeholder: string;
+    statusText: string;
+    inputHeightPx: number;
+    sendMainButtons: number;
+    retryButtons: number;
+    editableBubbles: number;
+    forkButtons: number;
+    deleteButtons: number;
+    contextNotes: string[];
+    selectedContextTexts: string[];
+    confirmVisible: boolean;
+    confirmText: string;
+    clearDisabled: boolean;
+    composer: WorkflowTestComposerMetrics | null;
+  } | null;
+  main: {
+    conversationKey: number;
+    inputHeightPx: number;
+    statusText: string;
+    selectedContextSources: string[];
+    selectedContextTexts: string[];
+    askSideButtons: number;
+    composer: WorkflowTestComposerMetrics | null;
+  };
+};
+
+export type WorkflowTestEphemeralConversationRowCounts = {
+  globalCatalog: number;
+  paperCatalog: number;
+  messages: number;
+  registry: number;
+  searchIndex: number;
+  ledger: number;
+  forkLinks: number;
+  pendingDeletions: number;
+  agentRuns: number;
+  agentRunEvents: number;
+  agentTranscript: number;
+  agentToolResultHandles: number;
+  agentMemory: number;
+  agentEvidence: number;
+  agentCoverage: number;
+  planDocuments: number;
+  planDocumentOwners: number;
+  attachmentRefs: number;
+  usageEvents: number;
+};
+
 export type WorkflowTestRuntimeSystemToggle = {
   system: RuntimeConversationSystem;
   visible: boolean;
@@ -625,6 +955,19 @@ export type WorkflowTestApi = {
     noteHtml: string;
   }) => Promise<WorkflowTestStandaloneNoteFixture>;
   renderPanelForItem: (itemId: number) => Promise<WorkflowTestPanel>;
+  /** Mounts a temporary side chat on a fresh ephemeral key. */
+  renderSidePanelForItem: (input: {
+    itemId: number;
+    mode: "paper" | "global";
+    backgroundContext?: string;
+  }) => Promise<WorkflowTestSidePanel>;
+  /** Drops a side chat's in-memory state. */
+  discardSidePanelConversation: (conversationKey: number) => void;
+  /** Rows every store holds for one conversation key. */
+  getEphemeralConversationRowCounts: (
+    conversationKey: number,
+    runIds?: string[],
+  ) => Promise<WorkflowTestEphemeralConversationRowCounts>;
   refreshActiveConversationPanels: (conversationKey?: number) => void;
   exerciseNativeQuestionReview: (
     panelId: string,
@@ -1047,6 +1390,63 @@ export type WorkflowTestApi = {
   ) => Promise<WorkflowTestStandaloneDiagnostics>;
   getStandaloneDiagnostics: () => Promise<WorkflowTestStandaloneDiagnostics>;
   closeStandalone: () => Promise<void>;
+  /** The window's side panel: open state, view, and each view's contents. */
+  getStandaloneSidePanelDiagnostics: () => Promise<WorkflowTestStandaloneSidePanelDiagnostics>;
+  /** Clicks one side panel control (toggle, tabs, launch rows, confirm). */
+  clickStandaloneSidePanelControl: (
+    control: WorkflowTestStandaloneSidePanelControl,
+  ) => Promise<WorkflowTestStandaloneSidePanelDiagnostics>;
+  /** Slows (ms) or restores (null) the side panel's open/close slide. */
+  setStandaloneSidePanelSlideDuration: (durationMs: number | null) => void;
+  /** Clicks a side panel control and samples each frame for `sampleMs`. */
+  recordStandaloneSidePanelSlide: (
+    control: WorkflowTestStandaloneSidePanelControl,
+    sampleMs?: number,
+  ) => Promise<WorkflowTestStandaloneSidePanelSlideFrame[]>;
+  /** Drags the side panel's divider by `deltaX` screen pixels. */
+  /** Opens the window's Search history popup, reads its chips, closes it. */
+  readStandaloneSearchPopupChipColors: () => Promise<
+    WorkflowTestHistoryChipColors[]
+  >;
+  dragStandaloneSidePanelSplitter: (
+    deltaX: number,
+  ) => Promise<WorkflowTestStandaloneSidePanelDiagnostics>;
+  /** Clicks a row of the History tab's Search history list. */
+  clickStandaloneSidePanelHistoryRow: (
+    conversationKey: number,
+  ) => Promise<WorkflowTestStandaloneSidePanelDiagnostics>;
+  /** Clicks the bar's tab at `index` (0 = leftmost), or its close button. */
+  clickStandaloneSidePanelTab: (
+    index: number,
+    part?: "tab" | "close",
+  ) => Promise<WorkflowTestStandaloneSidePanelDiagnostics>;
+  /** Clicks the newest assistant answer's footer action in one chat. */
+  clickStandaloneChatMessageAction: (
+    scope: "main" | "readonly" | "sidechat",
+    actionClass: string,
+  ) => Promise<WorkflowTestStandaloneSidePanelDiagnostics>;
+  /** Forgets a non-active conversation's in-memory history (stored rows stay). */
+  evictStandaloneConversationFromMemory: (
+    conversationKey: number,
+  ) => Promise<void>;
+  /** Runs the real conversation load for the open read-only view's key. */
+  probeStandaloneReadOnlyBorrowedLoad: (paperItemId: number) => Promise<{
+    conversationKey: number;
+    borrowedBefore: boolean;
+    loadedBefore: boolean;
+    borrowedAfter: boolean;
+    loadedAfter: boolean;
+  }>;
+  /** Types into the shown side chat's composer and presses Send. */
+  sendStandaloneSideChat: (text: string) => Promise<void>;
+  /** Opens the main chat's "/" menu and reads its "Add side chat" item. */
+  openStandaloneSlashSideChatItem: () => Promise<{
+    visible: boolean;
+    disabled: boolean;
+    hint: string;
+  }>;
+  /** Clicks the main chat's "Add side chat" item (menu already open). */
+  clickStandaloneSlashSideChatItem: () => Promise<WorkflowTestStandaloneSidePanelDiagnostics>;
   getLastSend: () => SendQuestionOptions | null;
   getDiagnostics: (panelId?: string) => Promise<WorkflowTestDiagnostics>;
   configurePermissionCatalogs: (input?: { delayFirstCodex?: boolean }) => void;

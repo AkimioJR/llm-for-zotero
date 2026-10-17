@@ -372,6 +372,57 @@ describe("conversationSelection", function () {
         assert.equal(fixture.getMode(), "paper");
       });
 
+      describe("side chat surface", function () {
+        const sideGlobal = (): SelectionScope => ({
+          ...globalScopeFor(),
+          surface: "side",
+        });
+        const sidePaper = (): SelectionScope => ({
+          ...paperScopeFor(),
+          surface: "side",
+        });
+
+        it("remembers nothing, in any slot or pref", function () {
+          remember(sideGlobal(), fixture.globalKey(), { persist: true });
+          remember(sidePaper(), fixture.paperKey());
+          rememberMode(fixture.system, LIBRARY_ID, "global", {
+            surface: "side",
+          });
+          assert.isFalse(fixture.globalMap().has(fixture.globalStateKey()));
+          assert.isFalse(fixture.paperMap().has(fixture.paperStateKey()));
+          assert.isFalse(fixture.modeMap().has(fixture.modeStateKey()));
+          assert.isNull(fixture.getGlobal());
+          assert.isNull(fixture.getMode());
+          assert.equal(standaloneGlobalConversationByLibrary.size, 0);
+          assert.equal(standalonePaperConversationByPaper.size, 0);
+          assert.equal(standaloneConversationModeByLibrary.size, 0);
+        });
+
+        it("primes nothing", function () {
+          prime({
+            system: fixture.system,
+            libraryID: LIBRARY_ID,
+            mode: "global",
+            conversationKey: fixture.globalKey(),
+            surface: "side",
+          }).restore();
+          assert.isFalse(fixture.modeMap().has(fixture.modeStateKey()));
+          assert.isNull(fixture.getMode());
+          assert.isNull(fixture.getGlobal());
+          assert.equal(standaloneConversationModeByLibrary.size, 0);
+        });
+
+        it("reads the window's choice, then the sidebar's", function () {
+          fixture.setGlobal(fixture.globalKey());
+          assert.equal(recall(sideGlobal()), fixture.globalKey());
+          remember(
+            { ...globalScopeFor(), surface: "standalone" },
+            fixture.globalKey() + 2,
+          );
+          assert.equal(recall(sideGlobal()), fixture.globalKey() + 2);
+        });
+      });
+
       describe("standalone surface", function () {
         const windowGlobal = (): SelectionScope => ({
           ...globalScopeFor(),

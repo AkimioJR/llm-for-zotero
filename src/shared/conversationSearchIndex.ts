@@ -7,6 +7,7 @@ import {
   UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE,
   UPSTREAM_RUNTIME_CONVERSATION_KEY_END,
   isConversationKeyForKind,
+  isEphemeralConversationKey,
 } from "./conversationKeySpace";
 import {
   buildConversationID,
@@ -598,6 +599,13 @@ export async function refreshConversationSearchIndexForConversation(params: {
 }): Promise<boolean> {
   const system = normalizeSystem(params.system);
   if (!system) return false;
+  // A temporary side chat's key (reserved band) is never indexed.
+  if (
+    params.conversationKey !== undefined &&
+    isEphemeralConversationKey(params.conversationKey)
+  ) {
+    return false;
+  }
   const filter = buildCatalogConversationFilter(params);
   if (!filter.filterSql) return false;
   const initialized = await initConversationSearchIndexStore();

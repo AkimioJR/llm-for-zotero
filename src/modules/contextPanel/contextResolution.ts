@@ -1604,6 +1604,11 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
       if (selectedSource === "note-edit") {
         return "Editing";
       }
+      if (selectedSource === "sidechat") {
+        return selectedContexts.length > 1 && index > 0
+          ? `${t("Side chat")} (${index + 1})`
+          : t("Side chat");
+      }
       if (selectedSource === "model") {
         return selectedContexts.length > 1 && index > 0
           ? `Model Response (${index + 1})`

@@ -785,6 +785,51 @@ export function withScrollGuard(
   }
 }
 
+/** Forget the saved scroll position of one conversation. */
+export function clearChatScrollSnapshotForConversationKey(
+  conversationKey: number,
+): void {
+  const normalized = Math.floor(Number(conversationKey));
+  if (!Number.isFinite(normalized) || normalized <= 0) return;
+  chatScrollSnapshots.delete(normalized);
+  pendingChatScrollRestores.delete(normalized);
+}
+
+export type SavedChatScrollState = {
+  snapshot: ChatScrollSnapshot | undefined;
+  pending:
+    | {
+        snapshot: ChatScrollSnapshot;
+        expiresAt: number;
+        appliedBodies: WeakSet<Element>;
+      }
+    | undefined;
+};
+
+/** Copy one conversation's saved scroll state, to put back after a borrower. */
+export function saveChatScrollStateForConversationKey(
+  conversationKey: number,
+): SavedChatScrollState {
+  const normalized = normalizeConversationKey(conversationKey);
+  return {
+    snapshot: normalized ? chatScrollSnapshots.get(normalized) : undefined,
+    pending: normalized ? pendingChatScrollRestores.get(normalized) : undefined,
+  };
+}
+
+/** Put back a saved state, or remove any state when there was none. */
+export function restoreChatScrollStateForConversationKey(
+  conversationKey: number,
+  saved: SavedChatScrollState,
+): void {
+  const normalized = normalizeConversationKey(conversationKey);
+  if (!normalized) return;
+  if (saved.snapshot) chatScrollSnapshots.set(normalized, saved.snapshot);
+  else chatScrollSnapshots.delete(normalized);
+  if (saved.pending) pendingChatScrollRestores.set(normalized, saved.pending);
+  else pendingChatScrollRestores.delete(normalized);
+}
+
 export function clearChatScrollSnapshotsForTests(): void {
   for (const chatBox of liveNavigationBoxes) {
     cancelChatNavigation(chatBox, false);

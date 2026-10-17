@@ -3,7 +3,13 @@
  * This file has zero imports — all types are pure data shapes.
  */
 
-export type SelectedTextSource = "pdf" | "model" | "note" | "note-edit";
+export type SelectedTextSource =
+  | "pdf"
+  | "model"
+  | "note"
+  | "note-edit"
+  /** A side chat's transcript attached to the main chat. */
+  | "sidechat";
 
 export type ChatAttachmentCategory =
   | "image"

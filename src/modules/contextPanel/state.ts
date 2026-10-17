@@ -48,6 +48,12 @@ import {
 export const chatHistory = new Map<number, Message[]>();
 export const conversationForkLinks = new Map<number, ConversationForkLink>();
 export const loadedConversationKeys = new Set<number>();
+/**
+ * Keys whose chatHistory entry was borrowed by a read-only view (the
+ * standalone side panel). The copy is display-only: it is not a real load, so
+ * ensureConversationLoaded must replace it instead of treating it as loaded.
+ */
+export const readOnlyBorrowedConversationKeys = new Set<number>();
 export const loadingConversationTasks = new Map<number, Promise<void>>();
 export const webChatIsolatedConversationKeys = new Set<number>();
 /**
@@ -71,9 +77,9 @@ export const selectedReasoningProviderCache = new Map<
   ReasoningProviderKind
 >();
 
-// The same two values as conversationSelection's SelectionSurface, spelled out
+// The same values as conversationSelection's SelectionSurface, spelled out
 // here because that module imports this one.
-type ReasoningSurface = "embedded" | "standalone";
+type ReasoningSurface = "embedded" | "standalone" | "side";
 
 export function reasoningCacheKey(
   surface: ReasoningSurface | undefined,
@@ -371,6 +377,7 @@ export function clearConversationOwnedRuntimeState(
   clearTaskProgress(key);
   conversationForkLinks.delete(key);
   loadedConversationKeys.delete(key);
+  readOnlyBorrowedConversationKeys.delete(key);
   loadingConversationTasks.delete(key);
   webChatIsolatedConversationKeys.delete(key);
   webChatSessionConversationKeys.delete(key);
@@ -708,6 +715,7 @@ export function clearAllState(): void {
   clearAllTaskProgress();
   conversationForkLinks.clear();
   loadedConversationKeys.clear();
+  readOnlyBorrowedConversationKeys.clear();
   loadingConversationTasks.clear();
   webChatForceNewChatConversationKeys.clear();
   selectedReasoningCache.clear();

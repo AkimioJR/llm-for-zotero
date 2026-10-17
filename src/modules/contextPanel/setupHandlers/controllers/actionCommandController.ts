@@ -58,6 +58,7 @@ import {
   renderSkillsInSlashMenu as renderSkillsSlashSection,
   type ActionCommandSlashMenuContext,
 } from "./actionCommandSlashMenu";
+import { syncSideChatSlashItem } from "../../sideChatSlashItem";
 
 type StatusLevel = "ready" | "warning" | "error";
 type ActionPickerItem = {
@@ -237,6 +238,8 @@ export function createActionCommandController(
         (element as HTMLElement).style.display = visible ? "" : "none";
       },
     );
+    // The side chat item shows only while a provider is registered.
+    if (visible) syncSideChatSlashItem(body, slashMenu);
   };
 
   const getVisibleSlashItems = (): HTMLButtonElement[] => {

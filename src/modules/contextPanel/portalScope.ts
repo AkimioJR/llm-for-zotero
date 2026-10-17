@@ -325,7 +325,7 @@ function readSurfaceLockedGlobalConversationKey(
   libraryID: number,
   surface: SelectionSurface | undefined,
 ): number | null {
-  return surface === "standalone"
+  return surface === "standalone" || surface === "side"
     ? null
     : getLockedGlobalConversationKey(libraryID);
 }

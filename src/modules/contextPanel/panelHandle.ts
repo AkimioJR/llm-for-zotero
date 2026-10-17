@@ -6,6 +6,20 @@
 export type PanelHandle = {
   /** Re-derive the auto-loaded context source for the panel's current item. */
   refreshContextSourceForCurrentItem(): void;
+  /**
+   * Add Zotero items as default context to the panel's current conversation
+   * (no new conversation), the way Zotero's "Add as context" action does.
+   */
+  addItemsAsDefaultContext(items: Zotero.Item[]): Promise<void> | void;
+  /**
+   * Add text as a removable selected-text chip, sent with the panel's next
+   * message. Returns whether a chip was added (false for empty text, a
+   * duplicate, a full chip list, or a panel with no conversation).
+   */
+  addTextContext(
+    text: string,
+    opts: { source: "model" | "sidechat"; focusInput?: boolean },
+  ): boolean;
   /** Show the reasoning effort that the Claude runtime resolved. */
   applyResolvedClaudeEffort(effort: unknown): void;
   /**

@@ -1,4 +1,5 @@
 import { isSinglePaperConversation } from "../context/requestTurnPaperScope";
+import { buildEphemeralBackgroundContextBlock } from "../../shared/ephemeralBackgroundContext";
 import { renderLibraryOverviewSection } from "../context/libraryOverview";
 
 import type {
@@ -255,7 +256,9 @@ function buildFullUserMessage(
               ? "Zotero note"
               : source === "note-edit"
                 ? "active note editing focus"
-                : "PDF reader";
+                : source === "sidechat"
+                  ? "side chat transcript"
+                  : "PDF reader";
         const noteContext = selectedTextContexts[index]?.noteContext;
         const sourceMeta =
           source === "pdf" && paperContext
@@ -687,6 +690,9 @@ export async function renderAgentPromptEnvelope(
     buildAgentStableResourceContextBlock(request);
 
   const fixedPrompt = buildSystemPrompt(sections);
+  const ephemeralBackgroundBlock = buildEphemeralBackgroundContextBlock(
+    request.conversationKey,
+  );
   const turnMessage = buildUserMessage(request, resourceContextPlan, {
     coverageBlock,
     turnGuidanceBlock,
@@ -710,6 +716,16 @@ export async function renderAgentPromptEnvelope(
             role: "system",
             content: stableResourceBlock,
             cachePolicy: "stable-prefix",
+          }),
+        ]
+      : []),
+    // A temporary side chat reads the window's main chat as background. It
+    // changes every turn, so it stays outside the cached prefix.
+    ...(ephemeralBackgroundBlock
+      ? [
+          freezeEnvelopeMessage<AgentSystemMessage>({
+            role: "system",
+            content: ephemeralBackgroundBlock,
           }),
         ]
       : []),

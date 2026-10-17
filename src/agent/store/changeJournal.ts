@@ -8,6 +8,7 @@
  * migrated idempotently into one-action/one-step v2 records.
  */
 
+import { isEphemeralConversationKey } from "../../shared/conversationKeySpace";
 import { sweepOrphanRecoveryBlobs } from "./journalRecoveryBlobStore";
 import { appLogger } from "../../core/logging";
 import { deleteIfPresent, type AgentPurgeDb } from "./inTransactionDelete";
@@ -486,6 +487,14 @@ export function createJournalId(prefix: string): string {
     .slice(2, 8)}`;
 }
 
+function assertDurableConversationKey(key: number, what: string): void {
+  if (isEphemeralConversationKey(key)) {
+    throw new Error(
+      `A temporary side chat cannot write a ${what}: it never persists anything.`,
+    );
+  }
+}
+
 export async function prepareJournalAction(input: {
   actionId?: string;
   runId: string;
@@ -497,6 +506,7 @@ export async function prepareJournalAction(input: {
   recovery?: string;
   now?: number;
 }): Promise<string | null> {
+  assertDurableConversationKey(input.conversationKey, "journal action");
   const db = getDb();
   if (!db) return null;
   const now = input.now ?? Date.now();

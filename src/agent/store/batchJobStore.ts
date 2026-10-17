@@ -11,6 +11,8 @@
  * Schema and lifecycle follow the plugin's existing durable stores.
  */
 
+import { isEphemeralConversationKey } from "../../shared/conversationKeySpace";
+
 export const BATCH_JOBS_TABLE = "llm_for_zotero_agent_batch_jobs";
 
 export type BatchJobStatus = "running" | "completed" | "cancelled" | "failed";
@@ -114,6 +116,11 @@ export async function createBatchJob(params: {
   totalCount?: number;
   now: number;
 }): Promise<void> {
+  if (isEphemeralConversationKey(params.conversationKey)) {
+    throw new Error(
+      "A temporary side chat cannot create a batch job: it never persists anything.",
+    );
+  }
   if (!hasDb()) return;
   await Zotero.DB.queryAsync(
     `INSERT OR REPLACE INTO ${BATCH_JOBS_TABLE}

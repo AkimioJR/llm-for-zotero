@@ -49,6 +49,7 @@ export type PanelDomRefs = {
   slashReferenceOption: HTMLButtonElement | null;
   slashPdfPageOption: HTMLButtonElement | null;
   slashPdfMultiplePagesOption: HTMLButtonElement | null;
+  slashSideChatOption: HTMLButtonElement | null;
   imagePreview: HTMLDivElement | null;
   contextPreviews: HTMLDivElement | null;
   selectedContextList: HTMLDivElement | null;
@@ -221,6 +222,9 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     ) as HTMLButtonElement | null,
     slashPdfMultiplePagesOption: body.querySelector(
       "#llm-slash-pdf-multiple-pages-option",
+    ) as HTMLButtonElement | null,
+    slashSideChatOption: body.querySelector(
+      "#llm-slash-side-chat-option",
     ) as HTMLButtonElement | null,
     imagePreview: body.querySelector(
       "#llm-image-preview",

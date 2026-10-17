@@ -19,6 +19,7 @@ import {
   buildDefaultUpstreamGlobalConversationKey,
   isConversationKeyFor,
   isConversationKeyForKind,
+  isEphemeralConversationKey,
   UPSTREAM_GLOBAL_ALLOCATED_CONVERSATION_KEY_BASE,
   UPSTREAM_RUNTIME_CONVERSATION_KEY_END,
 } from "../shared/conversationKeySpace";
@@ -809,8 +810,16 @@ function isUpstreamPaperConversationKey(conversationKey: number): boolean {
   return isConversationKeyForKind("upstream", "paper", conversationKey);
 }
 
+/**
+ * Whether the upstream store owns rows for this key. A key from the reserved
+ * ephemeral band (a temporary side chat) never has rows: every read returns
+ * nothing and every write is skipped.
+ */
 function isUpstreamStoreConversationKey(conversationKey: number): boolean {
-  return isConversationKeyFor("upstream", conversationKey);
+  return (
+    isConversationKeyFor("upstream", conversationKey) &&
+    !isEphemeralConversationKey(conversationKey)
+  );
 }
 
 /** The upstream store as the shared deletion kernel sees it. */
@@ -975,6 +984,7 @@ async function getNextAvailableGlobalConversationKey(
     normalizedPreferred &&
     normalizedPreferred !== currentKey &&
     isUpstreamGlobalConversationKey(normalizedPreferred) &&
+    !isEphemeralConversationKey(normalizedPreferred) &&
     !(await getGlobalConversationKeyInUse(normalizedPreferred)) &&
     !(await getConversationKeyLedgerEntry(normalizedPreferred))
   ) {
@@ -3462,7 +3472,9 @@ export async function createPaperConversation(
     const preferredKey = normalizeConversationKey(options.conversationKey || 0);
     if (
       preferredKey &&
-      !isConversationKeyForKind("upstream", "paper", preferredKey)
+      (!isConversationKeyForKind("upstream", "paper", preferredKey) ||
+        // The reserved band holds never-persisted side-chat keys only.
+        isEphemeralConversationKey(preferredKey))
     ) {
       throw new Error(
         "Preferred upstream paper conversation key is outside its range",
@@ -3806,7 +3818,9 @@ export async function createGlobalConversation(
     const preferredKey = normalizeConversationKey(options.conversationKey || 0);
     if (
       preferredKey &&
-      !isConversationKeyForKind("upstream", "global", preferredKey)
+      (!isConversationKeyForKind("upstream", "global", preferredKey) ||
+        // The reserved band holds never-persisted side-chat keys only.
+        isEphemeralConversationKey(preferredKey))
     ) {
       throw new Error(
         "Preferred upstream global conversation key is outside its range",

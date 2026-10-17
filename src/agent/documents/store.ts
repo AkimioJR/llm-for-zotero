@@ -1,3 +1,4 @@
+import { isEphemeralConversationKey } from "../../shared/conversationKeySpace";
 import { appLogger } from "../../core/logging";
 import {
   decodeDocumentActionState,
@@ -276,6 +277,8 @@ export async function savePlanDocumentInTransaction(params: {
 }): Promise<void> {
   const document = decodePlanDocument(params.document);
   const outbox = decodePlanDocumentOutbox(params.outbox);
+  // A temporary side chat's key (reserved band) is never persisted.
+  if (isEphemeralConversationKey(document.conversationKey)) return;
   const storedDocument = { ...document, coverageItems: [] };
   const planned = getPlannedDocumentOrigin(document);
   const direct =
@@ -624,6 +627,7 @@ export async function addPlanDocumentOwner(params: {
   conversationKey: number;
   sourceMessageTimestamp: number;
 }): Promise<void> {
+  if (isEphemeralConversationKey(params.conversationKey)) return;
   await Zotero.DB.queryAsync(
     `INSERT OR IGNORE INTO ${PLAN_DOCUMENT_OWNERS_TABLE}
      (document_id, conversation_key, source_message_timestamp)

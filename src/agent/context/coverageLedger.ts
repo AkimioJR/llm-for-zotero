@@ -1,3 +1,4 @@
+import { isEphemeralConversationKey } from "../../shared/conversationKeySpace";
 import type { PaperContextRef, TagContextRef } from "../../shared/types";
 import {
   installConversationKeyLedgerAgentTriggers,
@@ -1154,6 +1155,9 @@ export async function commitAgentCoverageActivities(params: {
   const conversationKey = normalizePositiveInt(params.conversationKey);
   if (!conversationKey || !params.activities.length) return;
   if (isConversationKeyRetiredInMemory(conversationKey)) return;
+  // A temporary side chat records no coverage, not even paper-wide (durable)
+  // coverage that other conversations would read.
+  if (isEphemeralConversationKey(conversationKey)) return;
   const touchedScopes = new Set<string>();
   const conversationScope = conversationScopeKey(conversationKey);
   const conversationLedger = ledgerForScope(conversationScope);

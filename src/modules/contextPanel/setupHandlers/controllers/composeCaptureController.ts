@@ -32,6 +32,7 @@ import {
   isPanelOperationLeaseCurrent,
   requireCurrentPanelOwnership,
 } from "../../panelHostOwnership";
+import { attachSideChatFromSlashItem } from "../../sideChatSlashItem";
 
 type StatusLevel = "ready" | "warning" | "error" | "sending";
 type ActiveAtToken = { slashStart: number; caretEnd: number } | null;
@@ -47,6 +48,7 @@ type ComposeCaptureControllerDeps = {
   slashReferenceOption: HTMLButtonElement | null;
   slashPdfPageOption: HTMLButtonElement | null;
   slashPdfMultiplePagesOption: HTMLButtonElement | null;
+  slashSideChatOption?: HTMLButtonElement | null;
   modelMenu: HTMLDivElement | null;
   reasoningMenu: HTMLDivElement | null;
   retryModelMenu: HTMLDivElement | null;
@@ -86,6 +88,7 @@ export function attachComposeCaptureController(
     slashReferenceOption,
     slashPdfPageOption,
     slashPdfMultiplePagesOption,
+    slashSideChatOption,
     modelMenu,
     reasoningMenu,
     retryModelMenu,
@@ -400,6 +403,17 @@ export function attachComposeCaptureController(
       deps.consumeActiveActionToken();
       deps.closeSlashMenu();
       uploadInput.click();
+    });
+  }
+
+  if (slashSideChatOption) {
+    slashSideChatOption.addEventListener("click", (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (slashSideChatOption.disabled) return;
+      deps.consumeActiveActionToken();
+      deps.closeSlashMenu();
+      attachSideChatFromSlashItem(body);
     });
   }
 

@@ -1,3 +1,4 @@
+import { isEphemeralConversationKey } from "../../shared/conversationKeySpace";
 import { defaultInvocationPlan } from "../authorization/invocationPlan";
 import { RETIRED_TOOL_HINTS } from "../context/toolNames";
 import type { ActionContractService } from "../contracts/actionContract";
@@ -161,6 +162,22 @@ function modelToolSpec(spec: ToolSpec): ToolSpec {
   };
 }
 
+/**
+ * A temporary side chat (an ephemeral conversation key) never writes durable
+ * rows. Every tool that can change the library or reach past it
+ * (external_effect: library writes, note writes, batches, undo, scripts,
+ * commands) is withheld from such a request.
+ */
+export function isToolWithheldForEphemeralRequest(
+  tool: Pick<AgentToolDefinition<any, any>, "spec">,
+  request: Pick<AgentRuntimeRequest, "conversationKey">,
+): boolean {
+  return (
+    tool.spec.executionClass === "external_effect" &&
+    isEphemeralConversationKey(request.conversationKey)
+  );
+}
+
 export class AgentToolRegistry {
   private readonly tools = new Map<string, AgentToolDefinition<any, any>>();
 
@@ -175,7 +192,9 @@ export class AgentToolRegistry {
   ): AgentToolDefinition<any, any>[] {
     return Array.from(this.tools.values()).filter(
       (tool) =>
-        this.isModelVisibleTool(tool) && tool.isAvailable?.(request) !== false,
+        this.isModelVisibleTool(tool) &&
+        tool.isAvailable?.(request) !== false &&
+        !isToolWithheldForEphemeralRequest(tool, request),
     );
   }
 
@@ -251,7 +270,10 @@ export class AgentToolRegistry {
           : `Unknown tool: ${call.name}`,
       );
     }
-    if (tool.isAvailable?.(context.request) === false) {
+    if (
+      tool.isAvailable?.(context.request) === false ||
+      isToolWithheldForEphemeralRequest(tool, context.request)
+    ) {
       return createSyntheticErrorResult(
         call,
         `${call.name} is not available for this request`,

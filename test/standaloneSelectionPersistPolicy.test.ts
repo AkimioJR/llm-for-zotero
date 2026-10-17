@@ -99,13 +99,44 @@ describe("conversation selection persist policy", function () {
   });
 
   it("only a sidebar panel releases the library lock on Paper chat", function () {
-    const start = setupHandlers.indexOf('if (surface !== "standalone") {');
+    // Inverted: only the embedded surface releases it, so neither the window
+    // nor its side chat can.
+    const start = setupHandlers.indexOf('if (surface === "embedded") {');
     assert.isAtLeast(start, 0);
     const guarded = setupHandlers.slice(
       start,
       setupHandlers.indexOf("remember(", start),
     );
     assert.include(guarded, "setLockedGlobalConversationKey(libraryID, null)");
+  });
+
+  it("a side chat never captures Zotero's Add as context", function () {
+    assert.include(
+      setupHandlers,
+      "const unregisterContextSurfaceActions = isSidePanel\n    ? () => undefined\n    : registerContextSurfaceActionTarget(body, {",
+    );
+  });
+
+  it("a side chat offers no Claude Code, Codex, or WebChat runtime", function () {
+    assert.include(
+      setupHandlers,
+      "const isClaudeModeAvailable = () =>\n    !isSidePanel && getClaudeCodeModeEnabled();",
+    );
+    assert.include(
+      setupHandlers,
+      "const isCodexModeAvailable = () =>\n    !isSidePanel && isCodexAppServerModeEnabled();",
+    );
+    assert.include(
+      setupHandlers,
+      '(entry) => !isSidePanel || entry.authMode !== "webchat",',
+    );
+  });
+
+  it("a side chat's ephemeral conversation is never remembered", function () {
+    assert.include(
+      setupHandlers,
+      "!isEphemeralConversationKey(Number(conversationKey))",
+    );
   });
 
   it("a standalone send neither takes nor releases the library lock", function () {

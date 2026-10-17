@@ -147,10 +147,11 @@ import {
   type ConversationRenameIdentity,
 } from "./conversationRenameEligibility";
 import {
-  installStandaloneSidebarResizeBehavior,
+  installStandaloneColumnResizeBehavior,
   installStandaloneVerticalResizeBehavior,
   scheduleStandaloneWindowFitForElement,
   STANDALONE_SIDEBAR_DEFAULT_WIDTH_PX,
+  STANDALONE_SIDEBAR_SEPARATOR_LAYOUT_WIDTH_PX,
 } from "./standaloneWindowSizing";
 import {
   createClaudeGlobalPortalItem,
@@ -192,6 +193,10 @@ import {
 } from "./standaloneSidebarView";
 import { installStandaloneSidebarFlyout } from "./standaloneSidebarFlyout";
 import { releaseInlineEdit } from "./inlineEditState";
+import {
+  createStandaloneSidePanel,
+  type StandaloneSidePanelController,
+} from "./standaloneSidePanel";
 
 type StandaloneSessionState = {
   pending: boolean;
@@ -560,6 +565,7 @@ export function openStandaloneChat(options?: {
   let cleanupStandaloneSidebarFlyout: (() => void) | null = null;
   let unbindStandaloneTaskProgressToggle: (() => void) | null = null;
   let enforceStandaloneMinimumSize: (() => void) | null = null;
+  let disposeStandaloneSidePanel: (() => void) | null = null;
 
   const initWindow = () => {
     // Now the window is loaded — safe to clear the pending flag.
@@ -849,9 +855,16 @@ export function openStandaloneChat(options?: {
       tabRowLeading.className = "llm-standalone-tab-row-leading";
       tabRowLeading.append(standaloneRuntimeSystemControls.group);
 
+      // The trailing slot holds the side panel toggle (right edge).
+      const tabRowTrailing = doc.createElementNS(
+        HTML_NS,
+        "div",
+      ) as HTMLDivElement;
+      tabRowTrailing.className = "llm-standalone-tab-row-trailing";
+
       const tabRow = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
       tabRow.className = "llm-standalone-tab-row";
-      tabRow.append(tabRowLeading, tabGroup);
+      tabRow.append(tabRowLeading, tabGroup, tabRowTrailing);
 
       // -- Lower area: sidebar + content side by side --
       const lowerArea = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
@@ -1064,7 +1077,10 @@ export function openStandaloneChat(options?: {
           minWindowHeight: STANDALONE_MIN_HEIGHT_PX,
         },
       );
-      cleanupStandaloneSidebarResize = installStandaloneSidebarResizeBehavior(
+      // Set once the side panel exists (below); the History pane leaves it
+      // its width.
+      let standaloneSidePanel: StandaloneSidePanelController | null = null;
+      const standaloneSidebarResize = installStandaloneColumnResizeBehavior(
         newWin,
         lowerArea,
         sidebarPanel,
@@ -1072,14 +1088,21 @@ export function openStandaloneChat(options?: {
         {
           initialWidth: getStandaloneSidebarWidthPref(),
           onWidthCommit: setStandaloneSidebarWidthPref,
+          // The panel's width, less what the window is about to gain for it.
+          getReservedWidth: () =>
+            (standaloneSidePanel?.getOccupiedWidth() || 0) -
+            (standaloneSidePanel?.getPendingWindowWidthChange() || 0),
         },
       );
+      cleanupStandaloneSidebarResize = standaloneSidebarResize.dispose;
 
       // -- Sidebar state management --
       let userManualSidebarState: "expanded" | "collapsed" | null = null;
 
       const setSidebarState = (state: "expanded" | "collapsed") => {
         setStandaloneSidebarState(sidebarView, state);
+        // The side panel's room depends on the History pane's width.
+        standaloneSidePanel?.relayout();
       };
 
       const toggleSidebar = () => {
@@ -1691,6 +1714,12 @@ export function openStandaloneChat(options?: {
         } catch (err) {
           appLogger.warn("LLM: standalone mountChatPanel sync failed", err);
         }
+        // The side panel follows the main chat (mode, paper, conversation).
+        try {
+          standaloneSidePanel?.onMainMounted();
+        } catch (err) {
+          appLogger.warn("LLM: standalone side panel follow failed", err);
+        }
 
         void (async () => {
           try {
@@ -2205,29 +2234,105 @@ export function openStandaloneChat(options?: {
         }
       };
 
-      const searchPopupController = createHistorySearchPopupController({
-        parent: root,
+      // The list sources the Search history popup and the side panel's
+      // History list share.
+      const standaloneHistoryListSources = {
         loadEntries: loadAllStandaloneSearchEntries,
         loadDocument: loadStandaloneSearchDocument,
+        translate: t,
+        log: (...args: unknown[]) =>
+          appLogger.warn("LLM: standalone history list", args),
+        resolveLabel: (entry: ConversationHistoryEntry) =>
+          isOrphanHistoryEntry(entry)
+            ? t("Orphan")
+            : entry.kind === "paper"
+              ? resolvePaperLabel(entry.paperItemID)
+              : t("Library chat"),
+        resolveScopeLabel: (entry: ConversationHistoryEntry) =>
+          entry.kind === "paper"
+            ? resolvePaperSearchScopeLabel(entry.paperItemID, entry.sourceState)
+            : t("Library chat"),
+      };
+
+      const searchPopupController = createHistorySearchPopupController({
+        ...standaloneHistoryListSources,
+        parent: root,
         onSelect: selectStandaloneSearchEntry,
         onDelete: async (entry) => {
           await queueStandaloneHistoryDeletion(
             toStandaloneDeletionEntry(entry),
           );
         },
-        translate: t,
-        log: (...args) => appLogger.warn("LLM: standalone search popup", args),
-        resolveLabel: (entry) =>
-          isOrphanHistoryEntry(entry)
-            ? t("Orphan")
-            : entry.kind === "paper"
-              ? resolvePaperLabel(entry.paperItemID)
-              : t("Library chat"),
-        resolveScopeLabel: (entry) =>
-          entry.kind === "paper"
-            ? resolvePaperSearchScopeLabel(entry.paperItemID, entry.sourceState)
-            : t("Library chat"),
       });
+
+      const resolveStandaloneHistoryEntryPaper = (
+        entry: ConversationHistoryEntry,
+      ): Zotero.Item | null =>
+        entry.kind === "paper" && !isOrphanHistoryEntry(entry)
+          ? resolveHistoryEntryPaperBaseItem(
+              entry,
+              (id) => Zotero.Items.get(id) as Zotero.Item | null,
+            )
+          : null;
+
+      const readPixelStyleVariable = (name: string): number => {
+        const value = Number.parseFloat(
+          lowerArea.style.getPropertyValue(name) || "",
+        );
+        return Number.isFinite(value) && value > 0 ? value : 0;
+      };
+
+      // Third column: History (read-only past chats) and a temporary side
+      // chat that follows the main chat's paper or library.
+      standaloneSidePanel = createStandaloneSidePanel({
+        win: newWin,
+        lowerArea,
+        mainBody: contentArea,
+        toggleHost: tabRowTrailing,
+        getMainContext: () => ({
+          mode: standaloneMode,
+          conversationKey: activeConversationKey,
+          basePaperItem:
+            standaloneMode === "paper" ? currentBasePaperItem : null,
+          libraryID: getCurrentLibraryScopeID(),
+          conversationSystem: currentConversationSystem,
+        }),
+        historyList: standaloneHistoryListSources,
+        buildHistoryEntryItem: (entry) => {
+          if (entry.kind !== "paper") {
+            return buildStandalonePortalItem({
+              mode: "open",
+              conversationKey: entry.conversationKey,
+            });
+          }
+          const paperItem = resolveStandaloneHistoryEntryPaper(entry);
+          if (!paperItem) return null;
+          const sessionVersion = Number(entry.sessionVersion || 0);
+          return buildStandalonePortalItem({
+            mode: "paper",
+            conversationKey: entry.conversationKey,
+            paperItem,
+            sessionVersion: sessionVersion > 0 ? sessionVersion : 1,
+          });
+        },
+        resolveHistoryEntryPaper: resolveStandaloneHistoryEntryPaper,
+        openAsMainChat: selectStandaloneSearchEntry,
+        minWindowWidth: STANDALONE_MIN_WIDTH_PX,
+        getReservedLeftWidth: () =>
+          sidebar.dataset.sidebarState === "collapsed"
+            ? 0
+            : readPixelStyleVariable("--llm-standalone-sidebar-panel-width") +
+              STANDALONE_SIDEBAR_SEPARATOR_LAYOUT_WIDTH_PX,
+        onLayoutChanged: () => {
+          applyAutoSidebarStateForCurrentWidth();
+          standaloneSidebarResize.relayout();
+          standaloneSidePanel?.relayout();
+        },
+      });
+      disposeStandaloneSidePanel = () => {
+        standaloneSidePanel?.dispose();
+        standaloneSidePanel = null;
+      };
 
       iconSearch.addEventListener("click", () => {
         searchPopupController.toggle();
@@ -3920,15 +4025,30 @@ export function openStandaloneChat(options?: {
         }
         lastAutoState = autoState;
       };
+      // The History pane is measured against the room left of the side
+      // panel. The panel widens the window by its own width, so opening or
+      // closing it leaves that room (and the pane's state) unchanged; the
+      // pending part covers the moment before the window reports its size.
+      // Only a real narrowing (or a screen too small for the panel) counts.
+      const resolveAutoSidebarWidth = (width: number) =>
+        Math.max(
+          0,
+          width -
+            (standaloneSidePanel?.getOccupiedWidth() || 0) +
+            (standaloneSidePanel?.getPendingWindowWidthChange() || 0),
+        );
+      const applyAutoSidebarStateForCurrentWidth = () => {
+        applyAutoSidebarState(resolveAutoSidebarWidth(root.clientWidth || 0));
+      };
       const handleResize = () => {
-        applyAutoSidebarState(root.clientWidth || 0);
+        applyAutoSidebarStateForCurrentWidth();
       };
       const RO =
         (newWin as any).ResizeObserver || (globalThis as any).ResizeObserver;
       if (RO) {
         const resizeObserver = new RO((entries: any[]) => {
           const width = entries[0]?.contentRect?.width || root.clientWidth || 0;
-          applyAutoSidebarState(width);
+          applyAutoSidebarState(resolveAutoSidebarWidth(width));
         });
         resizeObserver.observe(root);
       } else {
@@ -4049,6 +4169,13 @@ export function openStandaloneChat(options?: {
     cleanupStandaloneSidebarResize = null;
     cleanupStandaloneSidebarFlyout?.();
     cleanupStandaloneSidebarFlyout = null;
+    // The side chat is never saved: closing the window drops it.
+    try {
+      disposeStandaloneSidePanel?.();
+    } catch (err) {
+      appLogger.warn("LLM: standalone side panel cleanup failed", err);
+    }
+    disposeStandaloneSidePanel = null;
     standaloneItemChangeHandler = null;
     themeObserver?.disconnect();
     themeObserver = null;

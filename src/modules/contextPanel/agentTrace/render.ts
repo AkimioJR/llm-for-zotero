@@ -241,7 +241,23 @@ type RenderAgentTraceParams = {
   actionSummaryHost?: HTMLElement;
   /** Where the action card's chips take the reader; the running Zotero by default. */
   actionCardNavigation?: NavigationHost;
+  /**
+   * A read-only view shows pending approval cards without live controls: the
+   * viewer must not be able to approve or cancel another chat's action.
+   */
+  readOnly?: boolean;
 };
+
+/** Disable every control of an approval card; it stays visible as history. */
+function lockPendingActionCard<T extends HTMLElement>(card: T): T {
+  for (const control of Array.from(
+    card.querySelectorAll("input,button,select,textarea"),
+  ) as (HTMLInputElement | HTMLButtonElement | HTMLSelectElement)[]) {
+    control.disabled = true;
+  }
+  card.dataset.readOnly = "true";
+  return card;
+}
 
 export function formatAgentActivityDuration(durationMs: number): string {
   const totalSeconds = Math.max(
@@ -6642,7 +6658,14 @@ export function renderAgentTrace({
   previous,
   actionCardNavigation,
   actionSummaryHost,
+  readOnly,
 }: RenderAgentTraceParams): HTMLElement | null {
+  const renderPendingCard = (
+    pendingAction: Parameters<typeof renderPendingActionCard>[1],
+  ): HTMLDivElement => {
+    const card = renderPendingActionCard(doc, pendingAction);
+    return readOnly ? lockPendingActionCard(card) : card;
+  };
   const runId = message.agentRunId?.trim() || "pending";
   // Temporary native events remain visible until the durable run is loaded.
   // The caller supplies this callback only while that run is absent from cache.
@@ -6751,7 +6774,7 @@ export function renderAgentTrace({
       disposePlanCard(view.document.node);
       view.document = undefined;
     }
-    wrap.replaceChildren(renderPendingActionCard(doc, pending));
+    wrap.replaceChildren(renderPendingCard(pending));
     view.items.clear();
     return wrap;
   }
@@ -7133,7 +7156,8 @@ export function renderAgentTrace({
       actionCardNode = renderActionSummaryCard(doc, attached.card, {
         mode: noteMode ? "note" : "action",
         ...(noteMode ? { header: noteMode } : {}),
-        renderDetail: renderActionCardDetail,
+        renderDetail: (detailDoc, entry, status) =>
+          renderActionCardDetail(detailDoc, entry, status, { readOnly }),
         ...(actionCardNavigation ? { navigation: actionCardNavigation } : {}),
       });
     }
@@ -7142,7 +7166,7 @@ export function renderAgentTrace({
   for (const card of standaloneNoteCards)
     wrap.appendChild(
       card.kind === "note_change"
-        ? renderNoteChangeCard(doc, card)
+        ? renderNoteChangeCard(doc, card, { readOnly })
         : renderSavedNoteCard(doc, card),
     );
 
@@ -7303,7 +7327,7 @@ export function renderAgentTrace({
       const shell = doc.createElement("div");
       shell.className = "llm-agent-pending-action-shell";
       shell.dataset.discoverySession = identity.sessionId;
-      const card = renderPendingActionCard(doc, discovery.pending);
+      const card = renderPendingCard(discovery.pending);
       if (discovery.phase !== "pending") {
         for (const control of Array.from(
           card.querySelectorAll("input,button,select,textarea"),
@@ -7332,7 +7356,7 @@ export function renderAgentTrace({
   if (pending && !pending.action.discovery) {
     const pendingShell = doc.createElement("div");
     pendingShell.className = "llm-agent-pending-action-shell";
-    pendingShell.appendChild(renderPendingActionCard(doc, pending));
+    pendingShell.appendChild(renderPendingCard(pending));
     wrap.appendChild(pendingShell);
   }
 

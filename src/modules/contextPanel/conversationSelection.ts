@@ -20,6 +20,11 @@
  * back to the embedded selection (active, then persisted) wherever it has not
  * chosen yet, and it never writes a pref: the persisted pointers stay the
  * sidebar's. A scope without `surface` is embedded.
+ *
+ * The window's temporary side chat is the "side" surface. It reads like the
+ * window (its own key is fixed, so reads are informational) and writes no
+ * slot and no pref: remembering a side chat's conversation is a no-op. Only
+ * the embedded surface writes prefs.
  */
 import type { ConversationSystem } from "../../shared/types";
 import { invalidatePaperRestoreTargetCache } from "../../shared/paperConversationRestore";
@@ -83,7 +88,7 @@ import {
 export type ConversationSelectionMode = "global" | "paper";
 
 /** Which chat surface a selection belongs to; see the module comment. */
-export type SelectionSurface = "embedded" | "standalone";
+export type SelectionSurface = "embedded" | "standalone" | "side";
 
 export type GlobalSelectionScope = {
   system: ConversationSystem;
@@ -251,8 +256,17 @@ function adapterFor(system: ConversationSystem): SelectionAdapter {
     : ADAPTERS.upstream;
 }
 
+/**
+ * The surfaces that read the window's slots first: the window itself and its
+ * side chat.
+ */
 function isStandaloneSurface(surface: SelectionSurface | undefined): boolean {
-  return surface === "standalone";
+  return surface === "standalone" || surface === "side";
+}
+
+/** The side chat remembers nothing, in memory or in prefs. */
+function isSideSurface(surface: SelectionSurface | undefined): boolean {
+  return surface === "side";
 }
 
 // The standalone window's slots live in maps of their own, keyed by the
@@ -362,6 +376,7 @@ export function remember(
   key: number,
   options: { persist?: boolean } = {},
 ): void {
+  if (isSideSurface(scope.surface)) return;
   if (isStandaloneSurface(scope.surface)) {
     standaloneSlotFor(scope).set(key);
     return;
@@ -476,6 +491,7 @@ export function rememberMode(
   mode: ConversationSelectionMode,
   options: { active?: boolean; surface?: SelectionSurface } = {},
 ): void {
+  if (isSideSurface(options.surface)) return;
   const adapter = adapterFor(system);
   if (isStandaloneSurface(options.surface)) {
     if (options.active !== false) {
@@ -566,6 +582,8 @@ function primeEntry<V>(params: {
 export function prime(params: SelectionPrimeParams): SelectionPrimeSnapshot {
   const libraryID = normalizePositiveInt(params.libraryID);
   if (!libraryID) return { restore: () => undefined };
+  // The side chat selects nothing (see isSideSurface).
+  if (isSideSurface(params.surface)) return { restore: () => undefined };
 
   const conversationKey = normalizePositiveInt(params.conversationKey);
   const paperItemID = normalizePositiveInt(params.paperItemID);

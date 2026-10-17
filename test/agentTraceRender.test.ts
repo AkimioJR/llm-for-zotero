@@ -11858,6 +11858,7 @@ describe("end-of-turn card precedence", function () {
     events: AgentRunEventRecord[];
     message: ReturnType<typeof turnMessage>;
     previous?: FakeElement;
+    readOnly?: boolean;
   }): FakeElement {
     const globalScope = globalThis as typeof globalThis & { Zotero?: unknown };
     const originalZotero = globalScope.Zotero;
@@ -11879,6 +11880,7 @@ describe("end-of-turn card precedence", function () {
             doc: noteDocument,
             message: params.message,
             events: params.events,
+            readOnly: params.readOnly,
             previous: params.previous as unknown as HTMLElement | undefined,
           }) as unknown as FakeElement,
       );
@@ -11942,6 +11944,22 @@ describe("end-of-turn card precedence", function () {
       trace.findAllByClass("llm-note-review-card"),
       0,
       "the standalone note-change card is not rendered again",
+    );
+    disposeAgentTrace(trace as unknown as HTMLElement);
+  });
+
+  it("shows a read-only past chat's note edit without Undo", function () {
+    const trace = renderTurn({
+      cards: [noteChange],
+      events: noteChangeEventsWithReceipt(),
+      message: turnMessage("Updated."),
+      readOnly: true,
+    });
+    const card = trace.findByClass("llm-agent-action-summary-card")!;
+    assert.deepEqual(
+      card.findAllByClass("llm-plan-action").map((b) => b.textContent),
+      ["Open note"],
+      "undoing would write the note and the stored chat's journal",
     );
     disposeAgentTrace(trace as unknown as HTMLElement);
   });

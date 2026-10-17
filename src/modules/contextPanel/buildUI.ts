@@ -32,6 +32,10 @@ import { createSidebarModeSwitch } from "./sidebarModeSwitch";
 import { resolveSelectionSurfaceForBody } from "./panelHostOwnership";
 import { buildContextUsagePresentation } from "./textUtils";
 import { createChatLatestButton } from "./chatLatestButton";
+import {
+  SIDE_CHAT_SLASH_ITEM_ID,
+  SIDE_CHAT_SLASH_SEPARATOR_ATTR,
+} from "./sideChatSlashItem";
 import { createTaskProgressToggleButton } from "./taskProgress/toggleButton";
 import { createTaskProgressCurtain } from "./taskProgress/view";
 
@@ -634,6 +638,34 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
       resolveSlashActionChatMode(displayConversationKind),
     ).map((entry) => slashBaseButtons[entry]),
   );
+  // "Add side chat" sits after the base items. It stays hidden until the
+  // panel registers a side-chat provider; syncSideChatSlashItem sets its
+  // visibility, disabled state, and hint each time the menu opens.
+  const slashSideChatSeparator = createElement(
+    doc,
+    "div",
+    "llm-slash-menu-separator",
+    {},
+  );
+  slashSideChatSeparator.setAttribute("data-slash-base-item", "true");
+  slashSideChatSeparator.setAttribute(SIDE_CHAT_SLASH_SEPARATOR_ATTR, "true");
+  slashSideChatSeparator.setAttribute("aria-hidden", "true");
+  slashSideChatSeparator.style.display = "none";
+  const slashSideChatBtn = makeSlashItem(
+    SIDE_CHAT_SLASH_ITEM_ID,
+    t("Add side chat"),
+    t("Start a side chat first"),
+  );
+  slashSideChatBtn.classList.add("llm-action-picker-item-stacked");
+  slashSideChatBtn.append(
+    createElement(doc, "span", "llm-action-picker-hint", {
+      textContent: t("Start a side chat first"),
+    }),
+  );
+  slashSideChatBtn.disabled = true;
+  slashSideChatBtn.setAttribute("aria-disabled", "true");
+  slashSideChatBtn.style.display = "none";
+  slashList.append(slashSideChatSeparator, slashSideChatBtn);
   slashMenu.append(slashList);
   // slashMenu is appended to composeArea below (after composeArea is created)
 

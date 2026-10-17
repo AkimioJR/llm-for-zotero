@@ -39,9 +39,11 @@ function clickResponseExpand(
     `.llm-message-action-expand[data-assistant-timestamp="${assistantTimestamp}"]`,
   ) as HTMLButtonElement | null;
   assert.isOk(button, "larger-view footer action should be rendered");
-  const order = Array.from(button!.parentElement?.children || []).map(
-    (node) => (node as HTMLElement).dataset.responseAction || "retry",
-  );
+  // Panel-specific extra actions (the standalone window's "Ask in side chat")
+  // sit between delete and expand; the built-in order is what counts.
+  const order = Array.from(button!.parentElement?.children || [])
+    .filter((node) => !(node as HTMLElement).dataset.extraAction)
+    .map((node) => (node as HTMLElement).dataset.responseAction || "retry");
   assert.deepEqual(order.slice(-2), ["delete", "expand"]);
   button!.click();
   return button!;

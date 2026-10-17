@@ -1,4 +1,5 @@
 import { appLogger } from "../../core/logging";
+import { t } from "../../utils/i18n";
 import { renderMarkdownForNote } from "../../utils/markdown";
 import { getCurrentLocalTimestamp } from "./textUtils";
 import { sanitizeText, escapeNoteHtml } from "../../utils/textSanitization";
@@ -644,6 +645,9 @@ function formatSelectedTextLabel(
   }
   if (source === "note-edit") {
     return total === 1 ? "Editing focus" : `Editing focus (${index + 1})`;
+  }
+  if (source === "sidechat") {
+    return total === 1 ? t("Side chat") : `${t("Side chat")} (${index + 1})`;
   }
   if (total === 1) return "Selected text";
   return `Selected text (${index + 1})`;
