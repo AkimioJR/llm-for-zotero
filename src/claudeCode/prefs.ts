@@ -245,6 +245,14 @@ export function hasShownClaudeLegacyDaemonNotice(): boolean {
   );
 }
 
+/** Hidden kill switch for the probe of the old bridge on port 19787. */
+export function isClaudeLegacyDaemonCheckEnabled(): boolean {
+  return (
+    getZoteroPrefs()?.get?.(prefKey("claudeCodeLegacyDaemonCheck"), true) !==
+    false
+  );
+}
+
 export function markClaudeLegacyDaemonNoticeShown(): void {
   setPref("claudeCodeLegacyDaemonNoticeShown", true);
 }

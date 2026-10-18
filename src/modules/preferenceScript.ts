@@ -219,6 +219,8 @@ import {
 } from "../services/mineru/sync";
 import { getRuntimePlatformInfo } from "../utils/runtimePlatform";
 import {
+  describeLegacyClaudeBridgeRemoval,
+  detectLegacyClaudeBridge,
   getClaudeBridgeStatus,
   onClaudeBridgeStatusChange,
   restartClaudeBridge,
@@ -4630,6 +4632,29 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     }
   }
   refreshClaudeBridgeStatusUi();
+  const claudeBridgeLegacyNotice = doc.querySelector(
+    `#${config.addonRef}-claude-bridge-legacy-notice`,
+  ) as HTMLElement | null;
+  let claudeBridgeWindowClosed = false;
+  _window.addEventListener(
+    "unload",
+    () => {
+      claudeBridgeWindowClosed = true;
+    },
+    { once: true },
+  );
+  void detectLegacyClaudeBridge().then((found) => {
+    if (!found || claudeBridgeWindowClosed || !claudeBridgeLegacyNotice) return;
+    const isMac = getRuntimePlatformInfo().platform === "macos";
+    claudeBridgeLegacyNotice.textContent = "";
+    for (const line of describeLegacyClaudeBridgeRemoval(isMac)) {
+      const row = doc.createElement("div");
+      row.textContent = line || "\u00a0";
+      if (line.startsWith("    ")) row.style.fontFamily = "monospace";
+      claudeBridgeLegacyNotice.appendChild(row);
+    }
+    claudeBridgeLegacyNotice.style.display = "block";
+  });
   const unsubscribeClaudeBridgeStatus = onClaudeBridgeStatusChange(
     refreshClaudeBridgeStatusUi,
   );

@@ -35,6 +35,7 @@ import {
   getClaudeBridgeNodePathPref,
   getClaudeCliPathPref,
   hasShownClaudeLegacyDaemonNotice,
+  isClaudeLegacyDaemonCheckEnabled,
   isClaudeCodeModeEnabled,
   markClaudeLegacyDaemonNoticeShown,
 } from "./prefs";
@@ -603,13 +604,38 @@ export function isManagedClaudeBridgeIdle(url: string): boolean {
 }
 
 /**
- * The old macOS LaunchAgent may still be running the stand-alone adapter on
- * the default port. It does not get in the way, but it uses memory and runs
- * old code, so tell the user once how to remove it.
+ * The text that tells the user how to remove the old stand-alone bridge.
+ * The one-time notice and the Settings page both use it, so they cannot drift.
  */
-async function maybeShowLegacyDaemonNotice(): Promise<void> {
+export function describeLegacyClaudeBridgeRemoval(isMac: boolean): string[] {
+  const removal = isMac
+    ? [
+        "To remove it, open Terminal in your old cc-llm4zotero-adapter folder and run:",
+        "    npm run daemon:uninstall",
+        "",
+        "If you already deleted that folder, run these two commands instead:",
+        `    launchctl bootout gui/$(id -u)/${LEGACY_DAEMON_LABEL}`,
+        `    rm ~/Library/LaunchAgents/${LEGACY_DAEMON_LABEL}.plist`,
+      ]
+    : [
+        "You can stop it the way you started it (for example, close the terminal running `npm run serve:bridge`).",
+      ];
+  return [
+    "Zotero now runs the Claude Code bridge for you, so you no longer need to start it yourself.",
+    "",
+    `Your old bridge is still running at ${DEFAULT_CLAUDE_BRIDGE_URL}. It does not get in the way, but it is no longer used.`,
+    "",
+    ...removal,
+  ];
+}
+
+/**
+ * True when the old stand-alone bridge answers on the default port. The probe
+ * is off when the hidden pref claudeCodeLegacyDaemonCheck is false (tests).
+ */
+export async function detectLegacyClaudeBridge(): Promise<boolean> {
   try {
-    if (hasShownClaudeLegacyDaemonNotice()) return;
+    if (!isClaudeLegacyDaemonCheckEnabled()) return false;
     // Zotero's plugin scope has no global AbortController.
     const AbortControllerCtor = getAbortController();
     const controller = AbortControllerCtor
@@ -627,36 +653,36 @@ async function maybeShowLegacyDaemonNotice(): Promise<void> {
     } finally {
       clearTimeout(timeoutId);
     }
-    if (!payload?.ok || payload.managedBy) return;
-    markClaudeLegacyDaemonNoticeShown();
-    const isMac = getRuntimePlatformInfo().platform === "macos";
-    const removal = isMac
-      ? [
-          "To remove it, open Terminal in your old cc-llm4zotero-adapter folder and run:",
-          "    npm run daemon:uninstall",
-          "",
-          "If you already deleted that folder, run these two commands instead:",
-          `    launchctl bootout gui/$(id -u)/${LEGACY_DAEMON_LABEL}`,
-          `    rm ~/Library/LaunchAgents/${LEGACY_DAEMON_LABEL}.plist`,
-        ]
-      : [
-          "You can stop it the way you started it (for example, close the terminal running `npm run serve:bridge`).",
-        ];
-    const text = [
-      "Zotero now runs the Claude Code bridge for you, so you no longer need to start it yourself.",
-      "",
-      `Your old bridge is still running at ${DEFAULT_CLAUDE_BRIDGE_URL}. It does not get in the way, but it is no longer used.`,
-      "",
-      ...removal,
-    ].join("\n");
-    const win = Zotero.getMainWindow?.();
-    (globalThis as any).Services?.prompt?.alert?.(
-      win || null,
-      "Claude Code bridge",
-      text,
-    );
+    return Boolean(payload?.ok) && !payload.managedBy;
   } catch (error) {
     appLogger.debug("LLM: legacy Claude bridge check failed", error);
+    return false;
+  }
+}
+
+/**
+ * The old macOS LaunchAgent may still be running the stand-alone adapter on
+ * the default port. It does not get in the way, but it uses memory and runs
+ * old code, so tell the user once. The message must never block the UI; the
+ * full removal steps are on the Settings page.
+ */
+async function maybeShowLegacyDaemonNotice(): Promise<void> {
+  try {
+    if (hasShownClaudeLegacyDaemonNotice()) return;
+    if (!(await detectLegacyClaudeBridge())) return;
+    markClaudeLegacyDaemonNoticeShown();
+    new ztoolkit.ProgressWindow("Claude Code bridge", {
+      closeOnClick: true,
+      closeTime: -1,
+    })
+      .createLine({
+        text: "Your old Claude Code bridge is still running. Open Settings > Claude Code to see how to remove it.",
+        type: "default",
+      })
+      .show()
+      .startCloseTimer(8000);
+  } catch (error) {
+    appLogger.debug("LLM: legacy Claude bridge notice failed", error);
   }
 }
 

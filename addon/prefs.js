@@ -29,6 +29,7 @@ pref("claudeCodeNodePath", "");
 pref("claudeCodeCliPath", "");
 pref("claudeCodeBridgeExtraArgs", "");
 pref("claudeCodeLegacyDaemonNoticeShown", false);
+pref("claudeCodeLegacyDaemonCheck", true);
 pref("agentClaudeConfigSource", "default");
 pref("agentPermissionMode", "safe");
 pref("claudeCodePermissionMode", "default");

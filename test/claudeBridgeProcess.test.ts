@@ -11,6 +11,8 @@ import {
   resetClaudeBridgeProcessForTests,
   restartClaudeBridge,
   stopClaudeBridge,
+  detectLegacyClaudeBridge,
+  describeLegacyClaudeBridgeRemoval,
 } from "../src/claudeCode/bridgeProcess";
 import { parseNodeMajorVersion } from "../src/claudeCode/bridgeBinaries";
 import {
@@ -50,6 +52,7 @@ describe("Claude Code bridge process", function () {
   let nodeVersion: string;
   let readyPort: number;
   let legacyHealth: unknown;
+  let notices: Array<{ text: string; closeMs?: number }>;
 
   function makeBridgeProcess(): any {
     let readyLines = [
@@ -136,6 +139,7 @@ describe("Claude Code bridge process", function () {
       "Services",
       "rootURI",
       "fetch",
+      "ztoolkit",
     ]) {
       saved[key] = globalScope[key];
     }
@@ -148,6 +152,27 @@ describe("Claude Code bridge process", function () {
     nodeVersion = "v22.3.0";
     readyPort = 43210;
     legacyHealth = null;
+    notices = [];
+    globalScope.ztoolkit = {
+      ProgressWindow: function () {
+        const entry: { text: string; closeMs?: number } = { text: "" };
+        const win: any = {
+          createLine: (opts: { text: string }) => {
+            entry.text = opts.text;
+            return win;
+          },
+          show: () => {
+            notices.push(entry);
+            return win;
+          },
+          startCloseTimer: (ms: number) => {
+            entry.closeMs = ms;
+            return win;
+          },
+        };
+        return win;
+      },
+    };
     resetClaudeBridgeProcessForTests();
     resetManagedClaudeBridgeEndpointForTests();
     globalScope.Zotero = {
@@ -386,24 +411,55 @@ describe("Claude Code bridge process", function () {
     assert.equal(args.filter((arg) => arg === "--port").length, 1);
   });
 
-  it("tells the user once about the old background bridge", async function () {
+  it("tells the user once, without a blocking alert, about the old background bridge", async function () {
     legacyHealth = { ok: true, protocolVersion: 2 };
     const alerts: string[] = [];
     globalScope.Services = {
       env: { get: () => "" },
-      prompt: {
-        alert: (_win: unknown, _title: string, text: string) =>
-          alerts.push(text),
-      },
+      prompt: { alert: (...args: unknown[]) => alerts.push(String(args[2])) },
     };
     await ensureClaudeBridgeRunning();
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.lengthOf(alerts, 1);
-    assert.include(alerts[0], "no longer need to start it yourself");
+    assert.lengthOf(alerts, 0);
+    assert.lengthOf(notices, 1);
+    assert.include(notices[0].text, "old Claude Code bridge is still running");
+    assert.include(notices[0].text, "Settings > Claude Code");
+    assert.equal(notices[0].closeMs, 8000);
     assert.isTrue(prefs.claudeCodeLegacyDaemonNoticeShown as boolean);
     await restartClaudeBridge();
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.lengthOf(alerts, 1);
+    assert.lengthOf(notices, 1);
+    assert.lengthOf(alerts, 0);
+  });
+
+  it("does not probe the old port when the check is switched off", async function () {
+    prefs.claudeCodeLegacyDaemonCheck = false;
+    legacyHealth = { ok: true };
+    assert.isFalse(await detectLegacyClaudeBridge());
+    await ensureClaudeBridgeRunning();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.notInclude(fetched, "http://127.0.0.1:19787/healthz");
+    assert.lengthOf(notices, 0);
+    assert.isNotTrue(prefs.claudeCodeLegacyDaemonNoticeShown as boolean);
+  });
+
+  it("detects the old bridge only when it answers ok without managedBy", async function () {
+    legacyHealth = { ok: true, protocolVersion: 2 };
+    assert.isTrue(await detectLegacyClaudeBridge());
+    legacyHealth = { ok: true, managedBy: "llm-for-zotero" };
+    assert.isFalse(await detectLegacyClaudeBridge());
+    legacyHealth = null;
+    assert.isFalse(await detectLegacyClaudeBridge());
+  });
+
+  it("gives the same removal text for the notice and Settings", function () {
+    const mac = describeLegacyClaudeBridgeRemoval(true).join("\n");
+    assert.include(mac, "npm run daemon:uninstall");
+    assert.include(mac, "launchctl bootout gui/$(id -u)/com.toha.ccbridge");
+    assert.include(mac, "rm ~/Library/LaunchAgents/com.toha.ccbridge.plist");
+    const other = describeLegacyClaudeBridgeRemoval(false).join("\n");
+    assert.notInclude(other, "launchctl");
+    assert.include(other, "npm run serve:bridge");
   });
 
   it("does not mistake its own bridge on the old port for the old one", async function () {

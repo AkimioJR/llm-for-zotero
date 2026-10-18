@@ -38,6 +38,7 @@ declare namespace _ZoteroTypes {
       "claudeCodeCliPath": string;
       "claudeCodeBridgeExtraArgs": string;
       "claudeCodeLegacyDaemonNoticeShown": boolean;
+      "claudeCodeLegacyDaemonCheck": boolean;
       "agentClaudeConfigSource": string;
       "agentPermissionMode": string;
       "claudeCodePermissionMode": string;
