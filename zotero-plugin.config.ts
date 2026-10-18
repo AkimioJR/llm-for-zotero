@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { cp } from "node:fs/promises";
 import { defineConfig } from "zotero-plugin-scaffold";
 import pkg from "./package.json";
@@ -8,6 +9,12 @@ const webChatLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_WEBCHAT_LIVE === "1";
 // are opt-in: they cost money and need network, which a default test run
 // should never assume.
 const agentLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_AGENT_LIVE === "1";
+// The bridge bundles cc-llm4zotero-adapter, which is MIT licensed; its notice
+// must travel with every copy of the bundle.
+const claudeBridgeLicense = readFileSync(
+  "packages/claude-bridge/LICENSE",
+  "utf8",
+).trim();
 const workflowTestsEnabled =
   webChatLiveTestsEnabled ||
   agentLiveTestsEnabled ||
@@ -76,7 +83,10 @@ export default defineConfig({
           __CLAUDE_BRIDGE_VERSION__: JSON.stringify(pkg.version),
         },
         banner: {
-          js: "import { createRequire as __bridgeCreateRequire } from 'node:module'; const require = __bridgeCreateRequire(import.meta.url);",
+          js: [
+            `/*! Claude Code bridge, from cc-llm4zotero-adapter (MIT License)\n\n${claudeBridgeLicense}\n*/`,
+            "import { createRequire as __bridgeCreateRequire } from 'node:module'; const require = __bridgeCreateRequire(import.meta.url);",
+          ].join("\n"),
         },
         outfile: ".scaffold/build/addon/content/claude-bridge/bridge.mjs",
       },
