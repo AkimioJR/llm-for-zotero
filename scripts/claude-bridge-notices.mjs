@@ -42,7 +42,8 @@ function readRequired(path, what) {
 
 export function buildClaudeBridgeNotices({
   roots = DEFAULT_ROOTS,
-  adapterLicensePath = "packages/claude-bridge/LICENSE",
+  adapterNoticePath = "packages/claude-bridge/NOTICE",
+  adapterLicensePath = "packages/claude-bridge/LICENSE-MIT",
   packages = CLAUDE_BRIDGE_NOTICE_PACKAGES,
 } = {}) {
   const rule = "=".repeat(72);
@@ -59,10 +60,14 @@ export function buildClaudeBridgeNotices({
     [
       rule,
       "cc-llm4zotero-adapter (the bridge itself)",
-      "License: MIT",
+      "License: AGPL-3.0-or-later (earlier contributions also MIT)",
       rule,
       "",
-      readRequired(adapterLicensePath, "adapter LICENSE").trim(),
+      readRequired(adapterNoticePath, "adapter NOTICE").trim(),
+      "",
+      "MIT License text for the contributions made before the relicense:",
+      "",
+      readRequired(adapterLicensePath, "adapter LICENSE-MIT").trim(),
     ].join("\n"),
   );
   for (const entry of packages) {

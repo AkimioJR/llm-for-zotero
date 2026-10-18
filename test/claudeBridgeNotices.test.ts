@@ -26,7 +26,13 @@ function fixture(skip?: string) {
   }
   const adapter = join(dir, "ADAPTER_LICENSE");
   writeFileSync(adapter, "ADAPTER MIT TEXT\n");
-  return { roots: [nm], adapterLicensePath: adapter };
+  const notice = join(dir, "ADAPTER_NOTICE");
+  writeFileSync(notice, "ADAPTER RELICENSE NOTICE\n");
+  return {
+    roots: [nm],
+    adapterLicensePath: adapter,
+    adapterNoticePath: notice,
+  };
 }
 
 describe("claude bridge third-party notices", () => {
@@ -46,6 +52,8 @@ describe("claude bridge third-party notices", () => {
       order,
     );
     assert.include(text, "ADAPTER MIT TEXT");
+    assert.include(text, "ADAPTER RELICENSE NOTICE");
+    assert.include(text, "AGPL-3.0-or-later");
     assert.include(text, "not MIT");
   });
 
@@ -55,6 +63,15 @@ describe("claude bridge third-party notices", () => {
       "utf8",
     ).trim();
     assert.include(buildClaudeBridgeNotices(), real);
+  });
+
+  it("states the adapter's relicense from the real NOTICE", () => {
+    const text = buildClaudeBridgeNotices();
+    assert.include(
+      text,
+      readFileSync("packages/claude-bridge/NOTICE", "utf8").trim(),
+    );
+    assert.include(text, "Permission is hereby granted");
   });
 
   it("keeps license text spacing", () => {

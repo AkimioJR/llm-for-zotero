@@ -10,10 +10,14 @@ const webChatLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_WEBCHAT_LIVE === "1";
 // are opt-in: they cost money and need network, which a default test run
 // should never assume.
 const agentLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_AGENT_LIVE === "1";
-// The bridge bundles cc-llm4zotero-adapter, which is MIT licensed; its notice
-// must travel with every copy of the bundle.
-const claudeBridgeLicense = readFileSync(
-  "packages/claude-bridge/LICENSE",
+// The bridge bundles cc-llm4zotero-adapter, relicensed from MIT to AGPL with
+// permission; the relicense notice and the MIT text travel with every copy.
+const claudeBridgeNotice = readFileSync(
+  "packages/claude-bridge/NOTICE",
+  "utf8",
+).trim();
+const claudeBridgeMitLicense = readFileSync(
+  "packages/claude-bridge/LICENSE-MIT",
   "utf8",
 ).trim();
 const workflowTestsEnabled =
@@ -91,7 +95,7 @@ export default defineConfig({
         },
         banner: {
           js: [
-            `/*! Claude Code bridge, from cc-llm4zotero-adapter (MIT License)\n\n${claudeBridgeLicense}\n*/`,
+            `/*! ${claudeBridgeNotice}\n\n${claudeBridgeMitLicense}\n*/`,
             "import { createRequire as __bridgeCreateRequire } from 'node:module'; const require = __bridgeCreateRequire(import.meta.url);",
           ].join("\n"),
         },

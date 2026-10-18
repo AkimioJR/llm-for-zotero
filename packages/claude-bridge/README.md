@@ -246,3 +246,10 @@ to `<state-dir>/bridge.log`. The plugin's **Open log** button opens it.
 
 - [Claude Agent SDK TypeScript](https://platform.claude.com/docs/en/agent-sdk/typescript)
 - [Claude Agent SDK Overview](https://platform.claude.com/docs/en/agent-sdk/overview)
+
+## License
+
+AGPL-3.0-or-later, the same as llm-for-zotero (see `LICENSE`).
+This bridge was originally released under the MIT License by 东亜重工 (jianghao-zhang) and was relicensed with permission.
+Contributions made before the relicense remain available under the MIT License (see `LICENSE-MIT`).
+`NOTICE` has the same statement, and the plugin ships it with the bundled bridge.
