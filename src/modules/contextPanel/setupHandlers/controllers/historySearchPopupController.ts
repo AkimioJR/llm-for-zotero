@@ -52,6 +52,10 @@ export type HistorySearchPopupControllerDeps = {
   log?: (...args: unknown[]) => void;
   resolveLabel?: (entry: ConversationHistoryEntry) => string;
   resolveScopeLabel?: (entry: ConversationHistoryEntry) => string;
+  /** Search box hint; defaults to "Search history". */
+  searchPlaceholder?: string;
+  /** Conversation keys to hide from every list the popup shows. */
+  getExcludedConversationKeys?: () => ReadonlySet<number>;
 };
 
 export function shouldCloseHistorySearchPopupAfterSelection(
@@ -810,13 +814,15 @@ export function createHistorySearchPopupController(
 
   const popup = createElement(doc, "div", "llm-standalone-search-popup");
   const header = createElement(doc, "div", "llm-standalone-search-header");
+  const searchPlaceholder =
+    deps.searchPlaceholder || translate("Search history");
   const input = createElement(doc, "input", "llm-standalone-search-input", {
     type: "text",
-    placeholder: translate("Search history"),
+    placeholder: searchPlaceholder,
   }) as HTMLInputElement;
   input.setAttribute("autocomplete", "off");
   input.setAttribute("spellcheck", "false");
-  input.setAttribute("aria-label", translate("Search history"));
+  input.setAttribute("aria-label", searchPlaceholder);
 
   const closeButton = createElement(
     doc,
@@ -865,6 +871,7 @@ export function createHistorySearchPopupController(
     log,
     resolveLabel: deps.resolveLabel,
     resolveScopeLabel: deps.resolveScopeLabel,
+    getExcludedConversationKeys: deps.getExcludedConversationKeys,
     onSelect: (entry) =>
       Promise.resolve(deps.onSelect(entry))
         .then((result) => {

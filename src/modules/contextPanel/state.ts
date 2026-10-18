@@ -10,6 +10,7 @@ import type {
   OtherContextRef,
   CollectionContextRef,
   TagContextRef,
+  AttachedConversationRef,
   ChatRuntimeMode,
   PaperContextSendMode,
   PaperContentSourceMode,
@@ -628,6 +629,10 @@ export const selectedCollectionContextCache = new Map<
   CollectionContextRef[]
 >();
 export const selectedTagContextCache = new Map<number, TagContextRef[]>();
+export const attachedConversationCache = new Map<
+  number,
+  AttachedConversationRef[]
+>();
 // Conversations whose paper/collection/tag composer state has been initialized.
 // Membership is significant even when every corresponding context cache is empty.
 export const initializedConversationComposeContextKeys = new Set<number>();
@@ -763,6 +768,7 @@ export function clearAllState(): void {
   abortControllers.clear();
   autoLockedGlobalConversationKeys.clear();
   selectedTagContextCache.clear();
+  attachedConversationCache.clear();
   webChatIsolatedConversationKeys.clear();
   webChatSessionConversationKeys.clear();
   clearMermaidSvgCache();

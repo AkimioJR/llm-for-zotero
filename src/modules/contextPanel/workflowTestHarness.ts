@@ -82,6 +82,7 @@ import {
   selectedPaperContextCache,
   selectedCollectionContextCache,
   selectedTagContextCache,
+  attachedConversationCache,
   initializedConversationComposeContextKeys,
   isRequestPending,
   selectedTextCache,
@@ -1415,6 +1416,7 @@ function clearWorkflowConversationRuntimeState(): void {
   selectedPaperContextCache.clear();
   selectedCollectionContextCache.clear();
   selectedTagContextCache.clear();
+  attachedConversationCache.clear();
   initializedConversationComposeContextKeys.clear();
   paperContextModeOverrides.clear();
   paperContentSourceOverrides.clear();
@@ -2146,6 +2148,7 @@ async function seedPanelStoredUserMessage(
     | "fullTextPaperContexts"
     | "selectedCollectionContexts"
     | "selectedTagContexts"
+    | "attachedConversations"
   > = {},
 ): Promise<WorkflowTestDiagnostics> {
   assertWorkflowTestEnabled();
@@ -3000,7 +3003,7 @@ async function startPanelChatSend(
   text: string,
   overrides: Pick<
     SendQuestionOptions,
-    "forcedSkillIds" | "selectedTagContexts"
+    "forcedSkillIds" | "selectedTagContexts" | "attachedConversations"
   > = {},
 ): Promise<{ conversationKey: number; sendSettledSequenceBefore: number }> {
   assertWorkflowTestEnabled();
@@ -5384,6 +5387,84 @@ async function clickStandaloneSlashSideChatItem(): Promise<WorkflowTestStandalon
   return readStandaloneSidePanelDiagnostics();
 }
 
+/**
+ * Types "/" in the panel's composer, clicks "Add past conversation", reads
+ * the rows of the picker, and clicks the row titled `input.title` when given.
+ */
+async function pickPastConversationInPanel(
+  panelId: string,
+  input: { title?: string; rowIndex?: number } = {},
+): Promise<{
+  slashItemVisible: boolean;
+  rowTitles: string[];
+  rowLabels: string[];
+  picked: boolean;
+}> {
+  assertWorkflowTestEnabled();
+  const panel = getPanel(panelId);
+  const body = panel.body as HTMLElement;
+  const composer = body.querySelector(
+    "#llm-input",
+  ) as HTMLTextAreaElement | null;
+  if (!composer) throw new Error("Workflow panel composer was not rendered");
+  composer.value = "/";
+  const EventCtor = body.ownerDocument.defaultView?.Event ?? Event;
+  composer.dispatchEvent(new EventCtor("input", { bubbles: true }));
+  await Zotero.Promise.delay(150);
+  const option = body.querySelector(
+    "#llm-slash-past-conversation-option",
+  ) as HTMLElement | null;
+  if (!option) throw new Error("The Add past conversation item is missing");
+  const slashItemVisible =
+    option.style.display !== "none" && option.getClientRects().length > 0;
+  dispatchWorkflowClick(
+    body,
+    "#llm-slash-past-conversation-option",
+    "Add past conversation item",
+  );
+  const openPicker = () =>
+    Array.from(body.querySelectorAll(".llm-standalone-search-overlay")).find(
+      (overlay) => (overlay as HTMLElement).style.display !== "none",
+    ) as HTMLElement | undefined;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 5000) {
+    const overlay = openPicker();
+    if (
+      overlay?.querySelector(
+        ".llm-standalone-search-item, .llm-standalone-search-empty",
+      )
+    ) {
+      break;
+    }
+    await Zotero.Promise.delay(25);
+  }
+  const overlay = openPicker();
+  const rows = Array.from(
+    overlay?.querySelectorAll(".llm-standalone-search-item") || [],
+  ) as HTMLElement[];
+  const textOf = (row: Element, selector: string) =>
+    (row.querySelector(selector)?.textContent || "").trim();
+  const rowTitles = rows.map((row) =>
+    textOf(row, ".llm-standalone-search-title"),
+  );
+  const rowLabels = rows.map((row) =>
+    textOf(row, ".llm-standalone-search-label"),
+  );
+  let picked = false;
+  if (input.title || input.rowIndex !== undefined) {
+    const index =
+      input.rowIndex !== undefined
+        ? input.rowIndex
+        : rowTitles.findIndex((title) => title.includes(input.title as string));
+    if (index >= 0 && index < rows.length) {
+      rows[index]!.click();
+      picked = true;
+      await Zotero.Promise.delay(250);
+    }
+  }
+  return { slashItemVisible, rowTitles, rowLabels, picked };
+}
+
 async function getDiagnostics(
   panelId?: string,
 ): Promise<WorkflowTestDiagnostics> {
@@ -5470,6 +5551,11 @@ async function getDiagnostics(
     composerTagLabels: Array.from(
       body?.querySelectorAll(
         "#llm-paper-context-preview .llm-tag-chip-title",
+      ) || [],
+    ).map((node) => ((node as Element).textContent || "").trim()),
+    composerAttachedConversationLabels: Array.from(
+      body?.querySelectorAll(
+        "#llm-paper-context-preview .llm-conversation-chip-title",
       ) || [],
     ).map((node) => ((node as Element).textContent || "").trim()),
     sentContextBadgeLabels: Array.from(
@@ -8608,6 +8694,7 @@ export function installWorkflowTestHarness(targetAddon: {
     retryLatestPanelResponse,
     readChatTurnLifecycle,
     seedPanelStoredUserMessage,
+    pickPastConversationInPanel,
     clickPanelSystemToggle,
     clickPanelSystemTogglesRapidly,
     clickPanelRuntimeModeToggle,

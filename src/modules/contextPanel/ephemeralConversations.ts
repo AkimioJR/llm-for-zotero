@@ -34,6 +34,7 @@ import {
   selectedPaperContextListExpandedCache,
   selectedPaperPreviewExpandedCache,
   selectedTagContextCache,
+  attachedConversationCache,
   selectedTextCache,
   selectedTextPreviewExpandedCache,
 } from "./state";
@@ -48,6 +49,7 @@ function clearComposerCaches(conversationKey: number): void {
   selectedOtherRefContextCache.delete(conversationKey);
   selectedCollectionContextCache.delete(conversationKey);
   selectedTagContextCache.delete(conversationKey);
+  attachedConversationCache.delete(conversationKey);
   selectedPaperPreviewExpandedCache.delete(conversationKey);
   selectedPaperContextListExpandedCache.delete(conversationKey);
   selectedTextPreviewExpandedCache.delete(conversationKey);

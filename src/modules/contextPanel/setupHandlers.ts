@@ -304,6 +304,19 @@ import {
   retainPinnedTextState as retainPinnedTextState_,
 } from "./contexts/textContextState";
 import { composeContextStore } from "./contexts/composeContextStore";
+import {
+  buildAttachedConversationRef,
+  formatAttachedConversationLabel,
+  getPastConversationSystemLabel,
+  isPastConversationEntry,
+  listPastConversationEntries,
+  searchPastConversationEntries,
+} from "./pastConversationSource";
+import { createHistorySearchPopupController } from "./setupHandlers/controllers/historySearchPopupController";
+import {
+  MAX_ATTACHED_CONVERSATIONS,
+  normalizeAttachedConversationRefs,
+} from "../../services/context/normalizers";
 import { optimizeImageDataUrl } from "./screenshot";
 import { readNoteSnapshot } from "../../services/notes/noteSnapshot";
 import {
@@ -333,6 +346,7 @@ import type {
   OtherContextRef,
   CollectionContextRef,
   TagContextRef,
+  AttachedConversationRef,
   PaperContextSendMode,
   PaperContentSourceMode,
   ResolvedContextSource,
@@ -442,6 +456,7 @@ import {
   groupHistoryEntriesByDay,
   normalizeConversationTitleSeed,
   normalizeHistoryTitle,
+  resolveHistoryEntryPaperDisplayMetadata,
 } from "./setupHandlers/controllers/conversationHistoryController";
 import {
   appendHistorySearchHighlightedText,
@@ -777,6 +792,7 @@ export function setupHandlers(
     slashMenu,
     slashUploadOption,
     slashReferenceOption,
+    slashPastConversationOption,
     slashPdfPageOption,
     slashPdfMultiplePagesOption,
     slashSideChatOption,
@@ -4317,6 +4333,61 @@ export function setupHandlers(
     list.appendChild(chip);
   };
 
+  const appendConversationChip = (
+    ownerDoc: Document,
+    list: HTMLDivElement,
+    ref: AttachedConversationRef,
+    removableIndex: number,
+  ) => {
+    const chip = createElement(
+      ownerDoc,
+      "div",
+      "llm-selected-context llm-conversation-context-chip",
+    );
+    chip.dataset.conversationIndex = `${removableIndex}`;
+    chip.classList.add("collapsed");
+
+    const chipHeader = createElement(
+      ownerDoc,
+      "div",
+      "llm-image-preview-header llm-selected-context-header llm-conversation-chip-header",
+    );
+    const labelText = formatAttachedConversationLabel(ref);
+    const chipLabel = createElement(
+      ownerDoc,
+      "span",
+      "llm-conversation-chip-label",
+      { title: labelText },
+    );
+    const chipIcon = createContextIcon(
+      ownerDoc,
+      "model",
+      "llm-conversation-chip-icon",
+    );
+    const chipTitle = createElement(
+      ownerDoc,
+      "span",
+      "llm-conversation-chip-title",
+      { textContent: labelText },
+    );
+    chipLabel.append(chipIcon, chipTitle);
+    const removeBtn = createElement(
+      ownerDoc,
+      "button",
+      "llm-remove-img-btn llm-conversation-clear",
+      {
+        type: "button",
+        textContent: "\u00D7",
+        title: `Remove ${ref.title}`,
+      },
+    ) as HTMLButtonElement;
+    removeBtn.dataset.conversationIndex = `${removableIndex}`;
+    removeBtn.setAttribute("aria-label", `Remove ${ref.title}`);
+    chipHeader.append(chipLabel, removeBtn);
+    chip.appendChild(chipHeader);
+    list.appendChild(chip);
+  };
+
   const updatePaperPreview = () => {
     renderPaperPreview();
     // Task progress lists what the context bar holds: follow every change.
@@ -4336,11 +4407,14 @@ export function setupHandlers(
     const selectedCollections =
       selectedCollectionContextCache.get(itemId) || [];
     const selectedTags = selectedTagContextCache.get(itemId) || [];
+    const selectedConversations =
+      composeContextStore.attachedConversations.list(itemId);
     const hasAnyContext =
       selectedPapers.length > 0 ||
       selectedOtherRefs.length > 0 ||
       selectedCollections.length > 0 ||
       selectedTags.length > 0 ||
+      selectedConversations.length > 0 ||
       !!autoLoadedPaperContext;
     if (!hasAnyContext) {
       paperPreview.style.display = "none";
@@ -4417,6 +4491,9 @@ export function setupHandlers(
     });
     selectedTags.forEach((ref, index) => {
       appendTagChip(ownerDoc, paperPreviewList, ref, index);
+    });
+    selectedConversations.forEach((ref, index) => {
+      appendConversationChip(ownerDoc, paperPreviewList, ref, index);
     });
   };
 
@@ -7421,6 +7498,11 @@ export function setupHandlers(
       selectedCollectionContextCache.get(itemId) || [],
     getSelectedTagContexts: (itemId) =>
       selectedTagContextCache.get(itemId) || [],
+    getAttachedConversations: (itemId) =>
+      composeContextStore.attachedConversations.list(itemId),
+    clearAttachedConversations: (itemId) => {
+      composeContextStore.attachedConversations.delete(itemId);
+    },
     getFullTextPaperContexts: (currentItem, selectedPaperContexts) =>
       getEffectiveFullTextPaperContexts(currentItem, selectedPaperContexts),
     getPdfModePaperContexts: (currentItem, selectedPaperContexts) =>
@@ -7627,12 +7709,16 @@ export function setupHandlers(
         selectedTextNoteContexts,
         selectedCollectionContexts,
         selectedTagContexts,
+        attachedConversations,
       } = buildInlineEditRetryContextSnapshot({
         selectedContexts,
         selectedCollectionContexts: selectedCollectionContextCache.get(
           currentItem.id,
         ),
         selectedTagContexts: selectedTagContextCache.get(currentItem.id),
+        attachedConversations: composeContextStore.attachedConversations.list(
+          currentItem.id,
+        ),
       });
       const contextSource = await resolveAutoLoadedContextSourceAsync().catch(
         (error) => {
@@ -7799,6 +7885,7 @@ export function setupHandlers(
             selectedTextNoteContexts,
             selectedCollectionContexts,
             selectedTagContexts,
+            attachedConversations,
             screenshotImages: images,
             paperContexts: selectedPaperContexts,
             pdfPaperContexts: pdfModePapers,
@@ -8104,6 +8191,56 @@ export function setupHandlers(
 
   attachFontScaleShortcutController(panelDoc);
 
+  // "Add past conversation": the history popup, listing chats of every system
+  // for this library. Picking a row attaches a reference chip to the composer.
+  const pastConversationPicker = createHistorySearchPopupController({
+    parent: panelRoot,
+    searchPlaceholder: t("Search past chats"),
+    loadEntries: async () =>
+      await listPastConversationEntries({
+        libraryID: getCurrentLibraryID(),
+        excludeConversationKey: item ? getConversationKey(item) : null,
+      }),
+    loadDocument: async (entry) => createHistorySearchDocument(entry, []),
+    searchEntries: async (query) =>
+      await searchPastConversationEntries({
+        libraryID: getCurrentLibraryID(),
+        query,
+        excludeConversationKey: item ? getConversationKey(item) : null,
+      }),
+    onSelect: (entry) => {
+      if (!item || !isPastConversationEntry(entry)) return false;
+      const ref = buildAttachedConversationRef(entry, getCurrentLibraryID());
+      if (!ref) return false;
+      const current = composeContextStore.attachedConversations.list(item.id);
+      if (current.length >= MAX_ATTACHED_CONVERSATIONS) {
+        if (status) {
+          setStatus(status, t("Up to 3 past chats per message"), "warning");
+        }
+        return true;
+      }
+      composeContextStore.attachedConversations.replace(
+        item.id,
+        normalizeAttachedConversationRefs([...current, ref]),
+      );
+      updatePaperPreview();
+      return true;
+    },
+    translate: t,
+    log: (...args) => appLogger.warn("LLM: past conversation picker", args),
+    resolveLabel: (entry) =>
+      isPastConversationEntry(entry)
+        ? getPastConversationSystemLabel(entry.system)
+        : "",
+    resolveScopeLabel: (entry) =>
+      entry.kind === "paper"
+        ? resolveHistoryEntryPaperDisplayMetadata(
+            entry,
+            (id) => Zotero.Items.get(id) as Zotero.Item | null,
+          )?.title || t("Paper chat")
+        : t("Library chat"),
+  });
+
   attachComposeCaptureController({
     body,
     inputBox,
@@ -8113,6 +8250,13 @@ export function setupHandlers(
     slashMenu,
     slashUploadOption,
     slashReferenceOption,
+    slashPastConversationOption,
+    openPastConversationPicker: () => {
+      if (!item) return;
+      pastConversationPicker.open();
+    },
+    getAttachedConversationCount: () =>
+      item ? composeContextStore.attachedConversations.list(item.id).length : 0,
     slashPdfPageOption,
     slashPdfMultiplePagesOption,
     slashSideChatOption,

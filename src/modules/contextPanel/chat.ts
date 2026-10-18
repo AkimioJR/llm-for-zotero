@@ -326,6 +326,10 @@ import {
   normalizeAttachedConversationRefs,
   normalizeAttachmentContentHash,
 } from "../../services/context/normalizers";
+import {
+  formatAttachedConversationLabel,
+  refreshAttachedConversationExistence,
+} from "./pastConversationSource";
 import { positionMenuAtPointer } from "./menuPositioning";
 import { FULL_PDF_UNSUPPORTED_MESSAGE } from "./pdfSupportMessages";
 import {
@@ -982,6 +986,57 @@ function normalizeAttachedConversations(
 ): AttachedConversationRef[] {
   return normalizeAttachedConversationRefs(attachedConversations, {
     sanitizeText,
+  });
+}
+
+function collectAttachedConversationRefs(
+  messages: readonly { attachedConversations?: unknown }[],
+): AttachedConversationRef[] {
+  const refs: AttachedConversationRef[] = [];
+  for (const message of messages) {
+    if (message.attachedConversations) {
+      refs.push(
+        ...normalizeAttachedConversations(message.attachedConversations),
+      );
+    }
+  }
+  return refs;
+}
+
+/**
+ * Looks up whether the past chats attached to these messages still exist.
+ * The message renderer is synchronous and reads the result from a cache.
+ * Resolves true when a chat turned out to be deleted.
+ */
+async function refreshAttachedConversationChecks(
+  messages: readonly { attachedConversations?: unknown }[],
+): Promise<boolean> {
+  const refs = collectAttachedConversationRefs(messages);
+  if (!refs.length) return false;
+  try {
+    return await refreshAttachedConversationExistence(refs);
+  } catch (err) {
+    appLogger.warn("LLM: attached conversation check failed", err);
+    return false;
+  }
+}
+
+/** Re-checks a loaded chat's attached past chats and repaints on a change. */
+function recheckAttachedConversationsInBackground(
+  conversationKey: number,
+): void {
+  const messages = chatHistory.get(conversationKey) || [];
+  if (!collectAttachedConversationRefs(messages).length) return;
+  void refreshAttachedConversationChecks(messages).then((changed) => {
+    if (!changed) return;
+    for (const [body, getItem] of activeContextPanels) {
+      const panelItem = getItem();
+      if (!panelItem || getConversationKey(panelItem) !== conversationKey) {
+        continue;
+      }
+      refreshConversationPanels(body, panelItem);
+      return;
+    }
   });
 }
 
@@ -2548,7 +2603,9 @@ export async function loadConversationMessagesForReadOnlyView(
     PERSISTED_HISTORY_LIMIT,
     conversationSystem,
   );
-  return stored.map((message) => toPanelMessage(message));
+  const messages = stored.map((message) => toPanelMessage(message));
+  await refreshAttachedConversationChecks(messages);
+  return messages;
 }
 
 function toPanelMessage(message: StoredChatMessage): Message {
@@ -2751,6 +2808,7 @@ export async function ensureConversationLoaded(
   if (loadedConversationKeys.has(conversationKey)) {
     await loadConversationForkLinkCache(conversationKey);
     restoreConversationComposeContext(item);
+    recheckAttachedConversationsInBackground(conversationKey);
     return;
   }
   if (
@@ -2852,6 +2910,9 @@ export async function ensureConversationLoaded(
           planDocumentId: storedMessage.planDocumentId,
         });
       }
+      // Render reads the existence result from a cache; fill it before the
+      // freshness check so no await sits between that check and the write.
+      await refreshAttachedConversationChecks(storedMessages);
       if (isFrozen()) {
         chatHistory.delete(conversationKey);
         conversationForkLinks.delete(conversationKey);
@@ -5607,6 +5668,10 @@ function syncComposeContextForInlineEdit(
     userMessage.selectedTagContexts,
   );
   composeContextStore.tags.replace(item.id, selectedTagContexts);
+  composeContextStore.attachedConversations.replace(
+    item.id,
+    normalizeAttachedConversations(userMessage.attachedConversations),
+  );
   // Clear existing mode overrides for this item, then set full-next for each full-text paper
   composeContextStore.paperSendModes.clearOwner(item.id);
   for (const paperContext of fullTextPaperContexts) {
@@ -9873,11 +9938,16 @@ function buildInlineEditWidget(
       setInlineEditSavedDraft(body, "");
       // The chips' questions belong to the turn that was edited; they must not
       // ride along with the next message.
-      if (
-        stripSelectedTextQuestionsForItem(
-          editConversationKey ?? getConversationKey(item),
-        )
-      ) {
+      let composerChanged = stripSelectedTextQuestionsForItem(
+        editConversationKey ?? getConversationKey(item),
+      );
+      // Past chats are one-shot like the questions: the edit restored them
+      // into the composer, and they must not attach to the next message.
+      if (composeContextStore.attachedConversations.has(item.id)) {
+        composeContextStore.attachedConversations.delete(item.id);
+        composerChanged = true;
+      }
+      if (composerChanged) {
         activeContextPanelStateSync.get(body)?.();
       }
       if (superseded) {
@@ -10597,6 +10667,7 @@ function renderChatForPanel(
       let papersExpanded: HTMLDivElement | null = null;
       let collectionsExpanded: HTMLDivElement | null = null;
       let tagsExpanded: HTMLDivElement | null = null;
+      let attachedConversationsExpanded: HTMLDivElement | null = null;
       let filesExpanded: HTMLDivElement | null = null;
       const selectedTexts = getMessageSelectedTexts(msg);
       const selectedTextSources = normalizeSelectedTextSources(
@@ -10624,11 +10695,15 @@ function renderChatForPanel(
         msg.selectedCollectionContexts,
       );
       const selectedTagContexts = normalizeTagContexts(msg.selectedTagContexts);
+      const attachedConversationRefs = normalizeAttachedConversations(
+        msg.attachedConversations,
+      );
       hasUserContext =
         hasScreenshotContext ||
         hasSelectedTextContext ||
         selectedCollectionContexts.length > 0 ||
-        selectedTagContexts.length > 0;
+        selectedTagContexts.length > 0 ||
+        attachedConversationRefs.length > 0;
       if (hasScreenshotContext) {
         const screenshotBar = doc.createElementNS(
           HTML_NS,
@@ -10939,6 +11014,95 @@ function renderChatForPanel(
         hasContextBadge = true;
       }
 
+      if (attachedConversationRefs.length) {
+        const conversationsBar = doc.createElementNS(
+          HTML_NS,
+          "button",
+        ) as HTMLButtonElement;
+        conversationsBar.type = "button";
+        conversationsBar.className =
+          "llm-user-papers-bar llm-user-conversations-bar";
+
+        const conversationsIcon = createContextIcon(
+          doc,
+          "model",
+          "llm-user-papers-icon",
+        );
+        const conversationsLabel = doc.createElement("span") as HTMLSpanElement;
+        conversationsLabel.className = "llm-user-papers-label";
+        conversationsLabel.textContent =
+          attachedConversationRefs.length === 1 ? "Past chat" : "Past chats";
+        const conversationTexts = attachedConversationRefs.map(
+          formatAttachedConversationLabel,
+        );
+        conversationsLabel.title = conversationTexts.join("\n");
+        conversationsBar.append(conversationsIcon, conversationsLabel);
+
+        const conversationsExpandedEl = doc.createElement(
+          "div",
+        ) as HTMLDivElement;
+        conversationsExpandedEl.className =
+          "llm-user-papers-expanded llm-user-conversations-expanded";
+        attachedConversationsExpanded = conversationsExpandedEl;
+        const conversationsList = doc.createElement("div") as HTMLDivElement;
+        conversationsList.className =
+          "llm-user-papers-list llm-user-conversations-list";
+        conversationTexts.forEach((text) => {
+          const conversationItem = doc.createElement("div") as HTMLDivElement;
+          conversationItem.className =
+            "llm-user-papers-item llm-user-conversations-item";
+          const conversationTitle = doc.createElement(
+            "span",
+          ) as HTMLSpanElement;
+          conversationTitle.className = "llm-user-papers-item-title";
+          conversationTitle.textContent = text;
+          conversationTitle.title = text;
+          conversationItem.append(conversationTitle);
+          conversationsList.appendChild(conversationItem);
+        });
+        conversationsExpandedEl.appendChild(conversationsList);
+
+        const applyConversationsState = () => {
+          const expanded = Boolean(msg.attachedConversationsExpanded);
+          conversationsBar.classList.toggle("expanded", expanded);
+          conversationsBar.setAttribute(
+            "aria-expanded",
+            expanded ? "true" : "false",
+          );
+          conversationsExpandedEl.hidden = !expanded;
+          conversationsExpandedEl.style.display = expanded ? "block" : "none";
+          conversationsBar.title = expanded
+            ? "Collapse past chats"
+            : "Expand past chats";
+        };
+        const toggleConversationsExpanded = () => {
+          msg.attachedConversationsExpanded =
+            !msg.attachedConversationsExpanded;
+          applyConversationsState();
+        };
+        applyConversationsState();
+        conversationsBar.addEventListener("mousedown", (e: Event) => {
+          const mouse = e as MouseEvent;
+          if (mouse.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          toggleConversationsExpanded();
+        });
+        conversationsBar.addEventListener("click", (e: Event) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        conversationsBar.addEventListener("keydown", (e: KeyboardEvent) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          e.stopPropagation();
+          toggleConversationsExpanded();
+        });
+
+        contextBadgesRow.appendChild(conversationsBar);
+        hasContextBadge = true;
+      }
+
       const paperContexts = getMessageDisplayPaperContexts(msg);
       hasUserContext = hasUserContext || paperContexts.length > 0;
       if (paperContexts.length) {
@@ -11183,6 +11347,9 @@ function renderChatForPanel(
       }
       if (tagsExpanded) {
         wrapper.appendChild(tagsExpanded);
+      }
+      if (attachedConversationsExpanded) {
+        wrapper.appendChild(attachedConversationsExpanded);
       }
       if (papersExpanded) {
         wrapper.appendChild(papersExpanded);
