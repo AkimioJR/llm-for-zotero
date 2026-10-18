@@ -61,6 +61,25 @@ export default defineConfig({
         target: "firefox115",
         outfile: ".scaffold/build/addon/content/scripts/pdfSplitterWorker.js",
       },
+      {
+        // The Claude Code bridge runs under the user's Node, not in Zotero.
+        // The plugin copies this file out of the XPI and starts it with Node
+        // only while Claude Code mode is on (src/claudeCode/bridgeProcess.ts).
+        // The SDK's 250 MB per-platform Claude binary stays out of the XPI:
+        // the bridge runs the user's own `claude`.
+        entryPoints: ["packages/claude-bridge/bin/start-bridge-server.ts"],
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        target: "node18",
+        define: {
+          __CLAUDE_BRIDGE_VERSION__: JSON.stringify(pkg.version),
+        },
+        banner: {
+          js: "import { createRequire as __bridgeCreateRequire } from 'node:module'; const require = __bridgeCreateRequire(import.meta.url);",
+        },
+        outfile: ".scaffold/build/addon/content/claude-bridge/bridge.mjs",
+      },
     ],
   },
 

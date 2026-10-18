@@ -1,26 +1,14 @@
 {
-  "name": "cc-llm4zotero-adapter",
+  "name": "@llm-for-zotero/claude-bridge",
   "version": "0.1.0",
-  "description": "Adapter that connects llm-for-zotero agent frontend semantics to Claude Code runtime",
+  "private": true,
+  "description": "Claude Code bridge for llm-for-zotero. The plugin bundles and starts it; see README.md.",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "clean": "rm -rf dist coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "demo:llm4zotero": "tsx examples/llm4zotero-runturn-demo.ts",
-    "serve:bridge": "tsx bin/start-bridge-server.ts --host 127.0.0.1 --port 19787",
-    "daemon:install": "tsx bin/manage-daemon.ts install",
-    "daemon:start": "tsx bin/manage-daemon.ts start",
-    "daemon:stop": "tsx bin/manage-daemon.ts stop",
-    "daemon:restart": "tsx bin/manage-daemon.ts restart",
-    "daemon:status": "tsx bin/manage-daemon.ts status",
-    "daemon:uninstall": "tsx bin/manage-daemon.ts uninstall"
+    "serve:bridge": "tsx bin/start-bridge-server.ts --host 127.0.0.1 --port 19787"
   },
   "keywords": [
     "zotero",
