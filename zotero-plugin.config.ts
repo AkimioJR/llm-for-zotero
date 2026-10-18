@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { cp } from "node:fs/promises";
 import { defineConfig } from "zotero-plugin-scaffold";
 import pkg from "./package.json";
+import { writeClaudeBridgeNotices } from "./scripts/claude-bridge-notices.mjs";
 import { patchGeneratedWorkflowTestReporter } from "./scripts/workflow-test-reporter.mjs";
 
 const webChatLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_WEBCHAT_LIVE === "1";
@@ -33,6 +34,12 @@ export default defineConfig({
     "https://github.com/{{owner}}/{{repo}}/releases/download/v{{version}}/{{xpiName}}.xpi",
 
   build: {
+    hooks: {
+      // Runs before the XPI is packed, so the notices ship inside it.
+      "build:bundle": async () => {
+        await writeClaudeBridgeNotices();
+      },
+    },
     assets: ["addon/**/*.*"],
     define: {
       ...pkg.config,
