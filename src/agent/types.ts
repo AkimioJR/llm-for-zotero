@@ -8,6 +8,7 @@ import type {
 import type {
   ActiveNoteContext,
   AdvancedModelParams,
+  AttachedConversationRef,
   ChatAttachment,
   CollectionContextRef,
   LocalDocumentResource,
@@ -107,6 +108,17 @@ export type AgentRequest = {
   pinnedPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
+  /**
+   * Past chats the current user message attached (at most three). The
+   * built-in agent renders them once, into the transcript, on this turn.
+   */
+  attachedConversations?: AttachedConversationRef[];
+  /**
+   * Every past chat attached anywhere in this conversation: the chats
+   * past_chat_read may open. Host-set from the stored user messages; the MCP
+   * scope builder never sets it.
+   */
+  attachedConversationScope?: AttachedConversationRef[];
   availableAttachmentResources?: AgentAttachmentResource[];
   attachmentResourceSummaries?: AgentAttachmentResourceSummary[];
   attachments?: ChatAttachment[];

@@ -35,11 +35,15 @@ import {
  * was asked and to name it with what matches and what does not, after a
  * benchmark run where the shorter rule led to a false "not in your
  * library" for a paper the agent had read (100 characters, 2026-10-13).
+ * All three caps were raised again by past_chat_read, the always-listed tool
+ * that opens past chats the user attached to the conversation (510 tool
+ * characters, 2026-10-18); a turn with nothing attached is otherwise
+ * unchanged.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 36_013,
-  paper: 34_764,
-  collection: 36_111,
+  global: 36_523,
+  paper: 35_274,
+  collection: 36_621,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

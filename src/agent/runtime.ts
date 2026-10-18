@@ -211,6 +211,18 @@ import {
   isUserDeniedToolResult,
   setToolResultReadAvailability,
 } from "./execution/toolResultLifecycle";
+import {
+  agentPastChatMemoKey,
+  buildPastChatMessageText,
+  buildPastChatMessageTextMemoized,
+  type PastConversationSource,
+} from "../services/pastConversations/pastConversationLoader";
+import {
+  isPastChatMessageText,
+  pastChatMessageHasFailedSection,
+  pastChatMessageIdSignature,
+  resolvePastChatFullTextBudget,
+} from "../services/pastConversations/pastConversationText";
 import type {
   AgentAssistantMessage,
   AgentConfirmationResolution,
@@ -258,6 +270,11 @@ type AgentRuntimeDeps = {
    * defaults unless a test exercises the retries without waiting.
    */
   modelRetryBackoffMs?: readonly number[];
+  /**
+   * Where attached past chats are read from; the conversation stores unless
+   * a test supplies a fake.
+   */
+  pastConversationSource?: PastConversationSource;
 };
 
 /**
@@ -464,6 +481,47 @@ async function latestSettledRun(params: {
   return getLatestAgentRunForConversation(params.conversationKey);
 }
 
+/**
+ * The past-chat copy a retry of this turn already stored: the message right
+ * before the transcript's last "User request:" entry, when that entry has this
+ * turn's text and the copy holds the same set of chats. A copy with a failed
+ * section does not count when the new render loaded: history only grows, so
+ * the new copy is appended after it.
+ */
+function findStoredPastChatCopyForTurn(
+  transcript: readonly AgentModelMessage[],
+  request: AgentRuntimeRequest,
+  rendered: AgentModelMessage,
+): AgentModelMessage | null {
+  const signature = pastChatMessageIdSignature(rendered.content);
+  if (!signature) return null;
+  const renderedFailed = pastChatMessageHasFailedSection(rendered.content);
+  // Every retry appends the request again, so walk back over each request
+  // with this turn's text and stop at the first one with other text.
+  for (let index = transcript.length - 1; index >= 1; index -= 1) {
+    const message = transcript[index];
+    if (
+      message.role !== "user" ||
+      typeof message.content !== "string" ||
+      !message.content.startsWith("User request:")
+    ) {
+      continue;
+    }
+    if (!isCurrentTurnUserTranscriptMessage(message, request)) return null;
+    const previous = transcript[index - 1];
+    if (
+      previous.role === "user" &&
+      typeof previous.content === "string" &&
+      isPastChatMessageText(previous.content) &&
+      pastChatMessageIdSignature(previous.content) === signature &&
+      !(pastChatMessageHasFailedSection(previous.content) && !renderedFailed)
+    ) {
+      return previous;
+    }
+  }
+  return null;
+}
+
 export class AgentRuntime {
   private readonly registry: AgentToolRegistry;
   private readonly adapterFactory: AgentRuntimeDeps["adapterFactory"];
@@ -474,6 +532,7 @@ export class AgentRuntime {
   private readonly stoppedRunWaitMs: number;
   private readonly turnLimits?: Partial<TurnSafetyLimits>;
   private readonly modelRetryBackoffMs?: readonly number[];
+  private readonly pastConversationSource?: PastConversationSource;
   private readonly pendingConfirmations = new Map<
     string,
     PendingConfirmation
@@ -490,6 +549,7 @@ export class AgentRuntime {
     this.stoppedRunWaitMs = deps.stoppedRunWaitMs ?? STOPPED_RUN_WAIT_MS;
     this.turnLimits = deps.turnLimits;
     this.modelRetryBackoffMs = deps.modelRetryBackoffMs;
+    this.pastConversationSource = deps.pastConversationSource;
   }
 
   listTools() {
@@ -613,6 +673,63 @@ export class AgentRuntime {
         error,
       );
       return undefined;
+    }
+  }
+
+  /**
+   * The past-chat message for the chats the current user message attached,
+   * or null. Rendered once, on the attaching turn; the transcript keeps it,
+   * so later turns send the same bytes. A chat goes in full when it is small
+   * and the turn's budget (min 12,000 tokens, 15% of the context window)
+   * has room, otherwise as an outline the agent opens with past_chat_read.
+   * Never fails the turn.
+   */
+  private async renderAttachedPastChatMessage(
+    request: AgentRuntimeRequest,
+  ): Promise<AgentUserMessage | null> {
+    if (!request.attachedConversations?.length) return null;
+    try {
+      const { contextWindow } = resolveAgentPromptBudgetLimits({
+        model: request.model,
+        inputTokenCap: request.advanced?.inputTokenCap,
+        apiBase: request.apiBase,
+        providerProtocol: request.providerProtocol,
+        authMode: request.authMode,
+        profileOverride: request.advanced?.profileOverride,
+        outputTokenLimit: request.advanced?.outputTokenLimit,
+      });
+      const renderParams = {
+        refs: request.attachedConversations,
+        libraryID: request.libraryID,
+        mode: {
+          kind: "agent" as const,
+          fullTextBudgetTokens: resolvePastChatFullTextBudget(contextWindow),
+        },
+        source: this.pastConversationSource,
+      };
+      // Memoized under the user message, so a later rebuild of this turn's
+      // history in the same session (agentMode/pastChatHistory.ts) sends the
+      // same bytes.
+      const sourceMessageTimestamp = Number(
+        request.metadata?.sourceMessageTimestamp,
+      );
+      const text =
+        Number.isFinite(sourceMessageTimestamp) && sourceMessageTimestamp > 0
+          ? await buildPastChatMessageTextMemoized(
+              agentPastChatMemoKey(
+                request.conversationKey,
+                sourceMessageTimestamp,
+              ),
+              renderParams,
+            )
+          : await buildPastChatMessageText(renderParams);
+      return text ? { role: "user", content: text } : null;
+    } catch (error) {
+      logRuntimeWarning(
+        "LLM Agent: rendering the attached past chats failed",
+        error,
+      );
+      return null;
     }
   }
 
@@ -1481,10 +1598,58 @@ export class AgentRuntime {
       const transcriptTail =
         turnStartTranscriptMessages[turnStartTranscriptMessages.length - 1] ||
         transcriptSegment.messages[transcriptSegment.messages.length - 1];
-      if (
+      const storesTurnMessages =
         hadCompatibleTranscript ||
-        !isCurrentTurnUserTranscriptMessage(transcriptTail, request)
+        !isCurrentTurnUserTranscriptMessage(transcriptTail, request);
+      // Loaded only when this turn's message attached chats and the block
+      // below will store them.
+      const renderedPastChatMessage =
+        storesTurnMessages && request.attachedConversations?.length
+          ? await this.renderAttachedPastChatMessage(request)
+          : null;
+      if (
+        params.signal?.aborted &&
+        storesTurnMessages &&
+        request.attachedConversations?.length
       ) {
+        // Stopped while the chats loaded: nothing of this turn is stored.
+        const stopped = new Error("Aborted");
+        stopped.name = "AbortError";
+        throw stopped;
+      }
+      // Redacted once, so the prompt and the stored transcript hold the same
+      // bytes and the next turn's prefix matches this one's.
+      const pastChatMessage = renderedPastChatMessage
+        ? turnPathRedactor.redactTerminalValue(renderedPastChatMessage)
+        : null;
+      let currentTurnPastChatMessage: AgentModelMessage | undefined;
+      if (storesTurnMessages) {
+        // The attached past chats go in once, as their own user message right
+        // before this turn's request: stored in the transcript for later
+        // turns, and in this turn's prompt, where the turn message stands in
+        // for the stored request. Never transient, never a system message.
+        // A retry of the latest turn keeps its transcript, which already
+        // holds the same bytes (the render is memoized per user message):
+        // the chat stays where it is instead of going in twice.
+        const storedPastChatCopy = pastChatMessage
+          ? findStoredPastChatCopyForTurn(
+              transcriptMessagesForPrompt,
+              request,
+              pastChatMessage,
+            )
+          : null;
+        if (pastChatMessage && !storedPastChatCopy) {
+          turnStartTranscriptMessages.push(pastChatMessage);
+          transcriptMessagesForPrompt = [
+            ...transcriptMessagesForPrompt,
+            pastChatMessage,
+          ];
+          currentTurnPastChatMessage = pastChatMessage;
+        } else if (storedPastChatCopy) {
+          // The stored copy stands in for this turn's, and stays in the
+          // recent tail like a fresh one would.
+          currentTurnPastChatMessage = storedPastChatCopy;
+        }
         turnStartTranscriptMessages.push(currentUserTranscriptMessage);
       }
       if (turnStartTranscriptMessages.length) {
@@ -1592,6 +1757,7 @@ export class AgentRuntime {
           force: Boolean(transcriptSegment.compactedAt),
           conversationKey: request.conversationKey,
           resourceSignature: resourceContextPlan.resourceSignature,
+          keepInTail: currentTurnPastChatMessage,
         });
         if (compacted.compacted) {
           transcriptMessagesForPrompt = compacted.messages;

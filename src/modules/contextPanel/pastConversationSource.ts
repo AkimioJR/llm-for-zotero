@@ -21,6 +21,7 @@ import type {
   ConversationSystem,
 } from "../../shared/types";
 import { normalizeAttachedConversationRefs } from "../../services/context/normalizers";
+import { findPastConversationCatalogEntry } from "../../services/pastConversations/pastConversationLoader";
 import { t } from "../../utils/i18n";
 import {
   formatGlobalHistoryTimestamp,
@@ -399,19 +400,7 @@ export async function refreshAttachedConversationExistence(
     Array.from(unique.entries()).map(async ([key, ref]) => {
       let exists: boolean;
       try {
-        if (isPendingDeletion(ref.conversationKey)) {
-          exists = false;
-        } else {
-          const entry = await conversationRepository.getCatalogEntry({
-            system: ref.system,
-            conversationKey: ref.conversationKey,
-            kind: ref.kind,
-          });
-          exists =
-            Boolean(entry) &&
-            (!ref.conversationID ||
-              entry?.conversationID === ref.conversationID);
-        }
+        exists = Boolean(await findPastConversationCatalogEntry(ref));
       } catch {
         // Unreadable catalog: leave the state as it was.
         return;

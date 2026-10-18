@@ -49,8 +49,11 @@ describe("direct Agent model tool surface", function () {
     // (2026-10-03, after task_update named excluded and replaces, the
     // workflow asked for a digest part per per-paper result, submit_document
     // named excluded, and literature_search said it searches outside the
-    // library and its metadata mode proposes changes).
-    assert.isAtMost(serializedToolCharacters, 24_000);
+    // library and its metadata mode proposes changes). The tool cap was
+    // raised to 24,100 by past_chat_read, the always-listed tool
+    // that opens past chats the user attached (24,035 tool characters and
+    // 32,854 with the fixed prompt, 2026-10-18).
+    assert.isAtMost(serializedToolCharacters, 24_100);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
       33_000,

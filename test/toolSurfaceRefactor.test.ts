@@ -273,6 +273,7 @@ describe("semantic tool surface", function () {
       "note_write",
       "note_write_batch",
       "paper_read",
+      "past_chat_read",
       "read_attachment",
       "request_user_input",
       "run_command",

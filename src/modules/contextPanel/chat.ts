@@ -326,6 +326,8 @@ import {
   normalizeAttachedConversationRefs,
   normalizeAttachmentContentHash,
 } from "../../services/context/normalizers";
+import { collectConversationAttachedRefs } from "../../services/pastConversations/pastConversationText";
+import { addAttachedPastChatsToSimpleChatHistory } from "./pastChatSimpleChatHistory";
 import {
   formatAttachedConversationLabel,
   refreshAttachedConversationExistence,
@@ -987,6 +989,27 @@ function normalizeAttachedConversations(
   return normalizeAttachedConversationRefs(attachedConversations, {
     sanitizeText,
   });
+}
+
+/**
+ * Every past chat attached in a conversation (its visible user messages plus
+ * the message being sent): the chats past_chat_read may open. Deduplicated on
+ * system and key, with no cap; each message keeps its own limit of three.
+ */
+function collectAttachedConversationScope(
+  conversationKey: number,
+  currentAttachedConversations: unknown,
+): AttachedConversationRef[] {
+  return collectConversationAttachedRefs(
+    [
+      ...filterMessagesInPendingTurns(
+        conversationKey,
+        chatHistory.get(conversationKey) || [],
+      ),
+      { attachedConversations: currentAttachedConversations },
+    ],
+    { sanitizeText },
+  );
 }
 
 function collectAttachedConversationRefs(
@@ -4423,6 +4446,10 @@ async function prepareFinalContextPlanChatRequest(params: {
             ? message.content
             : JSON.stringify(message.content ?? ""),
         ),
+        providerProtocol: finalPrepared.providerProtocol,
+        finalMessageRoles: finalPrepared.messages.map(
+          (message) => message.role,
+        ),
         combinedContext: params.combinedContext,
         strategy: params.contextPlan.strategy,
         systemMessages,
@@ -6611,7 +6638,21 @@ export async function retryLatestAssistantResponse(
       await preflightClaudeBridgeLocalPdfCapability();
       if (await stopRetryPreparation()) return;
     }
-    const llmHistory = buildLLMHistoryMessages(historyForLLM);
+    const rawLLMHistory = buildLLMHistoryMessages(historyForLLM);
+    // Attached past chats go into the model messages only; historyForLLM
+    // (the chat messages) stays as it is for the retry bookkeeping. The
+    // retried question is the prompt, so its chats go last, unless the
+    // retry continues an answer and the question is still in the history.
+    const llmHistory = await addAttachedPastChatsToSimpleChatHistory({
+      conversationKey,
+      conversationSystem: effectiveConversationSystem,
+      libraryID: item.libraryID,
+      messages: historyForLLM,
+      rawHistory: rawLLMHistory,
+      currentMessage: continueIncomplete ? undefined : retryPair.userMessage,
+      effectiveRequestConfig,
+    });
+    if (await stopRetryPreparation()) return;
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
     if (effectiveConversationSystem === "upstream") {
       await preflightRequestModelCapabilities({
@@ -7961,6 +8002,13 @@ async function buildAgentRuntimeRequest(
     // is temporarily unavailable.
   }
   const conversationInstanceID = registeredConversation?.instanceID;
+  const attachedConversations = normalizeAttachedConversations(
+    params.attachedConversations,
+  );
+  const attachedConversationScope = collectAttachedConversationScope(
+    params.conversationKey,
+    attachedConversations,
+  );
   return {
     conversationKey: params.conversationKey,
     conversationGeneration: params.conversationGeneration,
@@ -7997,6 +8045,12 @@ async function buildAgentRuntimeRequest(
       params.selectedCollectionContexts,
     ),
     selectedTagContexts: normalizeTagContexts(params.selectedTagContexts),
+    attachedConversations: attachedConversations.length
+      ? attachedConversations
+      : undefined,
+    attachedConversationScope: attachedConversationScope.length
+      ? attachedConversationScope
+      : undefined,
     availableAttachmentResources: attachmentResourcePool.resources,
     attachmentResourceSummaries: attachmentResourcePool.summaries,
     attachments: params.attachments,
@@ -9457,8 +9511,22 @@ export async function sendQuestion(
   try {
     const rawLLMHistory = buildLLMHistoryMessages(historyForLLM);
     // Apply auto-summary compression when the history grows long.
-    const llmHistory =
+    const compressedLLMHistory =
       applyHistoryCompression(conversationKey, rawLLMHistory) ?? rawLLMHistory;
+    // Attached past chats go into the model messages only, never into
+    // historyForLLM or the summary input. The question being sent is the
+    // prompt, so its own chats go last in the history.
+    const llmHistory = await addAttachedPastChatsToSimpleChatHistory({
+      conversationKey,
+      conversationSystem: effectiveConversationSystem,
+      libraryID: item.libraryID,
+      messages: historyForLLM,
+      rawHistory: rawLLMHistory,
+      history: compressedLLMHistory,
+      currentMessage: userMessage,
+      effectiveRequestConfig,
+    });
+    if (await stopInactiveRequest()) return;
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
 
     if (effectiveConversationSystem === "upstream") {

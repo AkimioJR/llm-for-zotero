@@ -3110,6 +3110,15 @@ describe("agent request sites (golden)", function () {
     ] as any[];
     const images = ["data:image/png;base64,AAA"];
     const forcedSkillIds = ["skill-x"];
+    const attachedConversations = [
+      {
+        system: "upstream" as const,
+        conversationKey: 77,
+        conversationID: "conv-77",
+        title: "Earlier chat",
+        libraryID: 1,
+      },
+    ];
 
     await sendAgentTurn(
       {
@@ -3131,6 +3140,7 @@ describe("agent request sites (golden)", function () {
         fullTextPaperContexts: [paperB],
         selectedCollectionContexts: collections,
         selectedTagContexts: tags,
+        attachedConversations,
         attachments,
         modelAttachments,
         localDocuments,
@@ -3171,6 +3181,7 @@ describe("agent request sites (golden)", function () {
       citationPaperContexts: [normalized(paperA), normalized(paperB)],
       selectedCollectionContexts: collections,
       selectedTagContexts: tags,
+      attachedConversations,
       attachments: modelAttachments,
       localDocuments,
       screenshots: images,
@@ -3179,6 +3190,7 @@ describe("agent request sites (golden)", function () {
       history: [],
     });
     // The site passes these through by reference.
+    assert.strictEqual(params.attachedConversations, attachedConversations);
     assert.strictEqual(
       params.selectedTextContexts,
       storedUser.selectedTextContexts,
@@ -3248,6 +3260,14 @@ describe("agent request sites (golden)", function () {
       selectedTextNoteContexts: storedNoteContexts,
       citationPaperContexts: storedCitationPapers,
       forcedSkillIds: ["skill-stored"],
+      attachedConversations: [
+        {
+          system: "codex",
+          conversationKey: 1_500_000_777,
+          title: "Stored earlier chat",
+          libraryID: 1,
+        },
+      ],
       modelAttachments: [{ id: "m-stored", category: "text" }],
       attachments: [{ id: "a-stored", category: "image" }],
     };
@@ -3344,6 +3364,7 @@ describe("agent request sites (golden)", function () {
       citationPaperContexts: storedCitationPapers,
       selectedCollectionContexts: collections,
       selectedTagContexts: tags,
+      attachedConversations: userMessage.attachedConversations,
       attachments: userMessage.modelAttachments,
       localDocuments: undefined,
       screenshots: screenshotImages,
@@ -3353,6 +3374,11 @@ describe("agent request sites (golden)", function () {
     });
     // The retry hands over the forced skills the user row stored.
     assert.strictEqual(params.forcedSkillIds, userMessage.forcedSkillIds);
+    // ... and the past chats it attached.
+    assert.strictEqual(
+      params.attachedConversations,
+      userMessage.attachedConversations,
+    );
     assert.strictEqual(params.selectedTextNoteContexts, storedNoteContexts);
     assert.strictEqual(params.citationPaperContexts, storedCitationPapers);
     assert.strictEqual(

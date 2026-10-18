@@ -135,6 +135,11 @@ export const ZOTERO_MCP_EXCLUDED_TOOL_NAMES: Record<string, string> = {
   // and handle reads are gated on a metadata flag the MCP path never sets.
   context_read:
     "context_read reads the in-plugin conversation transcript and its stored tool-result handles; an external MCP client has neither, and handle reads are gated on an in-plugin metadata flag the MCP path does not set.",
+  // Its scope is the past chats attached in the calling conversation
+  // (request.attachedConversationScope), which the MCP scope builder never
+  // sets, so over MCP every call would be refused.
+  past_chat_read:
+    "Steps 4-5 expose it with an attached-chat scope check; not on the bridge yet.",
 };
 const CURATED_READ_TOOL_NAMES = new Set<string>([
   ...ZOTERO_MCP_SAFE_READ_TOOL_NAMES,

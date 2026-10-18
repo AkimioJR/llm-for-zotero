@@ -16,6 +16,7 @@
 import type { SelectionSurface } from "./conversationSelection";
 import type {
   AdvancedModelParams,
+  AttachedConversationRef,
   ChatAttachment,
   CollectionContextRef,
   LocalDocumentResource,
@@ -71,6 +72,8 @@ export type BuildAgentRuntimeRequestParams = {
   citationPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
+  /** Past chats the turn's user message attached. */
+  attachedConversations?: AttachedConversationRef[];
   attachments: ChatAttachment[] | undefined;
   localDocuments?: readonly LocalDocumentResource[];
   screenshots: string[] | undefined;
@@ -108,6 +111,8 @@ export type TurnRequestContext = {
   citationPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
+  /** Past chats the turn's user message attached. */
+  attachedConversations?: AttachedConversationRef[];
   attachments: ChatAttachment[] | undefined;
   skillAttachments?: ChatAttachment[];
   localDocuments?: readonly LocalDocumentResource[];

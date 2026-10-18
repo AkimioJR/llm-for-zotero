@@ -19,6 +19,7 @@ import {
  * mode can be read and edited without opening chat.ts.
  */
 import type { AgentRuntime } from "../../../agent/runtime";
+import { injectAttachedPastChatsIntoAgentHistory } from "./pastChatHistory";
 import { ExecutionCheckpointFold } from "../../../agent/execution/checkpointEvents";
 import { unansweredTurnError } from "../../../agent/execution/unansweredTurn";
 import { taskProgressEffect } from "../taskProgress/runFold";
@@ -1792,9 +1793,18 @@ export async function sendAgentTurn(
   const history = deps.chatHistory.get(conversationKey) || [];
   // A turn queued for deletion is hidden from the user; a failed finalize
   // must not leak it into the prompt (see filterMessagesInPendingTurns).
-  const llmHistory = deps.buildLLMHistoryMessages(
-    filterMessagesInPendingTurns(conversationKey, history.slice(0, -2)),
+  const llmHistorySource = filterMessagesInPendingTurns(
+    conversationKey,
+    history.slice(0, -2),
   );
+  const llmHistory = await injectAttachedPastChatsIntoAgentHistory({
+    conversationKey,
+    conversationSystem: deps.getConversationSystem(),
+    libraryID: item.libraryID,
+    messages: llmHistorySource,
+    history: deps.buildLLMHistoryMessages(llmHistorySource),
+    effectiveRequestConfig,
+  });
   const normalizedPaperContexts = deps.normalizePaperContexts([
     ...(paperContexts || []),
   ]);
@@ -1873,6 +1883,7 @@ export async function sendAgentTurn(
         citationPaperContexts: userMessage.citationPaperContexts,
         selectedCollectionContexts,
         selectedTagContexts,
+        attachedConversations: userMessage.attachedConversations,
         attachments: modelAttachments ?? attachments,
         localDocuments,
         screenshots: images,
@@ -1930,6 +1941,7 @@ export async function sendAgentTurn(
         fullTextPaperContexts,
         selectedCollectionContexts,
         selectedTagContexts,
+        attachedConversations: userMessage.attachedConversations,
         attachments,
         modelAttachments,
         runtimeMode: "agent",
@@ -2422,9 +2434,15 @@ export async function retryAgentTurn(
     assistantMessage.quoteDisplayOverride = undefined;
   }
 
-  const historyForLLM = deps.buildLLMHistoryMessages(
-    history.slice(0, retryPair.userIndex),
-  );
+  const historyForLLMSource = history.slice(0, retryPair.userIndex);
+  const historyForLLM = await injectAttachedPastChatsIntoAgentHistory({
+    conversationKey,
+    conversationSystem,
+    libraryID: item.libraryID,
+    messages: historyForLLMSource,
+    history: deps.buildLLMHistoryMessages(historyForLLMSource),
+    effectiveRequestConfig,
+  });
   if (modelAttachmentsOverride !== undefined) {
     retryPair.userMessage.modelAttachments = modelAttachmentsOverride;
   }
@@ -2457,6 +2475,7 @@ export async function retryAgentTurn(
         citationPaperContexts: retryPair.userMessage.citationPaperContexts,
         selectedCollectionContexts,
         selectedTagContexts,
+        attachedConversations: retryPair.userMessage.attachedConversations,
         attachments: retryModelAttachments,
         localDocuments: retryLocalDocuments,
         screenshots: screenshotImages,

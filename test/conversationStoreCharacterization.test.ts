@@ -2376,6 +2376,47 @@ describe("conversation store characterization (golden)", function () {
             target: await store.load(target, 50),
           });
         });
+
+        it("fork: copied user messages keep their attached past chats", async function () {
+          // A fork keeps the chats its source attached, so past_chat_read may
+          // open them in the fork too (attached-chat scope is the union of
+          // refs on the conversation's user messages).
+          await store.init();
+          const source = await store.create("global");
+          const target = await store.create("global");
+          const attachedConversations = [
+            {
+              system: "upstream" as const,
+              conversationKey: 31,
+              conversationID: "conv-31",
+              title: "Earlier chat",
+              libraryID: 1,
+              kind: "global" as const,
+            },
+          ];
+          await store.append(
+            source,
+            plain("user", "u1", at(1), { attachedConversations }),
+          );
+          await store.append(source, plain("assistant", "a1", at(2)));
+          const fork = isCodex
+            ? codex.forkCodexConversationMessages
+            : upstream.forkUpstreamConversationMessages;
+          const sourceIdentity = identityOf(store, "global", source);
+          await fork({
+            sourceConversationKey: source,
+            sourceInstanceID: sourceIdentity.instanceID,
+            sourceConversationID: sourceIdentity.conversationID,
+            targetConversationKey: target,
+            throughAssistantTimestamp: at(2),
+            timestampBase: at(10),
+          });
+          const copied = await store.load(target, 50);
+          assert.deepEqual(
+            copied[0]?.attachedConversations,
+            attachedConversations,
+          );
+        });
       }
 
       if (isCodex) {
