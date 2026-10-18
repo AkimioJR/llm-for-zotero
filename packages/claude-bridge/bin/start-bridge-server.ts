@@ -292,6 +292,9 @@ async function main() {
     undefined;
   // The token stays out of argv so other users cannot read it from `ps`.
   const authToken = (process.env.ADAPTER_AUTH_TOKEN || "").trim() || undefined;
+  // Remove it from the environment so the SDK does not hand it to `claude`
+  // and the Bash or MCP programs that Claude starts.
+  delete process.env.ADAPTER_AUTH_TOKEN;
   const managedBy =
     (getArg("managed-by") || process.env.ADAPTER_MANAGED_BY || "").trim() ||
     undefined;
