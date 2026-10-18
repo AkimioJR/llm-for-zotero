@@ -461,6 +461,9 @@ async function launchBridge(): Promise<string> {
   if (timeoutId !== undefined) clearTimeout(timeoutId);
 
   if (outcome.kind !== "ready") {
+    // A bridge that never became ready counts toward the give-up limit, so a
+    // broken setup is not relaunched on every request.
+    crashTimes.push(Date.now());
     if (outcome.kind === "timeout") {
       await proc.kill?.(500).catch(() => undefined);
     }
@@ -541,9 +544,10 @@ export async function ensureClaudeBridgeRunning(): Promise<string> {
   const now = Date.now();
   crashTimes = crashTimes.filter((time) => now - time < CRASH_WINDOW_MS);
   if (crashTimes.length >= MAX_CRASHES_IN_WINDOW) {
-    throw new Error(
-      "The Claude Code bridge keeps stopping, so it was not started again. Open the Claude Code settings to see the log, then press Restart bridge.",
-    );
+    const message =
+      "The Claude Code bridge keeps stopping, so it was not started again. Open the Claude Code settings to see the log, then press Restart bridge.";
+    setStatus({ ...status, state: "failed", port: undefined, message });
+    throw new Error(message);
   }
   setStatus({ state: "starting" });
   startPromise = launchBridge()

@@ -53,14 +53,17 @@ describe("Claude Code bridge process", function () {
   let fetched: string[];
   let nodeVersion: string;
   let readyPort: number;
+  let exitBeforeReady = false;
   let legacyHealth: unknown;
   let notices: Array<{ text: string; closeMs?: number }>;
 
   function makeBridgeProcess(): any {
-    let readyLines = [
-      "[cc-llm4zotero-adapter] listening\n",
-      `CLAUDE_BRIDGE_READY ${JSON.stringify({ host: "127.0.0.1", port: readyPort, version: "3.9.12", stateDir: "/home/u/Zotero/agent-state", logFile: "/home/u/Zotero/agent-state/bridge.log" })}\n`,
-    ];
+    let readyLines = exitBeforeReady
+      ? ["[cc-llm4zotero-adapter] crashing\n"]
+      : [
+          "[cc-llm4zotero-adapter] listening\n",
+          `CLAUDE_BRIDGE_READY ${JSON.stringify({ host: "127.0.0.1", port: readyPort, version: "3.9.12", stateDir: "/home/u/Zotero/agent-state", logFile: "/home/u/Zotero/agent-state/bridge.log" })}\n`,
+        ];
     let finish!: () => void;
     const finished = new Promise<void>((resolve) => {
       finish = resolve;
@@ -70,6 +73,7 @@ describe("Claude Code bridge process", function () {
       exit: () => finish(),
     };
     bridges.push(bridge);
+    if (exitBeforeReady) finish();
     return {
       stdout: {
         readString: async () => {
@@ -148,6 +152,7 @@ describe("Claude Code bridge process", function () {
     prefs = { enableClaudeCodeMode: true };
     files = new Map();
     existing = new Set(["/usr/bin/node", "/home/u/.local/bin/claude"]);
+    exitBeforeReady = false;
     spawns = [];
     writes = [];
     bridges = [];
@@ -394,6 +399,34 @@ describe("Claude Code bridge process", function () {
     assert.lengthOf(spawns, 3);
     await restartClaudeBridge();
     assert.lengthOf(spawns, 4, "Restart forgets earlier crashes");
+  });
+
+  it("counts bridges that exit before they are ready and shows the give-up in the status", async function () {
+    exitBeforeReady = true;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let error: unknown;
+      try {
+        await ensureClaudeBridgeRunning();
+      } catch (caught) {
+        error = caught;
+      }
+      assert.include(String(error), "stopped while starting");
+    }
+    assert.lengthOf(spawns, 3);
+    let giveUp: unknown;
+    try {
+      await ensureClaudeBridgeRunning();
+    } catch (caught) {
+      giveUp = caught;
+    }
+    assert.include(String(giveUp), "keeps stopping");
+    assert.lengthOf(spawns, 3, "no fourth launch");
+    assert.equal(getClaudeBridgeStatus().state, "failed");
+    assert.include(getClaudeBridgeStatus().message, "keeps stopping");
+    exitBeforeReady = false;
+    await restartClaudeBridge();
+    assert.lengthOf(spawns, 4, "Restart forgets earlier failures");
+    assert.equal(getClaudeBridgeStatus().state, "running");
   });
 
   it("explains an old Node.js instead of starting the bridge", async function () {
