@@ -78,22 +78,48 @@ export async function readGeckoSubprocessPipe(
   return out;
 }
 
-/** Runs a short command and returns its output, or null when it fails. */
+/** How long bridge lookups such as `command -v node` may take. */
+export const GECKO_LOOKUP_TIMEOUT_MS = 15_000;
+
+/**
+ * Runs a short command and returns its output, or null when it fails. With
+ * `timeoutMs`, a command that has not finished by then is killed and the
+ * result is null.
+ */
 export async function runGeckoSubprocessForOutput(
   Subprocess: GeckoSubprocess,
   options: GeckoSubprocessCallOptions,
+  timeoutMs?: number,
 ): Promise<string | null> {
+  let proc: GeckoSubprocessProcess | undefined;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
-    const proc = await Subprocess.call({ stderr: "stdout", ...options });
-    const [output, result] = await Promise.all([
-      readGeckoSubprocessPipe(proc.stdout),
-      proc.wait?.() ?? Promise.resolve({ exitCode: 0 }),
-    ]);
-    if (typeof result?.exitCode === "number" && result.exitCode !== 0) {
-      return null;
+    const run = (async (): Promise<string | null> => {
+      proc = await Subprocess.call({ stderr: "stdout", ...options });
+      const [output, result] = await Promise.all([
+        readGeckoSubprocessPipe(proc.stdout),
+        proc.wait?.() ?? Promise.resolve({ exitCode: 0 }),
+      ]);
+      if (typeof result?.exitCode === "number" && result.exitCode !== 0) {
+        return null;
+      }
+      return output;
+    })();
+    if (!timeoutMs || timeoutMs <= 0) return await run;
+    // A killed command makes `run` settle later; its result is not used.
+    run.catch(() => undefined);
+    const timedOut = new Promise<null>((resolve) => {
+      timeoutId = setTimeout(() => resolve(null), timeoutMs);
+    });
+    const result = await Promise.race([run, timedOut]);
+    if (result === null && timeoutId !== undefined) {
+      // Kill a command that is still running; a finished one ignores it.
+      await proc?.kill?.(500).catch(() => undefined);
     }
-    return output;
+    return result;
   } catch {
     return null;
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
 }

@@ -1,5 +1,6 @@
 import { getIOUtils, pathExists } from "../utils/geckoFs";
 import {
+  GECKO_LOOKUP_TIMEOUT_MS,
   runGeckoSubprocessForOutput,
   type GeckoSubprocess,
 } from "../utils/geckoSubprocess";
@@ -178,13 +179,17 @@ async function lookupOnPath(
 ): Promise<string | undefined> {
   if (!Subprocess) return undefined;
   const info = getRuntimePlatformInfo();
-  const output = await runGeckoSubprocessForOutput(Subprocess, {
-    command: info.shellPath,
-    arguments: [
-      info.shellFlag,
-      info.platform === "windows" ? `where ${kind}` : `command -v ${kind}`,
-    ],
-  });
+  const output = await runGeckoSubprocessForOutput(
+    Subprocess,
+    {
+      command: info.shellPath,
+      arguments: [
+        info.shellFlag,
+        info.platform === "windows" ? `where ${kind}` : `command -v ${kind}`,
+      ],
+    },
+    GECKO_LOOKUP_TIMEOUT_MS,
+  );
   const lines = (output || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -281,10 +286,11 @@ export async function assertSupportedNodeVersion(
   nodePath: string,
   Subprocess: GeckoSubprocess,
 ): Promise<string> {
-  const output = await runGeckoSubprocessForOutput(Subprocess, {
-    command: nodePath,
-    arguments: ["--version"],
-  });
+  const output = await runGeckoSubprocessForOutput(
+    Subprocess,
+    { command: nodePath, arguments: ["--version"] },
+    GECKO_LOOKUP_TIMEOUT_MS,
+  );
   const major = parseNodeMajorVersion(output);
   if (major === null) {
     throw new ClaudeBridgeBinaryNotFoundError(

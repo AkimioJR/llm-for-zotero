@@ -14,6 +14,7 @@ import {
   detectLegacyClaudeBridge,
   describeLegacyClaudeBridgeRemoval,
 } from "../src/claudeCode/bridgeProcess";
+import { runGeckoSubprocessForOutput } from "../src/utils/geckoSubprocess";
 import { parseNodeMajorVersion } from "../src/claudeCode/bridgeBinaries";
 import {
   MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL,
@@ -620,5 +621,61 @@ describe("Claude Code bridge helpers", function () {
     assert.equal(parseNodeMajorVersion("18.0.0"), 18);
     assert.isNull(parseNodeMajorVersion("command not found"));
     assert.isNull(parseNodeMajorVersion(null));
+  });
+});
+
+describe("Gecko subprocess lookups", function () {
+  it("kills a command that hangs past the timeout", async function () {
+    let killed = false;
+    let release!: () => void;
+    const hung = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const Subprocess = {
+      call: async () => ({
+        stdout: {
+          readString: async () => {
+            await hung;
+            return "";
+          },
+        },
+        wait: async () => {
+          await hung;
+          return { exitCode: 0 };
+        },
+        kill: async () => {
+          killed = true;
+          release();
+          return { exitCode: 1 };
+        },
+      }),
+    };
+    const output = await runGeckoSubprocessForOutput(
+      Subprocess,
+      { command: "/bin/zsh", arguments: ["-lc", "command -v node"] },
+      20,
+    );
+    assert.isNull(output);
+    assert.isTrue(killed);
+  });
+
+  it("returns the output of a command that finishes in time", async function () {
+    let sent = false;
+    const Subprocess = {
+      call: async () => ({
+        stdout: {
+          readString: async () => {
+            if (sent) return "";
+            sent = true;
+            return "/usr/bin/node\n";
+          },
+        },
+        wait: async () => ({ exitCode: 0 }),
+      }),
+    };
+    assert.equal(
+      await runGeckoSubprocessForOutput(Subprocess, { command: "x" }, 1000),
+      "/usr/bin/node\n",
+    );
   });
 });
