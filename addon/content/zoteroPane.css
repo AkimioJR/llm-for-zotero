@@ -5262,10 +5262,6 @@
   user-select: text;
 }
 
-.llm-bubble.streaming {
-  white-space: pre-wrap;
-}
-
 .llm-bubble.user {
   background: var(--color-accent);
   color: white;

@@ -9047,6 +9047,99 @@ describe("agentTrace render", function () {
     });
   });
 
+  // Claude Code sends a stream tick between deltas, so each delta reaches the
+  // trace on its own instead of being merged with its neighbour.
+  function streamedDeltaEvents(chunks: string[]): AgentRunEventRecord[] {
+    const events: AgentRunEventRecord[] = [];
+    for (const chunk of chunks) {
+      events.push(
+        {
+          runId: "run-1",
+          seq: events.length + 1,
+          eventType: "message_delta",
+          payload: { type: "message_delta", text: chunk },
+          createdAt: events.length + 1,
+        },
+        {
+          runId: "run-1",
+          seq: events.length + 2,
+          eventType: "provider_event",
+          payload: {
+            type: "provider_event",
+            providerType: "claude_code",
+            payload: { kind: "stream_tick" },
+          },
+          createdAt: events.length + 2,
+        },
+      );
+    }
+    events.push({
+      runId: "run-1",
+      seq: events.length + 1,
+      eventType: "tool_call",
+      payload: {
+        type: "tool_call",
+        callId: "call-1",
+        name: "Bash",
+        args: { command: "pwd" },
+      },
+      createdAt: events.length + 1,
+    });
+    return events;
+  }
+
+  it("keeps short streamed chunks that repeat the end of the text", function () {
+    // Math and Markdown stream as tiny tokens: `}` after `}`, `$` after `$`.
+    const chunks = [
+      "$",
+      "$\n",
+      "E = \\frac{a}{b_{c",
+      "}",
+      "}",
+      "\n$",
+      "$",
+      "\n\nDone.",
+    ];
+    const text = chunks.join("");
+
+    const { items, isInterleaved } = buildAgentTraceDisplayItems(
+      streamedDeltaEvents(chunks),
+      null,
+      {
+        role: "assistant",
+        text,
+        timestamp: 1,
+        runMode: "agent",
+        modelProviderLabel: "Claude Code",
+      },
+    );
+    const inlineText = items.find((item) => item.type === "inline_text");
+
+    assert.isTrue(isInterleaved);
+    assert.deepEqual(inlineText, { type: "inline_text", text });
+  });
+
+  it("still drops a replayed tail of a longer streamed message", function () {
+    const replayed = "Now let me look for an existing note.";
+    const chunks = [
+      "I read the paper.",
+      " Now let me look",
+      " for an existing note.",
+      replayed,
+    ];
+
+    const { items } = buildAgentTraceDisplayItems(
+      streamedDeltaEvents(chunks),
+      null,
+    );
+    const inlineText = items.find((item) => item.type === "inline_text");
+
+    assert.deepEqual(inlineText, {
+      type: "inline_text",
+      text: `I read the paper. ${replayed}`,
+    });
+  });
+
   it("deduplicates repeated interleaved text chunks around tool calls", function () {
     const events: AgentRunEventRecord[] = [
       {

@@ -151,6 +151,22 @@ describe("streaming Markdown frame consistency", function () {
     assert.equal(view.timers.size, 0);
   });
 
+  it("keeps a streamed display equation whole when a line inside it looks like a list", function () {
+    const view = fixture();
+    const reply = "Expand:\n\n$$\na = b\n+ c\n- d\n$$\n\nSo $a$ grows.\n\nEnd.";
+    for (let end = 1; end <= reply.length; end += 1) {
+      view.render(reply.slice(0, end));
+      view.flush();
+    }
+    assert.notInclude(
+      view.html,
+      "<li>",
+      "no line of the equation became a list",
+    );
+    assert.include(view.html, "katex-display");
+    assert.equal((view.html.match(/class="katex"/g) || []).length, 2);
+  });
+
   it("renders an explicit empty restart in its scheduled frame", function () {
     const view = fixture();
     view.render("Visible passage");

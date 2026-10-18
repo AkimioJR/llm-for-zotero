@@ -1,6 +1,6 @@
 import { withChatContentScrollGuard } from "./chatScrollSnapshots";
-import { marked } from "marked";
 import { renderRenderedMarkdownInto } from "./renderedMarkdown";
+import { splitSettledMarkdownBlocks } from "../../utils/markdown";
 import { createCoalescedFrameScheduler } from "./setupHandlers/controllers/uiSchedulingController";
 
 /** Stable Markdown blocks share the normal renderer; only the unfinished tail is reparsed. */
@@ -42,21 +42,21 @@ export function renderStreamingMarkdownInto(
         const started = now();
         let committed = next.committed;
         const blocks: HTMLElement[] = [];
-        const tokens = marked.lexer(next.pending.slice(committed.length));
-        // Retain the last two tokens: blank lines can still extend a list/table.
-        const stable = tokens.slice(0, -2);
-        for (const token of stable) {
+        const stable = splitSettledMarkdownBlocks(
+          next.pending.slice(committed.length),
+        );
+        for (const raw of stable) {
           if (now() - started >= 8 && blocks.length) {
             next.scheduler.schedule();
             break;
           }
           const block = doc.createElement("div");
           block.style.display = "contents";
-          renderRenderedMarkdownInto(block, token.raw, doc, {
+          renderRenderedMarkdownInto(block, raw, doc, {
             onAsyncContentRendered: onResize,
           });
           blocks.push(block);
-          committed += token.raw;
+          committed += raw;
         }
         const tail = doc.createElement("div");
         renderRenderedMarkdownInto(

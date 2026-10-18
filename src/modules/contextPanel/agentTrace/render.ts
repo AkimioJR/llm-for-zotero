@@ -4196,6 +4196,21 @@ function replaceInlineTextDedupeKey(
   if (nextKey) visibleInlineText.add(nextKey);
 }
 
+/**
+ * A replay repeats a whole streamed message, while a streamed token is a few
+ * characters that can match the tail by chance: `}` after `}`, `$` after `$`.
+ * Only a long chunk that starts on a word boundary counts as a replayed tail;
+ * a short one is new text and dropping it breaks math and Markdown mid-stream.
+ */
+const MIN_REPLAYED_TAIL_CHARS = 16;
+
+function isReplayedInlineTail(previousKey: string, chunkKey: string): boolean {
+  if (chunkKey.length < MIN_REPLAYED_TAIL_CHARS) return false;
+  if (!previousKey.endsWith(chunkKey)) return false;
+  const before = previousKey.length - chunkKey.length - 1;
+  return before < 0 || /\s/.test(previousKey[before]!);
+}
+
 /** `chunk` is already sanitized: the caller remembers it per payload. */
 function appendInterleavedInlineText(
   items: AgentTraceDisplayItem[],
@@ -4219,14 +4234,15 @@ function appendInterleavedInlineText(
     if (!chunkKey) return;
     if (
       chunkLooksLikeReplay &&
-      (chunkKey === previousKey || previousKey.endsWith(chunkKey))
+      ((chunkKey === previousKey && chunkKey.length > 1) ||
+        isReplayedInlineTail(previousKey, chunkKey))
     ) {
       return;
     }
 
     if (
       chunkLooksLikeReplay &&
-      previousKey &&
+      previousKey.length > 1 &&
       chunkKey.startsWith(previousKey)
     ) {
       const nextText = chunk.trim();

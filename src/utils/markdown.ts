@@ -31,7 +31,7 @@ import sql from "highlight.js/lib/languages/sql";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { Marked, Renderer, Tokenizer, type Tokens } from "marked";
+import { Marked, marked, Renderer, Tokenizer, type Tokens } from "marked";
 
 // =============================================================================
 // Types
@@ -2424,6 +2424,61 @@ function createMarkedMarkdownRenderer(target: MarkdownRenderTarget): Marked {
       },
     },
   });
+}
+
+const displayMathBlockTokenizer = createMathExtensions()[0].tokenizer;
+
+/**
+ * The leading blocks of a reply that is still streaming which later text can
+ * no longer change, as their raw source; joined, they are a prefix of `text`.
+ * Blocks come from Marked's plain lexer, whose tokens cover the source exactly,
+ * but a display equation is never cut: the plain lexer reads a line inside it
+ * such as `+ c` as a list, so the blocks an equation spans are joined into one.
+ * The last two tokens stay open (a blank line can still extend a list or
+ * table), and so does everything from a display-math opener whose closing
+ * delimiter has not arrived yet.
+ */
+export function splitSettledMarkdownBlocks(text: string): string[] {
+  const tokens = marked.lexer(text);
+  const codeRanges: Array<[number, number]> = [];
+  let offset = 0;
+  for (const token of tokens) {
+    if (token.type === "code") {
+      codeRanges.push([offset, offset + token.raw.length]);
+    }
+    offset += token.raw.length;
+  }
+  const mathRanges: Array<[number, number]> = [];
+  let openMathStart = text.length;
+  const opener = /(?:^|\n)[ \t]*(?=\$\$|\\\[)/g;
+  let match: RegExpExecArray | null;
+  while ((match = opener.exec(text)) !== null) {
+    const start = match.index + match[0].length;
+    opener.lastIndex = start + 1;
+    if (codeRanges.some(([from, to]) => start >= from && start < to)) continue;
+    const math = displayMathBlockTokenizer(text.slice(start));
+    if (!math) {
+      openMathStart = start;
+      break;
+    }
+    mathRanges.push([start, start + math.raw.length]);
+    // The equation's raw text ends with its newline, the next opener's `\n`.
+    opener.lastIndex = Math.max(start + math.raw.length - 1, start + 1);
+  }
+
+  const settled: string[] = [];
+  let pending = "";
+  offset = 0;
+  for (const token of tokens.slice(0, -2)) {
+    const end = offset + token.raw.length;
+    if (end > openMathStart) break;
+    pending += token.raw;
+    offset = end;
+    if (mathRanges.some(([from, to]) => end > from && end < to)) continue;
+    settled.push(pending);
+    pending = "";
+  }
+  return settled;
 }
 
 export function renderMarkdownWithLegacyParser(
