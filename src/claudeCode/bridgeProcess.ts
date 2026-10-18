@@ -9,6 +9,7 @@ import {
   ensureDir,
   getIOUtils,
   pathExists,
+  readFileBytes,
   writeFileBytes,
 } from "../utils/geckoFs";
 import {
@@ -159,10 +160,24 @@ function getBridgeInstallDir(): string {
   return joinLocalPath(base, "llm-for-zotero", "claude-bridge");
 }
 
+async function fileHasByteLength(
+  path: string,
+  length: number,
+): Promise<boolean> {
+  try {
+    const stat = await (getIOUtils() as any)?.stat?.(path);
+    if (typeof stat?.size === "number") return stat.size === length;
+    const bytes = await readFileBytes(path);
+    return bytes?.length === length;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Node cannot read inside the XPI, so the bundled bridge is written to disk.
  * The file name carries a content hash: a plugin update writes a new file and
- * removes the old ones, and an unchanged bridge is not rewritten.
+ * removes the old ones, and an unchanged, complete bridge is not rewritten.
  */
 async function materializeBridgeScript(): Promise<string> {
   const rootUri = resolveAddonRootUri();
@@ -175,15 +190,20 @@ async function materializeBridgeScript(): Promise<string> {
     );
   }
   const text = await response.text();
+  const bytes = new TextEncoder().encode(text);
   const installDir = getBridgeInstallDir();
   const fileName = `bridge-${fnv1a32(text)}.mjs`;
   const scriptPath = joinLocalPath(installDir, fileName);
-  if (await pathExists(scriptPath)) return scriptPath;
+  // A file left by a killed or out-of-space write has the right name but the
+  // wrong size, so reuse it only when its size matches.
+  if (
+    (await pathExists(scriptPath)) &&
+    (await fileHasByteLength(scriptPath, bytes.length))
+  ) {
+    return scriptPath;
+  }
   await ensureDir(installDir);
-  const written = await writeFileBytes(
-    scriptPath,
-    new TextEncoder().encode(text),
-  );
+  const written = await writeFileBytes(scriptPath, bytes, { atomic: true });
   if (!written) throw new Error("Could not write the Claude Code bridge file.");
   const io = getIOUtils() as any;
   try {

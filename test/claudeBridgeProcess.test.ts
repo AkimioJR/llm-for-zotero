@@ -47,6 +47,7 @@ describe("Claude Code bridge process", function () {
   let files: Map<string, Uint8Array>;
   let existing: Set<string>;
   let spawns: SpawnRecord[];
+  let writes: Array<{ path: string; tmpPath?: string }>;
   let bridges: FakeBridge[];
   let fetched: string[];
   let nodeVersion: string;
@@ -147,6 +148,7 @@ describe("Claude Code bridge process", function () {
     files = new Map();
     existing = new Set(["/usr/bin/node", "/home/u/.local/bin/claude"]);
     spawns = [];
+    writes = [];
     bridges = [];
     fetched = [];
     nodeVersion = "v22.3.0";
@@ -188,10 +190,16 @@ describe("Claude Code bridge process", function () {
     };
     globalScope.IOUtils = {
       exists: async (path: string) => existing.has(path) || files.has(path),
-      write: async (path: string, bytes: Uint8Array) => {
+      write: async (
+        path: string,
+        bytes: Uint8Array,
+        options?: { tmpPath?: string },
+      ) => {
+        writes.push({ path, tmpPath: options?.tmpPath });
         files.set(path, bytes);
         return bytes.length;
       },
+      stat: async (path: string) => ({ size: files.get(path)?.length ?? 0 }),
       makeDirectory: async () => undefined,
       getChildren: async () => [...files.keys()],
       remove: async (path: string) => {
@@ -285,6 +293,31 @@ describe("Claude Code bridge process", function () {
       claudePath: "/home/u/.local/bin/claude",
       logFile: "/home/u/Zotero/agent-state/bridge.log",
     });
+  });
+
+  it("writes the bridge file atomically and rewrites a truncated one", async function () {
+    await ensureClaudeBridgeRunning();
+    const scriptPath = spawns[0].arguments[0];
+    assert.deepEqual(writes, [
+      { path: scriptPath, tmpPath: `${scriptPath}.tmp` },
+    ]);
+    assert.equal(
+      new TextDecoder().decode(files.get(scriptPath)),
+      "// bundled bridge",
+    );
+    // A complete file is reused.
+    await stopClaudeBridge();
+    await ensureClaudeBridgeRunning();
+    assert.lengthOf(writes, 1);
+    // A truncated file with the right name is replaced.
+    await stopClaudeBridge();
+    files.set(scriptPath, new TextEncoder().encode("// bundled"));
+    await ensureClaudeBridgeRunning();
+    assert.lengthOf(writes, 2);
+    assert.equal(
+      new TextDecoder().decode(files.get(scriptPath)),
+      "// bundled bridge",
+    );
   });
 
   it("keeps the old ~/Zotero data folders when they exist", async function () {
