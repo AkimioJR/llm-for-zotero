@@ -1,8 +1,23 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ClaudeCodeRuntimeAdapter } from "../src/bridge/claude-code-runtime-adapter.js";
 import { Llm4ZoteroAgentBackendAdapter } from "../src/bridge/llm4zotero-agent-backend-adapter.js";
 import type { ClaudeCodeRuntimeClient, ProviderEvent } from "../src/runtime.js";
 import { InMemorySessionMapper } from "../src/session-link/session-mapper.js";
+
+/** A runtime folder with one project slash command, so tool lists do not depend on ~/.claude. */
+function createRuntimeWithCommand(): string {
+  const runtimeCwd = mkdtempSync(join(tmpdir(), "bridge-tools-"));
+  mkdirSync(join(runtimeCwd, ".claude", "commands"), { recursive: true });
+  writeFileSync(
+    join(runtimeCwd, ".claude", "commands", "summarize.md"),
+    "---\ndescription: Summarize a paper\n---\nSummarize $ARGUMENTS\n",
+  );
+  return runtimeCwd;
+}
+
 
 function providerEvents(events: ProviderEvent[]): AsyncIterable<ProviderEvent> {
   return {
@@ -151,8 +166,11 @@ describe("Llm4ZoteroAgentBackendAdapter", () => {
       runtimeClient,
       sessionMapper: new InMemorySessionMapper(),
     });
-    const compat = new Llm4ZoteroAgentBackendAdapter({ adapter: base });
-    const candidateTool = (await compat.listTools())[0];
+    const compat = new Llm4ZoteroAgentBackendAdapter({
+      adapter: base,
+      runtimeCwd: createRuntimeWithCommand(),
+    });
+    const candidateTool = (await compat.listTools({ settingSources: ["project"] }))[0];
     expect(candidateTool).toBeDefined();
 
     const seen: string[] = [];

@@ -536,7 +536,8 @@ export class Llm4ZoteroAgentBackendAdapter {
 
   async runAction(params: Llm4ZoteroRunActionParams): Promise<Llm4ZoteroRunTurnOutcome> {
     const requested = params.request;
-    const tool = findToolByName(requested.toolName);
+    // Project commands live under the runtime folder, not the bridge's cwd.
+    const tool = findToolByName(requested.toolName, { runtimeCwd: this.runtimeCwd });
     if (!tool) {
       return {
         kind: "fallback",

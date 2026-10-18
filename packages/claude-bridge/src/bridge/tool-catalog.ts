@@ -214,6 +214,9 @@ export function getToolCatalog(options?: ToolCatalogOptions): Llm4ZoteroToolDesc
   return sorted;
 }
 
-export function findToolByName(name: string): Llm4ZoteroToolDescriptor | undefined {
-  return getToolCatalog().find((tool) => tool.name === name);
+export function findToolByName(
+  name: string,
+  options?: ToolCatalogOptions,
+): Llm4ZoteroToolDescriptor | undefined {
+  return getToolCatalog(options).find((tool) => tool.name === name);
 }

@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ClaudeCodeRuntimeAdapter } from "../src/bridge/claude-code-runtime-adapter.js";
 import { Llm4ZoteroAgentBackendAdapter } from "../src/bridge/llm4zotero-agent-backend-adapter.js";
@@ -13,6 +16,17 @@ function providerEvents(events: ProviderEvent[]): AsyncIterable<ProviderEvent> {
       }
     }
   };
+}
+
+/** A runtime folder with one project slash command, so tool lists do not depend on ~/.claude. */
+function createRuntimeWithCommand(): string {
+  const runtimeCwd = mkdtempSync(join(tmpdir(), "bridge-tools-"));
+  mkdirSync(join(runtimeCwd, ".claude", "commands"), { recursive: true });
+  writeFileSync(
+    join(runtimeCwd, ".claude", "commands", "summarize.md"),
+    "---\ndescription: Summarize a paper\n---\nSummarize $ARGUMENTS\n",
+  );
+  return runtimeCwd;
 }
 
 async function readNdjsonLines(response: Response): Promise<Array<Record<string, unknown>>> {
@@ -66,6 +80,66 @@ describe("http bridge server", () => {
         protocolVersion: 2,
         capabilities: ["local_pdf_paths", "model_catalog_v1", "permission_modes_v1"],
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("requires the auth token path prefix when one is configured", async () => {
+    const runtimeClient: ClaudeCodeRuntimeClient = {
+      async startTurn() {
+        return { runId: "run-auth", events: providerEvents([]) };
+      },
+    };
+    const base = new ClaudeCodeRuntimeAdapter({
+      runtimeClient,
+      sessionMapper: new InMemorySessionMapper(),
+    });
+    const server = await startHttpBridgeServer({
+      adapter: new Llm4ZoteroAgentBackendAdapter({ adapter: base }),
+      authToken: "secret-token",
+      bridgeVersion: "9.9.9",
+      managedBy: "llm-for-zotero",
+    });
+    const origin = `http://${server.host}:${server.port}`;
+
+    try {
+      expect((await fetch(`${origin}/healthz`)).status).toBe(401);
+      expect((await fetch(`${origin}/wrong-token/healthz`)).status).toBe(401);
+      expect((await fetch(`${origin}/secret-tokenx/healthz`)).status).toBe(401);
+      const response = await fetch(`${origin}/secret-token/healthz`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        bridgeVersion: "9.9.9",
+        managedBy: "llm-for-zotero",
+      });
+      const tools = await fetch(`${origin}/secret-token/tools?settingSources=user`);
+      expect(tools.status).toBe(200);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("leaves the token-free health payload unchanged", async () => {
+    const runtimeClient: ClaudeCodeRuntimeClient = {
+      async startTurn() {
+        return { runId: "run-plain", events: providerEvents([]) };
+      },
+    };
+    const base = new ClaudeCodeRuntimeAdapter({
+      runtimeClient,
+      sessionMapper: new InMemorySessionMapper(),
+    });
+    const server = await startHttpBridgeServer({
+      adapter: new Llm4ZoteroAgentBackendAdapter({ adapter: base }),
+    });
+    try {
+      const payload = (await (
+        await fetch(`http://${server.host}:${server.port}/healthz`)
+      ).json()) as Record<string, unknown>;
+      expect(payload.managedBy).toBeUndefined();
+      expect(payload.bridgeVersion).toBeUndefined();
     } finally {
       await server.close();
     }
@@ -357,15 +431,18 @@ describe("http bridge server", () => {
       runtimeClient,
       sessionMapper: new InMemorySessionMapper()
     });
-    const compat = new Llm4ZoteroAgentBackendAdapter({ adapter: base });
+    const compat = new Llm4ZoteroAgentBackendAdapter({
+      adapter: base,
+      runtimeCwd: createRuntimeWithCommand(),
+    });
     const server = await startHttpBridgeServer({ adapter: compat });
 
     try {
-      const response = await fetch(`http://${server.host}:${server.port}/tools`);
+      const response = await fetch(`http://${server.host}:${server.port}/tools?settingSources=project`);
       expect(response.ok).toBe(true);
       const payload = await response.json() as { tools?: Array<{ name: string }> };
       expect(Array.isArray(payload.tools)).toBe(true);
-      expect((payload.tools || []).length).toBeGreaterThan(0);
+      expect((payload.tools || []).map((tool) => tool.name)).toContain("summarize");
     } finally {
       await server.close();
     }

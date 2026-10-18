@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type {
   Llm4ZoteroAgentBackendAdapter
@@ -14,6 +15,30 @@ export interface HttpBridgeServerOptions {
   adapter: Llm4ZoteroAgentBackendAdapter;
   host?: string;
   port?: number;
+  /**
+   * When set, every request path must start with `/<authToken>`. The token is
+   * part of the base URL the plugin is given, so no caller has to add a header.
+   */
+  authToken?: string;
+  /** Reported by /healthz so the plugin can tell bridge builds apart. */
+  bridgeVersion?: string;
+  /** Reported by /healthz: who started this bridge, e.g. "llm-for-zotero". */
+  managedBy?: string;
+}
+
+/**
+ * Strips the `/<token>` prefix from a request path. Returns undefined when the
+ * path does not carry the token.
+ */
+export function stripAuthTokenPrefix(url: string, authToken: string): string | undefined {
+  const match = /^\/([^/?#]*)(.*)$/s.exec(url);
+  if (!match) return undefined;
+  const given = Buffer.from(match[1]);
+  const expected = Buffer.from(authToken);
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
+  const rest = match[2];
+  if (!rest) return "/";
+  return rest.startsWith("/") ? rest : `/${rest}`;
 }
 
 export interface HttpBridgeServerHandle {
@@ -295,14 +320,26 @@ export async function startHttpBridgeServer(
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 0;
 
+  const authToken = options.authToken?.trim() || "";
+
   const server = createServer(async (req, res) => {
     try {
+      if (authToken) {
+        const stripped = stripAuthTokenPrefix(req.url || "/", authToken);
+        if (stripped === undefined) {
+          sendJson(res, 401, { error: "unauthorized" });
+          return;
+        }
+        req.url = stripped;
+      }
       const reqUrl = new URL(req.url || "/", `http://${host}:${port}`);
       if (req.method === "GET" && req.url === "/healthz") {
         sendJson(res, 200, {
           ok: true,
           protocolVersion: 2,
           capabilities: ["local_pdf_paths", "model_catalog_v1", "permission_modes_v1", ...(options.adapter.supportsStructuredCompletion ? ["structured_completion_v1"] : [])],
+          ...(options.bridgeVersion ? { bridgeVersion: options.bridgeVersion } : {}),
+          ...(options.managedBy ? { managedBy: options.managedBy } : {}),
           ts: Date.now(),
         });
         return;

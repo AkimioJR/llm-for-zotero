@@ -892,6 +892,11 @@ export interface ClaudeAgentSdkRuntimeClientOptions {
   appendSystemPrompt?: string;
   forwardFrontendModel?: boolean;
   blockedMetadataKeys?: string[];
+  /**
+   * The `claude` executable every SDK query runs. A bundled bridge has no
+   * platform package beside the SDK, so it runs the user's own install.
+   */
+  claudeCodeExecutablePath?: string;
   queryImpl?: QueryFunction;
   resolveSettingsImpl?: ResolveSettingsFunction;
   /** Upper bound on a single supportedModels() probe. Tests override it. */
@@ -2532,7 +2537,13 @@ export class ClaudeAgentSdkRuntimeClient implements ClaudeCodeRuntimeClient {
   private async loadQuery(): Promise<QueryFunction> {
     const sdk = (await import("@anthropic-ai/claude-agent-sdk")) as { query: QueryFunction };
     if (typeof sdk.query !== "function") throw new Error("@anthropic-ai/claude-agent-sdk does not export query()");
-    return sdk.query;
+    const executablePath = this.options.claudeCodeExecutablePath?.trim();
+    if (!executablePath) return sdk.query;
+    return ((params: Parameters<QueryFunction>[0]) =>
+      sdk.query({
+        ...params,
+        options: { pathToClaudeCodeExecutable: executablePath, ...params.options },
+      })) as QueryFunction;
   }
 
   private resolveCatalogCwd(runtimeCwdRelative?: string): string {

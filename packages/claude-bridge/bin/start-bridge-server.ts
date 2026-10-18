@@ -77,6 +77,15 @@ function parseBoolean(value: string | undefined, defaultValue: boolean): boolean
   return defaultValue;
 }
 
+// Set by the plugin build when it bundles the bridge; absent under tsx.
+declare const __CLAUDE_BRIDGE_VERSION__: string | undefined;
+
+function getBridgeVersion(): string {
+  return typeof __CLAUDE_BRIDGE_VERSION__ === "string" && __CLAUDE_BRIDGE_VERSION__
+    ? __CLAUDE_BRIDGE_VERSION__
+    : "dev";
+}
+
 const DEFAULT_SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
 function parseSettingSources(value: string | undefined): SettingSource[] {
@@ -161,7 +170,8 @@ async function main() {
   const host = getArg("host") || process.env.ADAPTER_HOST || "127.0.0.1";
   const portRaw = getArg("port") || process.env.ADAPTER_PORT || "19787";
   const port = Number(portRaw);
-  if (!Number.isFinite(port) || port <= 0) {
+  // Port 0 asks the system for any free port; the ready line reports it.
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`Invalid port: ${portRaw}`);
   }
 
@@ -269,7 +279,19 @@ async function main() {
     mkdirSync(dir, { recursive: true });
   }
 
+  const claudeCodeExecutablePath =
+    (getArg("claude-path") || process.env.ADAPTER_CLAUDE_PATH || "").trim() || undefined;
+  // The token stays out of argv so other users cannot read it from `ps`.
+  const authToken = (process.env.ADAPTER_AUTH_TOKEN || "").trim() || undefined;
+  const managedBy =
+    (getArg("managed-by") || process.env.ADAPTER_MANAGED_BY || "").trim() || undefined;
+  const exitOnStdinClose = parseBoolean(
+    getArg("exit-on-stdin-close") ?? process.env.ADAPTER_EXIT_ON_STDIN_CLOSE,
+    false,
+  );
+
   const runtimeClient = new ClaudeAgentSdkRuntimeClient({
+    claudeCodeExecutablePath,
     cwd: runtimeCwd,
     additionalDirectories,
     defaultAllowedTools,
@@ -294,10 +316,24 @@ async function main() {
     adapter: core,
     runtimeCwd,
   });
-  const server = await startHttpBridgeServer({ adapter: compat, host, port });
+  const bridgeVersion = getBridgeVersion();
+  const server = await startHttpBridgeServer({
+    adapter: compat,
+    host,
+    port,
+    authToken,
+    bridgeVersion,
+    managedBy,
+  });
 
-  console.log(`[cc-llm4zotero-adapter] listening on http://${server.host}:${server.port}`);
-  console.log(`[cc-llm4zotero-adapter] healthz: http://${server.host}:${server.port}/healthz`);
+  const baseUrl = `http://${server.host}:${server.port}`;
+  console.log(`[cc-llm4zotero-adapter] listening on ${baseUrl}`);
+  console.log(
+    `[cc-llm4zotero-adapter] healthz: ${baseUrl}${authToken ? "/<token>" : ""}/healthz`,
+  );
+  if (claudeCodeExecutablePath) {
+    console.log(`[cc-llm4zotero-adapter] claude executable: ${claudeCodeExecutablePath}`);
+  }
   console.log(`[cc-llm4zotero-adapter] runtime cwd: ${runtimeCwd}`);
   console.log(
     `[cc-llm4zotero-adapter] additional directories: ${
@@ -314,15 +350,36 @@ async function main() {
   if (appendSystemPrompt) {
     console.log("[cc-llm4zotero-adapter] appendSystemPrompt: enabled");
   }
-  console.log("[cc-llm4zotero-adapter] Press Ctrl+C to stop");
+  if (!exitOnStdinClose) {
+    console.log("[cc-llm4zotero-adapter] Press Ctrl+C to stop");
+  }
 
+  let shuttingDown = false;
   const shutdown = async () => {
-    await server.close();
+    if (shuttingDown) return;
+    shuttingDown = true;
+    // Open streams (a running turn) would keep close() waiting forever.
+    const forceExit = setTimeout(() => process.exit(0), 3000);
+    forceExit.unref();
+    await server.close().catch(() => undefined);
     process.exit(0);
   };
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+  if (exitOnStdinClose) {
+    // The plugin holds our stdin open. It closes when Zotero stops the bridge
+    // or when Zotero itself goes away, crash included.
+    process.stdin.on("end", shutdown);
+    process.stdin.on("close", shutdown);
+    process.stdin.on("error", shutdown);
+    process.stdin.resume();
+  }
+
+  // One machine-readable line the plugin waits for before it uses the bridge.
+  console.log(
+    `CLAUDE_BRIDGE_READY ${JSON.stringify({ host: server.host, port: server.port, version: bridgeVersion })}`,
+  );
 }
 
 main().catch((error) => {
