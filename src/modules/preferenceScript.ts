@@ -4568,6 +4568,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       );
       applyClaudeBridgeModeUi();
       refreshClaudeBridgeStatusUi();
+      refreshClaudeBridgeLegacyNotice();
       refreshClaudeBridgeConsumers();
     });
   }
@@ -4646,12 +4647,15 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   );
   function refreshClaudeBridgeLegacyNotice(): void {
     if (!claudeBridgeLegacyNotice) return;
-    if (!isClaudeCodeModeEnabled()) {
+    // Someone who uses their own bridge may run it on the old port on purpose.
+    const wanted = () =>
+      isClaudeCodeModeEnabled() && getClaudeBridgeMode() !== "custom";
+    if (!wanted()) {
       claudeBridgeLegacyNotice.style.display = "none";
       return;
     }
     void detectLegacyClaudeBridge().then((found) => {
-      if (!found || claudeBridgeWindowClosed || !isClaudeCodeModeEnabled()) {
+      if (!found || claudeBridgeWindowClosed || !wanted()) {
         return;
       }
       const isMac = getRuntimePlatformInfo().platform === "macos";
