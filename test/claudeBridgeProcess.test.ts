@@ -55,6 +55,7 @@ describe("Claude Code bridge process", function () {
   let nodeVersion: string;
   let readyPort: number;
   let exitBeforeReady = false;
+  let closeGate: Promise<void> | null = null;
   let legacyHealth: unknown;
   let notices: Array<{ text: string; closeMs?: number }>;
 
@@ -86,6 +87,7 @@ describe("Claude Code bridge process", function () {
       },
       stdin: {
         close: async () => {
+          await closeGate;
           bridge.stdinClosed = true;
           finish();
         },
@@ -154,6 +156,7 @@ describe("Claude Code bridge process", function () {
     files = new Map();
     existing = new Set(["/usr/bin/node", "/home/u/.local/bin/claude"]);
     exitBeforeReady = false;
+    closeGate = null;
     spawns = [];
     writes = [];
     bridges = [];
@@ -379,6 +382,22 @@ describe("Claude Code bridge process", function () {
       fetched.at(-1) || "",
       /^http:\/\/127\.0\.0\.1:43211\/[0-9a-f]+\/session-info/,
     );
+  });
+
+  it("does not mark a bridge stopped when a start overlaps the stop", async function () {
+    await ensureClaudeBridgeRunning();
+    let releaseClose!: () => void;
+    closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const stopping = stopClaudeBridge();
+    closeGate = null;
+    readyPort = 43211;
+    await ensureClaudeBridgeRunning();
+    releaseClose();
+    await stopping;
+    assert.equal(getClaudeBridgeStatus().state, "running");
+    assert.equal(getClaudeBridgeStatus().port, 43211);
   });
 
   it("reports an unexpected exit and gives up after repeated crashes", async function () {

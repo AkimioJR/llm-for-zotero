@@ -567,7 +567,9 @@ export async function stopClaudeBridge(): Promise<void> {
   if (pendingStart) await pendingStart.catch(() => undefined);
   const bridge = running;
   if (!bridge) {
-    if (status.state !== "failed") setStatus({ state: "stopped" });
+    if (status.state !== "failed" && !startPromise) {
+      setStatus({ state: "stopped" });
+    }
     return;
   }
   bridge.stopping = true;
@@ -584,7 +586,8 @@ export async function stopClaudeBridge(): Promise<void> {
   ]);
   if (timeoutId !== undefined) clearTimeout(timeoutId);
   if (!stopped) await bridge.proc.kill?.(500).catch(() => undefined);
-  setStatus({ state: "stopped" });
+  // A start that began while this stop was waiting owns the status now.
+  if (!running && !startPromise) setStatus({ state: "stopped" });
 }
 
 /** Restart from the settings: also forgets earlier crashes. */
