@@ -1,0 +1,44 @@
+{
+  "name": "cc-llm4zotero-adapter",
+  "version": "0.1.0",
+  "description": "Adapter that connects llm-for-zotero agent frontend semantics to Claude Code runtime",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist coverage",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo:llm4zotero": "tsx examples/llm4zotero-runturn-demo.ts",
+    "serve:bridge": "tsx bin/start-bridge-server.ts --host 127.0.0.1 --port 19787",
+    "daemon:install": "tsx bin/manage-daemon.ts install",
+    "daemon:start": "tsx bin/manage-daemon.ts start",
+    "daemon:stop": "tsx bin/manage-daemon.ts stop",
+    "daemon:restart": "tsx bin/manage-daemon.ts restart",
+    "daemon:status": "tsx bin/manage-daemon.ts status",
+    "daemon:uninstall": "tsx bin/manage-daemon.ts uninstall"
+  },
+  "keywords": [
+    "zotero",
+    "claude-code",
+    "adapter",
+    "agent"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.220",
+    "@anthropic-ai/sdk": "0.115.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.3.6"
+  }
+}

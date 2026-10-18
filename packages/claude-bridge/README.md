@@ -1,0 +1,356 @@
+# cc-llm4zotero-adapter
+
+HTTP bridge adapter between [llm-for-zotero](https://github.com/yilewang/llm-for-zotero) (Claude Code Bridge backend mode) and Claude Agent SDK runtime.
+
+## Overview
+
+### What this repo does
+
+- Streams `/run-turn` events from Claude runtime into llm-for-zotero compatible agent events.
+- Exposes `/commands` for slash command discovery.
+- Exposes `/session-info` for conversation/session recovery.
+- Persists session links and run traces in adapter state storage.
+
+In practice, this repo is the bridge that lets `llm-for-zotero` talk to a real Claude Code runtime instead of treating Claude Code as a fake in-plugin backend.
+
+## Before you start: Claude Code must already work on this machine
+
+This adapter does not replace Claude Code CLI. It depends on it.
+
+Before starting the bridge, make sure Claude Code itself is installed and authenticated:
+
+- Installation: https://code.claude.com/docs/en/installation.md
+- Quickstart: https://code.claude.com/docs/en/quickstart.md
+- Authentication: https://code.claude.com/docs/en/authentication.md
+- Settings: https://code.claude.com/docs/en/settings.md
+
+Minimum sanity check:
+
+```bash
+claude
+```
+
+If Claude Code is not installed, not on `PATH`, or not logged in yet, the bridge may start but actual Claude turns will still fail.
+
+## Quick Start (Foreground)
+
+If you do not already have this repo locally:
+
+```bash
+git clone https://github.com/jianghao-zhang/cc-llm4zotero-adapter.git
+cd cc-llm4zotero-adapter
+```
+
+Then start the bridge:
+
+```bash
+npm install
+npm run build
+npm test
+npm run serve:bridge
+```
+
+Default bind:
+
+- Host: `127.0.0.1`
+- Port: `19787`
+- Health: `http://127.0.0.1:19787/healthz`
+
+Health check:
+
+```bash
+curl -fsS http://127.0.0.1:19787/healthz
+```
+
+A healthy bridge only means the adapter server is up. It does **not** guarantee that Claude Code CLI is installed, authenticated, or usable yet.
+
+## Quick Install (macOS Daemon)
+
+If you do not already have this repo locally:
+
+```bash
+git clone https://github.com/jianghao-zhang/cc-llm4zotero-adapter.git
+cd cc-llm4zotero-adapter
+```
+
+For non-technical users, run:
+
+```bash
+./scripts/install-macos-daemon.sh
+```
+
+This installs a LaunchAgent service: `com.toha.ccbridge`.
+
+Useful daemon commands:
+
+```bash
+npm run daemon:status
+npm run daemon:start
+npm run daemon:stop
+npm run daemon:restart
+npm run daemon:uninstall
+```
+
+## How this is meant to be used with llm-for-zotero
+
+After the bridge is healthy, go to `llm-for-zotero` settings and:
+
+1. enable Claude Code mode
+2. keep Bridge URL at `http://127.0.0.1:19787` unless you intentionally changed it
+3. choose a config source mode
+4. pick permission/model/reasoning defaults
+
+Then enter Claude Code from the dedicated Claude button in the chat UI. Settings configure the runtime; they are not the main chat entry point.
+
+## Config source in plain English
+
+Claude Code itself supports layered config such as user / project / local settings:
+
+- https://code.claude.com/docs/en/settings.md
+- https://code.claude.com/docs/en/settings.md#configuration-scopes
+- https://code.claude.com/docs/en/settings.md#settings-precedence
+
+In this Zotero integration, those layers are used like this:
+
+- `user` → your normal machine-level Claude Code setup
+- `project` → the shared Zotero Claude runtime root
+- `local` → the current conversation-specific runtime folder
+
+That is why this adapter works well for both kinds of users:
+
+- users who want Zotero to reuse their normal Claude setup
+- users who want Zotero-specific shared behavior without polluting global Claude usage
+
+## Shared runtime root and skills
+
+The adapter defaults to a shared Claude runtime root under `~/Zotero/agent-runtime` and a state dir under `~/Zotero/agent-state`.
+
+The shared runtime root is where Zotero-level Claude assets are expected to live, including things like:
+
+- `CLAUDE.md`
+- `.claude/settings.json`
+- `.claude/skills/`
+- `.claude/commands/`
+
+For most users, shared Claude skills for Zotero should live in that project-level layer rather than in unrelated global user config.
+
+## HTTP Endpoints
+
+### GET `/healthz`
+
+Health check endpoint.
+
+### GET `/commands`
+
+Returns Claude slash commands.
+
+- Query: `settingSources=user,project,local` (optional)
+
+### GET `/models`
+
+Returns the ordered model catalog reported by Claude Code for the active settings stack.
+
+- Query: `settingSources=user,project,local` (optional)
+- Query: `conversationKey`, `scopeType`, `scopeId`, `scopeLabel` (optional; use together to discover models from the same scoped conversation directory as a turn)
+
+The response keeps the legacy `models` string array and adds structured `modelInfos` metadata:
+
+```json
+{
+  "models": ["default", "opus[1m]", "claude-fable-5[1m]"],
+  "modelInfos": [
+    {
+      "value": "default",
+      "resolvedModel": "claude-opus-5[1m]",
+      "displayName": "Default",
+      "description": "Current account default",
+      "supportsEffort": true,
+      "supportedEffortLevels": ["low", "medium", "high", "xhigh", "max"],
+      "supportsAdaptiveThinking": true,
+      "supportsFastMode": false,
+      "supportsAutoMode": true
+    }
+  ]
+}
+```
+
+Model values are opaque Claude Code identifiers and are returned without removing context suffixes such as `[1m]`.
+When Claude Code returns a catalog successfully, that catalog is authoritative, including an intentionally empty or settings-restricted result.
+Settings and environment values are synthesized only when model discovery itself fails.
+When conversation and scope query parameters are provided, catalog discovery uses the same contained runtime directory and `.claude/settings.local.json` stack as the corresponding turn.
+The health endpoint advertises this response contract through the `model_catalog_v1` capability.
+
+### GET `/session-info`
+
+Returns session mapping information for a conversation.
+
+- Query: `conversationKey` (required)
+- Query: `scopeType`, `scopeId`, `scopeLabel` (optional)
+
+### POST `/run-turn`
+
+Runs one agent turn with streaming events.
+
+- Required body: `conversationKey`, `userText`
+- Optional body: `allowedTools`, `scopeType`, `scopeId`, `scopeLabel`, `runtimeRequest`, `metadata`
+
+### POST `/run-action`
+
+Runs a tool/action request.
+
+- Required body: `conversationKey`, `toolName`
+- Optional body: `args`, `approved`, scope fields, metadata/context fields
+
+### POST `/resolve-confirmation`
+
+Resolves pending confirmation requests.
+
+- Required body: `requestId`, `approved`
+- Optional body: `actionId`, `data`
+
+### Additional read endpoints
+
+- `GET /tools`
+- `GET /models`
+- `GET /efforts`
+
+## Runtime / Environment Options
+
+Server start command:
+
+```bash
+npm run serve:bridge
+```
+
+| Flag | Env | Description |
+|------|-----|-------------|
+| `--host` | `ADAPTER_HOST` | Bind host (default `127.0.0.1`) |
+| `--port` | `ADAPTER_PORT` | Bind port (default `19787`) |
+| `--runtime-cwd` | `ADAPTER_RUNTIME_CWD` | Workspace root for Claude Agent SDK. Defaults to the legacy Zotero runtime path when available. |
+| `--state-dir` | `ADAPTER_STATE_DIR` | Session/trace persistence directory. Defaults to the legacy Zotero state path when available. |
+| `--zotero-root` | `ZOTERO_ROOT` | Override the legacy Zotero root used to derive default runtime/state paths. Useful when Zotero data is not under the home directory. |
+| `--additional-directories` | `ADAPTER_ADDITIONAL_DIRECTORIES` | Extra readable directories (comma-separated, `~` supported). |
+| (env only) | `ADAPTER_WINDOWS_DRIVE_MOUNT_ROOT` | Where Windows drives are mounted when the bridge runs under WSL while Zotero runs on Windows (default `/mnt`). Raw PDF paths such as `C:\Users\...` are mapped to `<root>/c/Users/...`. |
+| `--default-allowed-tools` | `ADAPTER_DEFAULT_ALLOWED_TOOLS` | Tools always auto-allowed (comma-separated). Default: `WebFetch,WebSearch`. |
+| `--setting-sources` | `ADAPTER_SETTING_SOURCES` | Claude settings sources: `user`, `project`, `local` (comma-separated). Default: `user,project,local`. |
+| `--append-system-prompt` | `ADAPTER_APPEND_SYSTEM_PROMPT` | Inline overlay prompt text. |
+| `--append-system-prompt-file` | `ADAPTER_APPEND_SYSTEM_PROMPT_FILE` | File-based overlay prompt. Missing optional files are ignored. |
+| `--forward-frontend-model` | `ADAPTER_FORWARD_FRONTEND_MODEL` | Pass every non-empty frontend `metadata.model` value to Claude Code unchanged (default `true`). Claude Code resolves aliases, custom provider names, and future model families. |
+| `--log-file` | `ADAPTER_LOG_FILE` | Mirror bridge stdout/stderr to a file. Use `1` / `true` to write to `<state-dir>/bridge.log`. |
+
+Default additional readable directories:
+
+- `$HOME/Zotero`
+- `$HOME/Downloads`
+- `$HOME/Documents`
+
+## Troubleshooting
+
+### 1) The bridge is not running or got stuck
+
+```bash
+launchctl stop com.toha.ccbridge
+launchctl start com.toha.ccbridge
+curl -fsS http://127.0.0.1:19787/healthz
+```
+
+You can also use:
+
+```bash
+npm run daemon:status
+npm run daemon:restart
+```
+
+#### macOS LaunchAgent cannot find Node/npm installed by NVM
+
+If `npm run daemon:status` reports that the service is loaded but health is
+down, inspect the daemon error log:
+
+```bash
+tail -n 50 "$HOME/Library/Logs/cc-llm4zotero-adapter/bridge.stderr.log"
+```
+
+When it contains `zsh: command not found: npm`, the interactive shell can see
+NVM's Node installation but the macOS LaunchAgent cannot. An existing
+`node_modules` directory can also retain an older Claude Agent SDK after the
+repository is updated, which may leave older model names in the model menu.
+
+The following repair synchronizes dependencies, exposes the active NVM
+Node/npm executables through `$HOME/.local/bin` (already included in the
+LaunchAgent's `PATH`), and restarts the service:
+
+```bash
+cd /path/to/cc-llm4zotero-adapter
+
+npm ci
+
+mkdir -p "$HOME/.local/bin"
+ln -s "$(command -v node)" "$HOME/.local/bin/node"
+ln -s "$(command -v npm)" "$HOME/.local/bin/npm"
+
+npm run daemon:restart
+npm run daemon:status
+curl -fsS http://127.0.0.1:19787/healthz
+```
+
+If either symlink destination already exists, inspect it with `ls -l` before
+replacing it. After the health check succeeds, force-refresh the Claude model
+catalog and inspect the resolved model names:
+
+```bash
+curl -fsS 'http://127.0.0.1:19787/models?settingSources=user%2Cproject%2Clocal&refresh=1' \
+  | jq '.modelInfos[] | {value, resolvedModel, displayName}'
+```
+
+Then select **Retry loading Claude models** in llm-for-zotero.
+
+### 2) Bridge URL or port mismatch
+
+- Make sure llm-for-zotero Bridge URL matches adapter bind address.
+- Default is `http://127.0.0.1:19787`.
+
+### 3) Claude Code itself is not ready
+
+If you see `claude: command not found`, install Claude Code CLI first.
+
+If the bridge is healthy but Claude turns still fail, check Claude Code itself separately:
+
+```bash
+claude
+```
+
+If needed, finish login/auth there first.
+
+### 4) Health is OK, but Zotero still cannot use Claude correctly
+
+That usually means one of these layers is wrong:
+
+- Claude Code CLI is not installed or not logged in
+- the bridge is running on a different host/port than Zotero expects
+- Zotero config source or permission setup is not what the user intended
+
+### Logs
+
+Daemon logs on macOS still live under:
+
+```bash
+~/Library/Logs/cc-llm4zotero-adapter/
+```
+
+If the bridge is started without an attached terminal and you also want a plain bridge process log, set `ADAPTER_LOG_FILE=1` (or pass `--log-file`) to mirror stdout/stderr into `<state-dir>/bridge.log`.
+
+## Repository Layout
+
+- `src/bridge` — bridge/runtime adapter contracts and wrappers
+- `src/event-mapper` — Claude SDK events to llm-for-zotero event mapping
+- `src/session-link` — conversationKey ↔ provider session mapping
+- `src/trace-store` — run trace persistence
+- `src/providers` — Claude Agent SDK runtime client
+- `src/server` — HTTP bridge server
+- `bin/start-bridge-server.ts` — foreground server entrypoint
+- `bin/manage-daemon.ts` — macOS daemon manager
+
+## References
+
+- [Claude Agent SDK TypeScript](https://platform.claude.com/docs/en/agent-sdk/typescript)
+- [Claude Agent SDK Overview](https://platform.claude.com/docs/en/agent-sdk/overview)
