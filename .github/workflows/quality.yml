@@ -54,6 +54,8 @@ jobs:
         run: npm ci
       - name: Run unit tests
         run: npm run test:unit
+      - name: Run Claude bridge tests
+        run: npm run test:claude-bridge
 
   workflow:
     name: Workflow tests

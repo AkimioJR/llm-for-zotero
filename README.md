@@ -82,8 +82,9 @@ How to do a library chat literature review with llm-for-zotero agent
   It runs through the local `codex app-server` runtime and is configured from
   the **Agent** tab.
 - **Claude Code Mode** runs Claude Code as a separate conversation system inside
-  Zotero through a companion local bridge. It is experimental and does not yet
-  support native Zotero API operations.
+  Zotero, using your own Claude Code login. The plugin starts and stops the
+  small bridge it needs for you. It is experimental and does not yet support
+  native Zotero API operations.
 - **Skills** let you customize how Agent Mode handles research workflows. The
   plugin ships with 8 built-in skills and a portal for creating your own.
 - **General Web Search** lets the in-plugin Agent search the current public web with Tavily, read relevant pages, and attach source links to its answers.
@@ -496,81 +497,55 @@ commands, and project skills.
 > importing items.
 
 <details>
-<summary>Claude Code prerequisites, bridge setup, and project assets</summary>
+<summary>Claude Code setup, troubleshooting, and project assets</summary>
 
-Prerequisites:
+You need two things on your computer. The plugin takes care of the rest.
 
-- A working Claude Code CLI installation. Follow Anthropic's official
-  [Claude Code installation](https://code.claude.com/docs/en/installation.md),
-  [quickstart](https://code.claude.com/docs/en/quickstart.md), and
-  [authentication](https://code.claude.com/docs/en/authentication.md) docs.
-- The `claude` command must be on `PATH` and authenticated.
-- Node.js and npm for the companion bridge adapter.
+- **Node.js 18 or newer.** Download it from [nodejs.org](https://nodejs.org)
+  (the LTS version is fine), or use a version manager such as NVM, Volta or
+  Homebrew. Check it in a terminal with `node --version`.
+- **Claude Code, installed and logged in.** Follow Anthropic's
+  [installation](https://code.claude.com/docs/en/installation.md) and
+  [authentication](https://code.claude.com/docs/en/authentication.md) guides.
+  You can use your Claude subscription or an API key.
 
-### 1. Install and verify Claude Code
+### 1. Install and log in to Claude Code
 
-Run:
+In a terminal, run:
 
 ```bash
 claude
 ```
 
-Complete any login or authentication prompts before continuing.
+Finish the login steps it shows, then close it. You only need to do this once.
 
-### 2. Start the Zotero Claude bridge
+### 2. Turn on Claude Code inside Zotero
 
-Claude Code mode depends on the companion bridge repo
-[`cc-llm4zotero-adapter`](https://github.com/jianghao-zhang/cc-llm4zotero-adapter).
+Open `Preferences` -> `llm-for-zotero` -> **Agent** tab, and switch on
+**Claude Code**. Recommended settings:
 
-```bash
-git clone https://github.com/jianghao-zhang/cc-llm4zotero-adapter.git
-cd cc-llm4zotero-adapter
-npm install
-npm run build
-npm run serve:bridge
-```
+| Setting               | Recommended value                  |
+| --------------------- | ---------------------------------- |
+| **Claude Code**       | `On`                               |
+| **Config source**     | `default - user + project + local` |
+| **Permission mode**   | `safe`                             |
+| **Default model**     | `sonnet`                           |
+| **Default reasoning** | `auto`                             |
 
-Check that the bridge is alive:
+Then click the **Claude Code** button in the chat header to enter Claude Code
+mode.
 
-```bash
-curl -fsS http://127.0.0.1:19787/healthz
-```
+That is all. You do **not** need to download or start a bridge yourself. While
+Claude Code mode is on, Zotero starts a small helper program (the "bridge")
+that connects Zotero to your Claude Code. It runs only on your computer, only
+answers Zotero, and stops when you quit Zotero or turn Claude Code off. If you
+never turn on Claude Code, nothing extra runs.
 
-For macOS background use, install the LaunchAgent from the adapter repo:
+The **Bridge** section at the top of the Claude Code settings shows whether the
+bridge is running. Use **Restart bridge** if something seems stuck, and
+**Open log** to see what the bridge reported.
 
-```bash
-./scripts/install-macos-daemon.sh
-```
-
-Useful bridge daemon commands:
-
-```bash
-npm run daemon:status
-npm run daemon:start
-npm run daemon:stop
-npm run daemon:restart
-npm run daemon:uninstall
-```
-
-If Claude Code mode stops responding, restart the bridge and re-check
-`/healthz`. A passing `/healthz` check only proves that the adapter is running;
-it does not prove that the underlying `claude` CLI is installed, authenticated,
-or correctly configured.
-
-### 3. Enable Claude Code inside Zotero
-
-Open `Preferences` -> `llm-for-zotero` -> **Agent** tab.
-
-| Setting                            | Recommended value                  |
-| ---------------------------------- | ---------------------------------- |
-| **Enable Claude Code integration** | `On`                               |
-| **Bridge URL**                     | `http://127.0.0.1:19787`           |
-| **Claude Config Source**           | `default - user + project + local` |
-| **Permission Mode**                | `safe`                             |
-| **Default Model**                  | `sonnet`                           |
-| **Default Reasoning**              | `auto`                             |
-
-Keep **Claude Config Source** on `default` unless you already understand Claude
+Keep **Config source** on `default` unless you already understand Claude
 Code settings layers. In `default`, Claude Code can use your normal user
 settings plus Zotero-managed project and per-conversation local settings.
 The other options are:
@@ -578,10 +553,61 @@ The other options are:
 - `user-only`: only your machine-wide Claude settings.
 - `zotero-only`: only Zotero-managed project and local settings.
 
-After enabling the integration, click the **Claude Code** button in the chat
-header to enter Claude Code mode.
+### 3. If it does not work
 
-### 4. Prepare Claude project skills and commands
+The Bridge status line says what is wrong in plain words. The usual causes:
+
+| The status says                  | What to do                                                                                                                                                                                                     |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Node.js was not found**        | Install Node.js 18 or newer. If it is installed but Zotero cannot find it, run `which node` (macOS, Linux) or `where node` (Windows) in a terminal and paste the result into **Advanced** -> **Node.js path**. |
+| **needs Node.js 18 or newer**    | Install a newer Node.js from [nodejs.org](https://nodejs.org).                                                                                                                                                 |
+| **Claude Code was not found**    | Install Claude Code. If it is installed, run `which claude` (macOS, Linux) or `where claude` (Windows) and paste the result into **Advanced** -> **Claude Code path**.                                         |
+| Running, but Claude replies fail | Claude Code is probably not logged in. Run `claude` in a terminal and log in, then press **Restart bridge**.                                                                                                   |
+| **keeps stopping**               | Press **Open log** to see why, fix the cause, then press **Restart bridge**.                                                                                                                                   |
+
+Zotero opened from the Dock or Start menu does not always see the same programs
+as your terminal. The plugin looks in the usual places (NVM, Volta, Homebrew,
+`~/.local/bin` and the Claude Code installer's folder), but the two path
+settings are there if it still cannot find them.
+
+**Advanced options**
+
+- **Extra bridge options** passes command-line options to the bridge, for
+  example `--additional-directories ~/Papers` to let Claude read another
+  folder, or `--append-system-prompt-file ~/zotero-claude.md`. Press
+  **Restart bridge** after changing it.
+- **Use my own bridge** is for people who run the bridge themselves, for
+  example inside WSL while Zotero runs on Windows, or on another computer.
+  Zotero then sends Claude requests to the **Bridge URL** and does not start
+  its own bridge. The bridge's code lives in
+  [`packages/claude-bridge`](./packages/claude-bridge); see its README for how
+  to run it by hand.
+
+**Upgrading from the old `cc-llm4zotero-adapter`**
+
+Earlier versions needed the separate
+[`cc-llm4zotero-adapter`](https://github.com/jianghao-zhang/cc-llm4zotero-adapter)
+repository and `npm run serve:bridge` or `npm run daemon:*`. That is no longer
+needed. Your Claude Code conversations, skills and settings keep working,
+because the new bridge uses the same `~/Zotero/agent-runtime` and
+`~/Zotero/agent-state` folders.
+
+If you installed the old macOS background service, it can stay, since it does
+not get in the way, but it is no longer used. Zotero tells you once if it finds
+it. To remove it, run this in your old adapter folder:
+
+```bash
+npm run daemon:uninstall
+```
+
+If you already deleted that folder, run these two commands instead:
+
+```bash
+launchctl bootout gui/$(id -u)/com.toha.ccbridge
+rm ~/Library/LaunchAgents/com.toha.ccbridge.plist
+```
+
+### 4. Claude project skills and commands
 
 Zotero creates a Claude runtime root under your home directory, usually shaped
 like:
@@ -603,7 +629,7 @@ Each Claude conversation also gets its own local `.claude` folder under the
 runtime `scopes/` tree, so per-conversation overrides do not leak into other
 chats.
 
-The Zotero UI loads the model catalog advertised by the configured Claude Code bridge and preserves each model value exactly, including aliases, explicit model IDs, context-window variants, custom provider values, and future model families.
+The Zotero UI loads the model catalog advertised by the Claude Code bridge and preserves each model value exactly, including aliases, explicit model IDs, context-window variants, custom provider values, and future model families.
 The chat model picker identifies the active conversation so discovery uses the same scoped `.claude/settings.local.json` stack as the turn.
 The model preference remains editable when discovery is unavailable.
 Claude Code is responsible for resolving or rejecting the selected value and for applying provider or proxy configuration.

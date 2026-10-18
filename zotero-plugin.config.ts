@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { cp } from "node:fs/promises";
 import { defineConfig } from "zotero-plugin-scaffold";
 import pkg from "./package.json";
+import { writeClaudeBridgeNotices } from "./scripts/claude-bridge-notices.mjs";
 import { patchGeneratedWorkflowTestReporter } from "./scripts/workflow-test-reporter.mjs";
 
 const webChatLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_WEBCHAT_LIVE === "1";
@@ -8,6 +10,16 @@ const webChatLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_WEBCHAT_LIVE === "1";
 // are opt-in: they cost money and need network, which a default test run
 // should never assume.
 const agentLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_AGENT_LIVE === "1";
+// The bridge bundles cc-llm4zotero-adapter, relicensed from MIT to AGPL with
+// permission; the relicense notice and the MIT text travel with every copy.
+const claudeBridgeNotice = readFileSync(
+  "packages/claude-bridge/NOTICE",
+  "utf8",
+).trim();
+const claudeBridgeMitLicense = readFileSync(
+  "packages/claude-bridge/LICENSE-MIT",
+  "utf8",
+).trim();
 const workflowTestsEnabled =
   webChatLiveTestsEnabled ||
   agentLiveTestsEnabled ||
@@ -26,6 +38,12 @@ export default defineConfig({
     "https://github.com/{{owner}}/{{repo}}/releases/download/v{{version}}/{{xpiName}}.xpi",
 
   build: {
+    hooks: {
+      // Runs before the XPI is packed, so the notices ship inside it.
+      "build:bundle": async () => {
+        await writeClaudeBridgeNotices();
+      },
+    },
     assets: ["addon/**/*.*"],
     define: {
       ...pkg.config,
@@ -61,10 +79,37 @@ export default defineConfig({
         target: "firefox115",
         outfile: ".scaffold/build/addon/content/scripts/pdfSplitterWorker.js",
       },
+      {
+        // The Claude Code bridge runs under the user's Node, not in Zotero.
+        // The plugin copies this file out of the XPI and starts it with Node
+        // only while Claude Code mode is on (src/claudeCode/bridgeProcess.ts).
+        // The SDK's 250 MB per-platform Claude binary stays out of the XPI:
+        // the bridge runs the user's own `claude`.
+        entryPoints: ["packages/claude-bridge/bin/start-bridge-server.ts"],
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        target: "node18",
+        define: {
+          __CLAUDE_BRIDGE_VERSION__: JSON.stringify(pkg.version),
+        },
+        banner: {
+          js: [
+            `/*! ${claudeBridgeNotice}\n\n${claudeBridgeMitLicense}\n*/`,
+            "import { createRequire as __bridgeCreateRequire } from 'node:module'; const require = __bridgeCreateRequire(import.meta.url);",
+          ].join("\n"),
+        },
+        outfile: ".scaffold/build/addon/content/claude-bridge/bridge.mjs",
+      },
     ],
   },
 
   test: {
+    // Tests must never probe or announce the user's own old bridge on port 19787.
+    prefs: {
+      "extensions.zotero.llmforzotero.claudeCodeLegacyDaemonCheck": false,
+      "extensions.zotero.llmforzotero.claudeCodeLegacyDaemonNoticeShown": true,
+    },
     entries:
       process.env.LLM_FOR_ZOTERO_TEST_ENTRIES ||
       (agentLiveTestsEnabled

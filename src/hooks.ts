@@ -278,6 +278,20 @@ function scheduleClaudeProjectBootstrapIfEnabled(): void {
   });
 }
 
+function scheduleClaudeBridgeLifecycle(): void {
+  runDeferredStartupTask("Claude Code bridge", async () => {
+    const [{ installClaudeBridgeLifecycle }, { isClaudeCodeModeEnabled }] =
+      await Promise.all([
+        import("./claudeCode/bridgeProcess"),
+        import("./claudeCode/prefs"),
+      ]);
+    installClaudeBridgeLifecycle({
+      prefsPrefix: config.prefsPrefix,
+      isClaudeCodeModeEnabled,
+    });
+  });
+}
+
 function scheduleAgentSubsystemStartup(): void {
   runDeferredStartupTask("agent subsystem", async () => {
     const { getAgentApi, initAgentSubsystem } = await import("./agent");
@@ -362,6 +376,7 @@ function scheduleDeferredStartupWork(
   scheduleConversationMaintenance(readiness);
   scheduleConversationIntegrityAudit();
   scheduleClaudeProjectBootstrapIfEnabled();
+  scheduleClaudeBridgeLifecycle();
   scheduleAgentSubsystemStartup();
   scheduleUserSkillsLoad();
   scheduleAttachmentMaintenance();
@@ -602,6 +617,13 @@ async function onShutdown(): Promise<void> {
     stopAutoWatch();
   } catch {
     /* ignore if module not loaded */
+  }
+  try {
+    const { uninstallClaudeBridgeLifecycle } =
+      await import("./claudeCode/bridgeProcess");
+    await uninstallClaudeBridgeLifecycle();
+  } catch (error) {
+    appLogger.debug("LLM: Claude Code bridge shutdown skipped", error);
   }
   try {
     const { destroyAllCachedCodexAppServerProcesses } =

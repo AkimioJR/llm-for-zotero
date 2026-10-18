@@ -2012,6 +2012,10 @@ export function setupHandlers(
         system: "claude_code",
       },
       {
+        key: `${config.prefsPrefix}.claudeCodeBridgeMode`,
+        system: "claude_code",
+      },
+      {
         key: `${config.prefsPrefix}.agentClaudeConfigSource`,
         system: "claude_code",
       },

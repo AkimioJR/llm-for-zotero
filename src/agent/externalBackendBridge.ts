@@ -17,6 +17,11 @@ import {
   type ClaudeModelCatalogRequestContext,
 } from "../claudeCode/modelCatalog";
 import { getClaudeProfileSignature } from "../claudeCode/projectSkills";
+import {
+  claudeBridgeFetch,
+  isManagedClaudeBridgeActive,
+  isManagedClaudeBridgeIdle,
+} from "../claudeCode/bridgeProcess";
 import { buildScopedConversationKey } from "../shared/conversationScopedKey";
 import { getClaudeConversationSummary } from "../claudeCode/store";
 import { hasPendingEmptyClaudeCleanupJob } from "../core/conversations/conversationCleanupJobs";
@@ -557,7 +562,7 @@ function supportsClaudeBridgeLocalPdfPaths(payload: unknown): boolean {
 async function assertClaudeBridgeLocalPdfCapability(
   baseUrl: string,
 ): Promise<void> {
-  const response = await fetch(getBridgeHealthUrl(baseUrl));
+  const response = await claudeBridgeFetch(getBridgeHealthUrl(baseUrl));
   if (!response.ok) {
     throw new Error(`Bridge HTTP ${response.status}`);
   }
@@ -584,8 +589,11 @@ export function supportsClaudeBridgeLocalPdfPathsForTests(
 }
 
 export function getBridgeQuickFixHint(baseUrl?: string): string {
+  if (isManagedClaudeBridgeActive()) {
+    return "Open the plugin settings, Claude Code section, to see the bridge status and log, or press Restart bridge.";
+  }
   const healthUrl = getBridgeHealthUrl(baseUrl);
-  return `Bridge not running. Try: launchctl stop com.toha.ccbridge && launchctl start com.toha.ccbridge ; curl -fsS ${healthUrl}`;
+  return `Your own Claude Code bridge is not answering. Check that it is running and that the Bridge URL matches it: curl -fsS ${healthUrl}`;
 }
 
 function formatBridgeUserError(
@@ -905,7 +913,9 @@ async function updateExternalRuntimeRetention(params: {
 }): Promise<RuntimeRetentionResponse | null> {
   const normalized = normalizeBaseUrl(params.baseUrl);
   if (!normalized) return null;
-  const response = await fetch(`${normalized}/runtime-retention`, {
+  // No managed bridge running means no warm session to keep or release.
+  if (isManagedClaudeBridgeIdle(normalized)) return null;
+  const response = await claudeBridgeFetch(`${normalized}/runtime-retention`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -933,7 +943,7 @@ async function invalidateExternalBridgeSession(params: {
 }): Promise<SessionInvalidationResponse | null> {
   const normalized = normalizeBaseUrl(params.baseUrl);
   if (!normalized) return null;
-  const response = await fetch(`${normalized}/invalidate-session`, {
+  const response = await claudeBridgeFetch(`${normalized}/invalidate-session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1146,7 +1156,7 @@ async function runExternalBridgeTurn(
   };
 
   await params.onEvent?.(makeProfilingEvent("frontend.bridge_fetch.dispatch"));
-  const response = await fetch(url, {
+  const response = await claudeBridgeFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -2047,7 +2057,7 @@ async function fetchExternalTools(
   baseUrl: string,
   encodedSources: string,
 ): Promise<ExternalToolDescriptor[]> {
-  const response = await fetch(
+  const response = await claudeBridgeFetch(
     `${normalizeBaseUrl(baseUrl)}/tools?settingSources=${encodedSources}`,
     {
       method: "GET",
@@ -2112,7 +2122,7 @@ async function fetchExternalEfforts(
     const scopeLabel = context.scopeLabel?.trim();
     if (scopeLabel) query.set("scopeLabel", scopeLabel);
   }
-  const response = await fetch(
+  const response = await claudeBridgeFetch(
     `${normalizeBaseUrl(baseUrl)}/efforts?${query}`,
     {
       method: "GET",
@@ -2137,7 +2147,7 @@ async function fetchExternalCommands(
   encodedSources: string,
 ): Promise<ExternalSlashCommandDescriptor[]> {
   try {
-    const response = await fetch(
+    const response = await claudeBridgeFetch(
       `${normalizeBaseUrl(baseUrl)}/commands?settingSources=${encodedSources}`,
       {
         method: "GET",
@@ -2261,7 +2271,7 @@ export async function fetchExternalBridgeSessionInfo(params: {
     if (candidate.scopeLabel) qs.set("scopeLabel", candidate.scopeLabel);
     const url = `${baseUrl}/session-info?${qs.toString()}`;
     try {
-      const response = await fetch(url, {
+      const response = await claudeBridgeFetch(url, {
         method: "GET",
         headers: { Accept: "application/json" },
       });
@@ -2335,31 +2345,34 @@ async function runExternalBridgeAction(
     metadata?: Record<string, unknown>;
   },
 ): Promise<BridgeTurnOutcome> {
-  const response = await fetch(`${normalizeBaseUrl(baseUrl)}/run-action`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      conversationKey: params.conversationKey,
-      toolName: params.toolName,
-      args: params.args,
-      libraryID: params.libraryID,
-      approved: Boolean(params.approved),
-      scopeType:
-        typeof params.metadata?.scopeType === "string"
-          ? params.metadata.scopeType
-          : undefined,
-      scopeId:
-        typeof params.metadata?.scopeId === "string"
-          ? params.metadata.scopeId
-          : undefined,
-      scopeLabel:
-        typeof params.metadata?.scopeLabel === "string"
-          ? params.metadata.scopeLabel
-          : undefined,
-      metadata: params.metadata,
-    }),
-    signal: params.signal,
-  });
+  const response = await claudeBridgeFetch(
+    `${normalizeBaseUrl(baseUrl)}/run-action`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversationKey: params.conversationKey,
+        toolName: params.toolName,
+        args: params.args,
+        libraryID: params.libraryID,
+        approved: Boolean(params.approved),
+        scopeType:
+          typeof params.metadata?.scopeType === "string"
+            ? params.metadata.scopeType
+            : undefined,
+        scopeId:
+          typeof params.metadata?.scopeId === "string"
+            ? params.metadata.scopeId
+            : undefined,
+        scopeLabel:
+          typeof params.metadata?.scopeLabel === "string"
+            ? params.metadata.scopeLabel
+            : undefined,
+        metadata: params.metadata,
+      }),
+      signal: params.signal,
+    },
+  );
   if (!response.ok) {
     throw new Error(`Bridge HTTP ${response.status}`);
   }
@@ -2823,11 +2836,20 @@ export function createExternalBackendBridgeRuntime(options: {
         conversationContextSignature.clear();
         return null;
       }
-      const response = await fetch(`${bridgeUrl}/invalidate-all-hot-runtimes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
+      // Warm sessions live only in a running bridge.
+      if (isManagedClaudeBridgeIdle(bridgeUrl)) {
+        conversationScopeByKey.clear();
+        conversationContextSignature.clear();
+        return { invalidated: true };
+      }
+      const response = await claudeBridgeFetch(
+        `${bridgeUrl}/invalidate-all-hot-runtimes`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      );
       if (!response.ok) {
         throw new Error(
           `Failed to invalidate all hot runtimes (${response.status})`,
@@ -3351,7 +3373,7 @@ export function createExternalBackendBridgeRuntime(options: {
           }
           const resolveExternalConfirmation: ResolveExternalConfirmation =
             async (requestId, resolution) => {
-              const response = await fetch(
+              const response = await claudeBridgeFetch(
                 `${normalizeBaseUrl(bridgeUrl)}/resolve-confirmation`,
                 {
                   method: "POST",
