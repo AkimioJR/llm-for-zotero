@@ -219,8 +219,23 @@ import {
 } from "../services/mineru/sync";
 import { getRuntimePlatformInfo } from "../utils/runtimePlatform";
 import {
+  getClaudeBridgeStatus,
+  onClaudeBridgeStatusChange,
+  restartClaudeBridge,
+  type ClaudeBridgeStatus,
+} from "../claudeCode/bridgeProcess";
+import {
   getClaudeAutoCompactThresholdPercent,
+  getClaudeBridgeExtraArgsPref,
+  getClaudeBridgeMode,
+  getClaudeBridgeNodePathPref,
   getClaudeBridgeUrl,
+  getClaudeCliPathPref,
+  getCustomClaudeBridgeUrl,
+  setClaudeBridgeExtraArgsPref,
+  setClaudeBridgeMode,
+  setClaudeBridgeNodePathPref,
+  setClaudeCliPathPref,
   getClaudeConfigSourcePref,
   getClaudeManagedInstructionTemplatePref,
   getClaudePermissionModePref,
@@ -397,6 +412,26 @@ function getProviderProfile(index: number): ProviderProfile {
 }
 
 const DEFAULT_AGENT_BRIDGE_URL = "http://127.0.0.1:19787";
+
+/** One plain-language line (plus details on failure) for the Bridge status. */
+export function describeClaudeBridgeStatus(
+  status: ClaudeBridgeStatus,
+  managed: boolean,
+): string {
+  if (!managed) {
+    return "Using your own bridge at the Bridge URL in Advanced. Zotero does not start one.";
+  }
+  switch (status.state) {
+    case "running":
+      return `Running${status.nodeVersion ? ` with Node.js ${status.nodeVersion}` : ""}.`;
+    case "starting":
+      return "Starting…";
+    case "failed":
+      return status.message || "The bridge could not start.";
+    default:
+      return "Not running. It starts when Claude Code mode needs it.";
+  }
+}
 
 function getPresetSelectHelperText(presetId: ProviderPresetId): string {
   if (presetId === "customized") {
@@ -4495,17 +4530,128 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     });
   }
 
+  const claudeBridgeUseOwnToggle = doc.querySelector(
+    `#${config.addonRef}-claude-bridge-use-own`,
+  ) as HTMLInputElement | null;
+  const applyClaudeBridgeModeUi = () => {
+    const custom = getClaudeBridgeMode() === "custom";
+    if (claudeBridgeUseOwnToggle) claudeBridgeUseOwnToggle.checked = custom;
+    if (agentBridgeUrlInput) agentBridgeUrlInput.disabled = !custom;
+  };
+  const refreshClaudeBridgeConsumers = () => {
+    void refreshClaudeModelSuggestions(true, true);
+    void refreshClaudePermissionOptions();
+  };
+
   if (agentBridgeUrlInput) {
     agentBridgeUrlInput.value =
-      getClaudeBridgeUrl() || DEFAULT_AGENT_BRIDGE_URL;
+      getCustomClaudeBridgeUrl() || DEFAULT_AGENT_BRIDGE_URL;
     const commitBridgeUrl = () => {
+      if (getCustomClaudeBridgeUrl() === agentBridgeUrlInput.value.trim()) {
+        return;
+      }
       setClaudeBridgeUrl(agentBridgeUrlInput.value);
-      void refreshClaudeModelSuggestions(true, true);
-      void refreshClaudePermissionOptions();
+      refreshClaudeBridgeConsumers();
     };
     agentBridgeUrlInput.addEventListener("change", commitBridgeUrl);
     agentBridgeUrlInput.addEventListener("blur", commitBridgeUrl);
   }
+  if (claudeBridgeUseOwnToggle) {
+    claudeBridgeUseOwnToggle.addEventListener("change", () => {
+      setClaudeBridgeMode(
+        claudeBridgeUseOwnToggle.checked ? "custom" : "managed",
+      );
+      applyClaudeBridgeModeUi();
+      refreshClaudeBridgeStatusUi();
+      refreshClaudeBridgeConsumers();
+    });
+  }
+  applyClaudeBridgeModeUi();
+
+  const bindClaudeBridgeTextPref = (
+    id: string,
+    read: () => string,
+    write: (value: string) => void,
+  ) => {
+    const input = doc.querySelector(
+      `#${config.addonRef}-${id}`,
+    ) as HTMLInputElement | null;
+    if (!input) return;
+    input.value = read();
+    const commit = () => {
+      if (input.value.trim() === read()) return;
+      write(input.value);
+    };
+    input.addEventListener("change", commit);
+    input.addEventListener("blur", commit);
+  };
+  bindClaudeBridgeTextPref(
+    "claude-bridge-node-path",
+    getClaudeBridgeNodePathPref,
+    setClaudeBridgeNodePathPref,
+  );
+  bindClaudeBridgeTextPref(
+    "claude-bridge-cli-path",
+    getClaudeCliPathPref,
+    setClaudeCliPathPref,
+  );
+  bindClaudeBridgeTextPref(
+    "claude-bridge-extra-args",
+    getClaudeBridgeExtraArgsPref,
+    setClaudeBridgeExtraArgsPref,
+  );
+
+  const claudeBridgeStatusText = doc.querySelector(
+    `#${config.addonRef}-claude-bridge-status`,
+  ) as HTMLSpanElement | null;
+  const claudeBridgeRestartButton = doc.querySelector(
+    `#${config.addonRef}-claude-bridge-restart`,
+  ) as HTMLButtonElement | null;
+  const claudeBridgeOpenLogButton = doc.querySelector(
+    `#${config.addonRef}-claude-bridge-open-log`,
+  ) as HTMLButtonElement | null;
+  function refreshClaudeBridgeStatusUi(): void {
+    const managed = getClaudeBridgeMode() === "managed";
+    const bridgeStatus = getClaudeBridgeStatus();
+    if (claudeBridgeStatusText) {
+      claudeBridgeStatusText.textContent = describeClaudeBridgeStatus(
+        bridgeStatus,
+        managed,
+      );
+    }
+    if (claudeBridgeRestartButton) {
+      claudeBridgeRestartButton.disabled =
+        !managed || bridgeStatus.state === "starting";
+    }
+    if (claudeBridgeOpenLogButton) {
+      claudeBridgeOpenLogButton.disabled = !managed || !bridgeStatus.logFile;
+    }
+  }
+  refreshClaudeBridgeStatusUi();
+  const unsubscribeClaudeBridgeStatus = onClaudeBridgeStatusChange(
+    refreshClaudeBridgeStatusUi,
+  );
+  _window.addEventListener("unload", unsubscribeClaudeBridgeStatus, {
+    once: true,
+  });
+  claudeBridgeRestartButton?.addEventListener("click", () => {
+    void restartClaudeBridge()
+      .then(refreshClaudeBridgeConsumers)
+      .catch(() => {
+        // The status line shows the reason.
+      });
+  });
+  claudeBridgeOpenLogButton?.addEventListener("click", () => {
+    const logFile = getClaudeBridgeStatus().logFile;
+    if (!logFile) return;
+    try {
+      (
+        Zotero as unknown as { launchFile?: (path: string) => void }
+      ).launchFile?.(logFile);
+    } catch (error) {
+      ztoolkit.log("LLM: could not open the Claude bridge log", error);
+    }
+  });
 
   const copyTextToClipboard = async (text: string) => {
     const value = text.trim();
