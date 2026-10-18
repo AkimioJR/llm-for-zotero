@@ -1,6 +1,8 @@
 declare const Zotero: any;
 
+import { resolveAddonRootUri } from "../agent/services/pdfPageService";
 import { appLogger } from "../core/logging";
+import { getAbortController } from "../utils/apiHelpers";
 import { registerAppQuitBlocker } from "../utils/appQuitBlocker";
 import { fnv1a32 } from "../utils/fnv1a";
 import {
@@ -143,19 +145,6 @@ function getAuthToken(): string {
   return authToken;
 }
 
-function getAddonRootUri(): string {
-  const candidates = [
-    (globalThis as any).rootURI,
-    (globalThis as any)._globalThis?.rootURI,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  return "";
-}
-
 function getZoteroDataDir(): string {
   const dir = (Zotero as any)?.DataDirectory?.dir;
   return typeof dir === "string" ? dir.trim() : "";
@@ -174,7 +163,7 @@ function getBridgeInstallDir(): string {
  * removes the old ones, and an unchanged bridge is not rewritten.
  */
 async function materializeBridgeScript(): Promise<string> {
-  const rootUri = getAddonRootUri();
+  const rootUri = resolveAddonRootUri();
   if (!rootUri) throw new Error("Could not locate the plugin's files.");
   const resourceUri = `${rootUri.replace(/\/?$/, "/")}content/claude-bridge/bridge.mjs`;
   const response = await fetch(resourceUri);
@@ -612,12 +601,16 @@ export function isManagedClaudeBridgeIdle(url: string): boolean {
 async function maybeShowLegacyDaemonNotice(): Promise<void> {
   try {
     if (hasShownClaudeLegacyDaemonNotice()) return;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1500);
+    // Zotero's plugin scope has no global AbortController.
+    const AbortControllerCtor = getAbortController();
+    const controller = AbortControllerCtor
+      ? new AbortControllerCtor()
+      : undefined;
+    const timeoutId = setTimeout(() => controller?.abort(), 1500);
     let payload: any = null;
     try {
       const response = await fetch(`${DEFAULT_CLAUDE_BRIDGE_URL}/healthz`, {
-        signal: controller.signal,
+        signal: controller?.signal,
       });
       payload = response.ok ? await response.json() : null;
     } catch {
