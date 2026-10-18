@@ -1,106 +1,64 @@
-# cc-llm4zotero-adapter
+# Claude Code bridge
 
-HTTP bridge adapter between [llm-for-zotero](https://github.com/yilewang/llm-for-zotero) (Claude Code Bridge backend mode) and Claude Agent SDK runtime.
+The bridge that lets [llm-for-zotero](../../README.md) talk to a real Claude
+Code runtime through the Claude Agent SDK. It used to live in the separate
+`cc-llm4zotero-adapter` repository (originally by jianghao-zhang) and moved
+here with its history.
 
-## Overview
+**Users do not run this by hand.** While Claude Code mode is on, the plugin
+copies the bundled bridge (`addon/content/claude-bridge/bridge.mjs`, built by
+`npm run build` at the repository root) to
+`<Zotero data directory>/llm-for-zotero/claude-bridge/`, starts it with the
+user's Node.js 18+, and stops it again. See `src/claudeCode/bridgeProcess.ts`.
 
-### What this repo does
+## What it does
 
-- Streams `/run-turn` events from Claude runtime into llm-for-zotero compatible agent events.
-- Exposes `/commands` for slash command discovery.
-- Exposes `/session-info` for conversation/session recovery.
-- Persists session links and run traces in adapter state storage.
+- Streams `/run-turn` events from the Claude runtime as llm-for-zotero agent events.
+- Exposes `/commands` for slash command discovery and `/session-info` for session recovery.
+- Persists session links and run traces in its state directory.
 
-In practice, this repo is the bridge that lets `llm-for-zotero` talk to a real Claude Code runtime instead of treating Claude Code as a fake in-plugin backend.
-
-## Before you start: Claude Code must already work on this machine
-
-This adapter does not replace Claude Code CLI. It depends on it.
-
-Before starting the bridge, make sure Claude Code itself is installed and authenticated:
-
-- Installation: https://code.claude.com/docs/en/installation.md
-- Quickstart: https://code.claude.com/docs/en/quickstart.md
-- Authentication: https://code.claude.com/docs/en/authentication.md
-- Settings: https://code.claude.com/docs/en/settings.md
-
-Minimum sanity check:
+## How the plugin starts it
 
 ```bash
-claude
+ADAPTER_AUTH_TOKEN=<random> node bridge.mjs \
+  --host 127.0.0.1 --port 0 \
+  --managed-by llm-for-zotero --exit-on-stdin-close 1 --log-file 1 \
+  --claude-path /path/to/claude
 ```
 
-If Claude Code is not installed, not on `PATH`, or not logged in yet, the bridge may start but actual Claude turns will still fail.
+- `--port 0` picks any free port. When the server is listening, the bridge
+  prints one line the plugin waits for:
+  `CLAUDE_BRIDGE_READY {"host":"127.0.0.1","port":…,"version":…,"runtimeCwd":…,"stateDir":…,"logFile":…}`.
+- With `ADAPTER_AUTH_TOKEN` set, every request path must start with
+  `/<token>`, for example `/<token>/healthz`; anything else gets HTTP 401. The
+  token is passed in the environment so it does not show up in `ps`.
+- `--exit-on-stdin-close 1` makes the bridge exit when its stdin closes. The
+  plugin keeps stdin open, so the bridge also exits if Zotero crashes.
+- `--claude-path` runs the user's own `claude`. The bundled bridge does not
+  include the SDK's per-platform Claude binary (about 250 MB).
+- When `~/Zotero` exists, the bridge keeps the old adapter's
+  `~/Zotero/agent-runtime` and `~/Zotero/agent-state` folders; otherwise the
+  plugin passes `--zotero-root <Zotero data directory>`.
 
-## Quick Start (Foreground)
+## Developing
 
-If you do not already have this repo locally:
+From this folder (dependencies are installed by `npm install` at the
+repository root):
 
 ```bash
-git clone https://github.com/jianghao-zhang/cc-llm4zotero-adapter.git
-cd cc-llm4zotero-adapter
+npm test               # vitest
+npm run typecheck
+npm run serve:bridge   # run from source on http://127.0.0.1:19787, no token
 ```
 
-Then start the bridge:
+To try a bridge you run by hand with Zotero, turn on **Use my own bridge** in
+the plugin's Claude Code settings and keep the Bridge URL at
+`http://127.0.0.1:19787`. The same setting is how to use a bridge inside WSL
+while Zotero runs on Windows.
 
-```bash
-npm install
-npm run build
-npm test
-npm run serve:bridge
-```
-
-Default bind:
-
-- Host: `127.0.0.1`
-- Port: `19787`
-- Health: `http://127.0.0.1:19787/healthz`
-
-Health check:
-
-```bash
-curl -fsS http://127.0.0.1:19787/healthz
-```
-
-A healthy bridge only means the adapter server is up. It does **not** guarantee that Claude Code CLI is installed, authenticated, or usable yet.
-
-## Quick Install (macOS Daemon)
-
-If you do not already have this repo locally:
-
-```bash
-git clone https://github.com/jianghao-zhang/cc-llm4zotero-adapter.git
-cd cc-llm4zotero-adapter
-```
-
-For non-technical users, run:
-
-```bash
-./scripts/install-macos-daemon.sh
-```
-
-This installs a LaunchAgent service: `com.toha.ccbridge`.
-
-Useful daemon commands:
-
-```bash
-npm run daemon:status
-npm run daemon:start
-npm run daemon:stop
-npm run daemon:restart
-npm run daemon:uninstall
-```
-
-## How this is meant to be used with llm-for-zotero
-
-After the bridge is healthy, go to `llm-for-zotero` settings and:
-
-1. enable Claude Code mode
-2. keep Bridge URL at `http://127.0.0.1:19787` unless you intentionally changed it
-3. choose a config source mode
-4. pick permission/model/reasoning defaults
-
-Then enter Claude Code from the dedicated Claude button in the chat UI. Settings configure the runtime; they are not the main chat entry point.
+Claude Code itself must be installed and logged in (`claude` once in a
+terminal). A healthy `/healthz` only means the bridge is up, not that Claude
+Code works.
 
 ## Config source in plain English
 
@@ -216,16 +174,10 @@ Resolves pending confirmation requests.
 
 ## Runtime / Environment Options
 
-Server start command:
-
-```bash
-npm run serve:bridge
-```
-
 | Flag                          | Env                                 | Description                                                                                                                                                                             |
 | ----------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--host`                      | `ADAPTER_HOST`                      | Bind host (default `127.0.0.1`)                                                                                                                                                         |
-| `--port`                      | `ADAPTER_PORT`                      | Bind port (default `19787`)                                                                                                                                                             |
+| `--port`                      | `ADAPTER_PORT`                      | Bind port (default `19787`; `0` picks a free port and the ready line reports it)                                                                                                        |
 | `--runtime-cwd`               | `ADAPTER_RUNTIME_CWD`               | Workspace root for Claude Agent SDK. Defaults to the legacy Zotero runtime path when available.                                                                                         |
 | `--state-dir`                 | `ADAPTER_STATE_DIR`                 | Session/trace persistence directory. Defaults to the legacy Zotero state path when available.                                                                                           |
 | `--zotero-root`               | `ZOTERO_ROOT`                       | Override the legacy Zotero root used to derive default runtime/state paths. Useful when Zotero data is not under the home directory.                                                    |
@@ -237,6 +189,10 @@ npm run serve:bridge
 | `--append-system-prompt-file` | `ADAPTER_APPEND_SYSTEM_PROMPT_FILE` | File-based overlay prompt. Missing optional files are ignored.                                                                                                                          |
 | `--forward-frontend-model`    | `ADAPTER_FORWARD_FRONTEND_MODEL`    | Pass every non-empty frontend `metadata.model` value to Claude Code unchanged (default `true`). Claude Code resolves aliases, custom provider names, and future model families.         |
 | `--log-file`                  | `ADAPTER_LOG_FILE`                  | Mirror bridge stdout/stderr to a file. Use `1` / `true` to write to `<state-dir>/bridge.log`.                                                                                           |
+| `--claude-path`               | `ADAPTER_CLAUDE_PATH`               | The `claude` executable the SDK runs. Required for the bundled bridge.                                                                                                                  |
+| (env only)                    | `ADAPTER_AUTH_TOKEN`                | Require a `/<token>` prefix on every request path.                                                                                                                                      |
+| `--managed-by`                | `ADAPTER_MANAGED_BY`                | Reported by `/healthz` as `managedBy`. The plugin passes `llm-for-zotero`.                                                                                                              |
+| `--exit-on-stdin-close`       | `ADAPTER_EXIT_ON_STDIN_CLOSE`       | Exit when stdin closes (default `false`).                                                                                                                                               |
 
 Default additional readable directories:
 
@@ -246,70 +202,12 @@ Default additional readable directories:
 
 ## Troubleshooting
 
-### 1) The bridge is not running or got stuck
-
-```bash
-launchctl stop com.toha.ccbridge
-launchctl start com.toha.ccbridge
-curl -fsS http://127.0.0.1:19787/healthz
-```
-
-You can also use:
-
-```bash
-npm run daemon:status
-npm run daemon:restart
-```
-
-#### macOS LaunchAgent cannot find Node/npm installed by NVM
-
-If `npm run daemon:status` reports that the service is loaded but health is
-down, inspect the daemon error log:
-
-```bash
-tail -n 50 "$HOME/Library/Logs/cc-llm4zotero-adapter/bridge.stderr.log"
-```
-
-When it contains `zsh: command not found: npm`, the interactive shell can see
-NVM's Node installation but the macOS LaunchAgent cannot. An existing
-`node_modules` directory can also retain an older Claude Agent SDK after the
-repository is updated, which may leave older model names in the model menu.
-
-The following repair synchronizes dependencies, exposes the active NVM
-Node/npm executables through `$HOME/.local/bin` (already included in the
-LaunchAgent's `PATH`), and restarts the service:
-
-```bash
-cd /path/to/cc-llm4zotero-adapter
-
-npm ci
-
-mkdir -p "$HOME/.local/bin"
-ln -s "$(command -v node)" "$HOME/.local/bin/node"
-ln -s "$(command -v npm)" "$HOME/.local/bin/npm"
-
-npm run daemon:restart
-npm run daemon:status
-curl -fsS http://127.0.0.1:19787/healthz
-```
-
-If either symlink destination already exists, inspect it with `ls -l` before
-replacing it. After the health check succeeds, force-refresh the Claude model
-catalog and inspect the resolved model names:
-
-```bash
-curl -fsS 'http://127.0.0.1:19787/models?settingSources=user%2Cproject%2Clocal&refresh=1' \
-  | jq '.modelInfos[] | {value, resolvedModel, displayName}'
-```
-
-Then select **Retry loading Claude models** in llm-for-zotero.
-
-### 2) Bridge URL or port mismatch
+### 1) Bridge URL or port mismatch
 
 - Make sure llm-for-zotero Bridge URL matches adapter bind address.
 - Default is `http://127.0.0.1:19787`.
 
-### 3) Claude Code itself is not ready
+### 2) Claude Code itself is not ready
 
 If you see `claude: command not found`, install Claude Code CLI first.
 
@@ -321,7 +219,7 @@ claude
 
 If needed, finish login/auth there first.
 
-### 4) Health is OK, but Zotero still cannot use Claude correctly
+### 3) Health is OK, but Zotero still cannot use Claude correctly
 
 That usually means one of these layers is wrong:
 
@@ -331,13 +229,8 @@ That usually means one of these layers is wrong:
 
 ### Logs
 
-Daemon logs on macOS still live under:
-
-```bash
-~/Library/Logs/cc-llm4zotero-adapter/
-```
-
-If the bridge is started without an attached terminal and you also want a plain bridge process log, set `ADAPTER_LOG_FILE=1` (or pass `--log-file`) to mirror stdout/stderr into `<state-dir>/bridge.log`.
+With `--log-file 1` (always on when the plugin starts the bridge), output goes
+to `<state-dir>/bridge.log`. The plugin's **Open log** button opens it.
 
 ## Repository Layout
 
@@ -347,8 +240,7 @@ If the bridge is started without an attached terminal and you also want a plain 
 - `src/trace-store` — run trace persistence
 - `src/providers` — Claude Agent SDK runtime client
 - `src/server` — HTTP bridge server
-- `bin/start-bridge-server.ts` — foreground server entrypoint
-- `bin/manage-daemon.ts` — macOS daemon manager
+- `bin/start-bridge-server.ts` — server entrypoint, also the bundle entry
 
 ## References
 
