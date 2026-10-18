@@ -1,0 +1,465 @@
+import { assert } from "chai";
+import { afterEach, beforeEach, describe, it } from "mocha";
+import {
+  claudeBridgeFetch,
+  ensureClaudeBridgeRunning,
+  filterClaudeBridgeExtraArgs,
+  getClaudeBridgeStatus,
+  isManagedClaudeBridgeIdle,
+  parseClaudeBridgeExtraArgs,
+  parseClaudeBridgeReadyLine,
+  resetClaudeBridgeProcessForTests,
+  restartClaudeBridge,
+  stopClaudeBridge,
+} from "../src/claudeCode/bridgeProcess";
+import { parseNodeMajorVersion } from "../src/claudeCode/bridgeBinaries";
+import {
+  MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL,
+  getManagedClaudeBridgeBaseUrl,
+  matchManagedClaudeBridgeBase,
+  resetManagedClaudeBridgeEndpointForTests,
+  setManagedClaudeBridgeBaseUrl,
+} from "../src/claudeCode/bridgeEndpoint";
+import {
+  getClaudeBridgeMode,
+  getClaudeBridgeUrl,
+} from "../src/claudeCode/prefs";
+
+type SpawnRecord = {
+  command: string;
+  arguments: string[];
+  environment: Record<string, string>;
+};
+
+type FakeBridge = {
+  exit: () => void;
+  stdinClosed: boolean;
+};
+
+const PREFIX = "extensions.zotero.llmforzotero.";
+
+describe("Claude Code bridge process", function () {
+  const globalScope = globalThis as any;
+  const saved: Record<string, unknown> = {};
+  let prefs: Record<string, unknown>;
+  let files: Map<string, Uint8Array>;
+  let existing: Set<string>;
+  let spawns: SpawnRecord[];
+  let bridges: FakeBridge[];
+  let fetched: string[];
+  let nodeVersion: string;
+  let readyPort: number;
+  let legacyHealth: unknown;
+
+  function makeBridgeProcess(): any {
+    let readyLines = [
+      "[cc-llm4zotero-adapter] listening\n",
+      `CLAUDE_BRIDGE_READY ${JSON.stringify({ host: "127.0.0.1", port: readyPort, version: "3.9.12", stateDir: "/home/u/Zotero/agent-state", logFile: "/home/u/Zotero/agent-state/bridge.log" })}\n`,
+    ];
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const bridge: FakeBridge = {
+      stdinClosed: false,
+      exit: () => finish(),
+    };
+    bridges.push(bridge);
+    return {
+      stdout: {
+        readString: async () => {
+          if (readyLines.length) return readyLines.shift();
+          await finished;
+          readyLines = [];
+          return "";
+        },
+      },
+      stdin: {
+        close: async () => {
+          bridge.stdinClosed = true;
+          finish();
+        },
+      },
+      wait: async () => {
+        await finished;
+        return { exitCode: 0 };
+      },
+      kill: async () => {
+        finish();
+        return { exitCode: 1 };
+      },
+    };
+  }
+
+  function makeOutputProcess(output: string): any {
+    let sent = false;
+    return {
+      stdout: {
+        readString: async () => {
+          if (sent) return "";
+          sent = true;
+          return output;
+        },
+      },
+      wait: async () => ({ exitCode: 0 }),
+    };
+  }
+
+  const fakeSubprocess = {
+    call: async (options: any) => {
+      const args: string[] = options.arguments || [];
+      if (args[1] === "command -v node")
+        return makeOutputProcess("/usr/bin/node\n");
+      if (args[1] === "command -v claude") {
+        return makeOutputProcess("/home/u/.local/bin/claude\n");
+      }
+      if (options.command === "/usr/bin/node" && args[0] === "--version") {
+        return makeOutputProcess(`${nodeVersion}\n`);
+      }
+      if (options.command === "/usr/bin/node") {
+        spawns.push({
+          command: options.command,
+          arguments: args,
+          environment: options.environment || {},
+        });
+        return makeBridgeProcess();
+      }
+      throw new Error(`unexpected command ${options.command}`);
+    },
+  };
+
+  beforeEach(function () {
+    for (const key of [
+      "Zotero",
+      "IOUtils",
+      "ChromeUtils",
+      "Services",
+      "rootURI",
+      "fetch",
+    ]) {
+      saved[key] = globalScope[key];
+    }
+    prefs = {};
+    files = new Map();
+    existing = new Set(["/usr/bin/node", "/home/u/.local/bin/claude"]);
+    spawns = [];
+    bridges = [];
+    fetched = [];
+    nodeVersion = "v22.3.0";
+    readyPort = 43210;
+    legacyHealth = null;
+    resetClaudeBridgeProcessForTests();
+    resetManagedClaudeBridgeEndpointForTests();
+    globalScope.Zotero = {
+      Prefs: {
+        get: (key: string) => prefs[key.replace(PREFIX, "")],
+        set: (key: string, value: unknown) => {
+          prefs[key.replace(PREFIX, "")] = value;
+        },
+      },
+      DataDirectory: { dir: "/data" },
+      Profile: { dir: "/profile" },
+      getMainWindow: () => null,
+    };
+    globalScope.IOUtils = {
+      exists: async (path: string) => existing.has(path) || files.has(path),
+      write: async (path: string, bytes: Uint8Array) => {
+        files.set(path, bytes);
+        return bytes.length;
+      },
+      makeDirectory: async () => undefined,
+      getChildren: async () => [...files.keys()],
+      remove: async (path: string) => {
+        files.delete(path);
+      },
+    };
+    globalScope.ChromeUtils = {
+      importESModule: (url: string) =>
+        url.includes("Subprocess") ? { Subprocess: fakeSubprocess } : {},
+    };
+    globalScope.Services = { env: { get: () => "" } };
+    globalScope.rootURI = "jar:file:///profile/extensions/llm.xpi!/";
+    globalScope.fetch = async (url: string) => {
+      fetched.push(url);
+      if (url.endsWith("content/claude-bridge/bridge.mjs")) {
+        return new Response("// bundled bridge", { status: 200 });
+      }
+      if (url === "http://127.0.0.1:19787/healthz") {
+        if (!legacyHealth) throw new TypeError("connection refused");
+        return new Response(JSON.stringify(legacyHealth), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+  });
+
+  afterEach(async function () {
+    for (const bridge of bridges) bridge.exit();
+    resetClaudeBridgeProcessForTests();
+    resetManagedClaudeBridgeEndpointForTests();
+    for (const [key, value] of Object.entries(saved)) globalScope[key] = value;
+  });
+
+  it("uses the managed bridge unless the user pointed the Bridge URL elsewhere", function () {
+    assert.equal(getClaudeBridgeMode(), "managed");
+    assert.equal(getClaudeBridgeUrl(), MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL);
+    prefs.agentBackendBridgeUrl = "http://127.0.0.1:19787";
+    assert.equal(getClaudeBridgeMode(), "managed");
+    prefs.agentBackendBridgeUrl = "http://192.168.1.4:19787";
+    assert.equal(getClaudeBridgeMode(), "custom");
+    assert.equal(getClaudeBridgeUrl(), "http://192.168.1.4:19787");
+    prefs.claudeCodeBridgeMode = "managed";
+    assert.equal(getClaudeBridgeMode(), "managed");
+    prefs.agentBackendBridgeUrl = "";
+    prefs.claudeCodeBridgeMode = "custom";
+    assert.equal(getClaudeBridgeUrl(), "http://127.0.0.1:19787");
+  });
+
+  it("starts the bridge on the first request and points the request at it", async function () {
+    const response = await claudeBridgeFetch(
+      `${MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL}/models?settingSources=user`,
+    );
+    assert.isTrue(response.ok);
+    assert.lengthOf(spawns, 1);
+    const [spawn] = spawns;
+    const token = spawn.environment.ADAPTER_AUTH_TOKEN;
+    assert.match(token, /^[0-9a-f]{48}$/);
+    assert.equal(
+      fetched.at(-1),
+      `http://127.0.0.1:43210/${token}/models?settingSources=user`,
+    );
+    assert.notInclude(
+      spawn.arguments.join(" "),
+      token,
+      "token stays out of argv",
+    );
+    assert.match(
+      spawn.arguments[0],
+      /^\/data\/llm-for-zotero\/claude-bridge\/bridge-[0-9a-f]+\.mjs$/,
+    );
+    assert.isTrue(files.has(spawn.arguments[0]));
+    const flag = (name: string) =>
+      spawn.arguments[spawn.arguments.indexOf(name) + 1];
+    assert.equal(flag("--port"), "0");
+    assert.equal(flag("--host"), "127.0.0.1");
+    assert.equal(flag("--claude-path"), "/home/u/.local/bin/claude");
+    assert.equal(flag("--exit-on-stdin-close"), "1");
+    assert.equal(flag("--managed-by"), "llm-for-zotero");
+    // ~/Zotero does not exist here, so the Zotero data directory is the root.
+    assert.equal(flag("--zotero-root"), "/data");
+    assert.include(spawn.environment.NO_PROXY, "127.0.0.1");
+    assert.include(spawn.environment.PATH, "/home/u/.local/bin");
+    assert.equal(
+      getManagedClaudeBridgeBaseUrl(),
+      `http://127.0.0.1:43210/${token}`,
+    );
+    assert.deepInclude(getClaudeBridgeStatus(), {
+      state: "running",
+      port: 43210,
+      nodePath: "/usr/bin/node",
+      nodeVersion: "v22.3.0",
+      claudePath: "/home/u/.local/bin/claude",
+      logFile: "/home/u/Zotero/agent-state/bridge.log",
+    });
+  });
+
+  it("keeps the old ~/Zotero data folders when they exist", async function () {
+    const home = (globalThis as any).process?.env?.HOME;
+    existing.add(`${home}/Zotero`);
+    await ensureClaudeBridgeRunning();
+    assert.notInclude(spawns[0].arguments, "--zotero-root");
+  });
+
+  it("shares one start between concurrent requests", async function () {
+    await Promise.all([
+      claudeBridgeFetch(`${MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL}/healthz`),
+      claudeBridgeFetch(`${MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL}/tools`),
+      ensureClaudeBridgeRunning(),
+    ]);
+    assert.lengthOf(spawns, 1);
+  });
+
+  it("stops by closing stdin and starts again on the next request", async function () {
+    const firstBase = await ensureClaudeBridgeRunning();
+    await stopClaudeBridge();
+    assert.isTrue(bridges[0].stdinClosed);
+    assert.equal(getClaudeBridgeStatus().state, "stopped");
+    assert.equal(
+      getManagedClaudeBridgeBaseUrl(),
+      MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL,
+    );
+    assert.isTrue(isManagedClaudeBridgeIdle(firstBase));
+
+    readyPort = 43211;
+    // A URL built from the old bridge still reaches the new one.
+    await claudeBridgeFetch(`${firstBase}/session-info?conversationKey=1`);
+    assert.lengthOf(spawns, 2);
+    assert.match(
+      fetched.at(-1) || "",
+      /^http:\/\/127\.0\.0\.1:43211\/[0-9a-f]+\/session-info/,
+    );
+  });
+
+  it("reports an unexpected exit and gives up after repeated crashes", async function () {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await ensureClaudeBridgeRunning();
+      bridges.at(-1)!.exit();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(getClaudeBridgeStatus().state, "failed");
+      assert.include(getClaudeBridgeStatus().message, "stopped unexpectedly");
+    }
+    let error: unknown;
+    try {
+      await ensureClaudeBridgeRunning();
+    } catch (caught) {
+      error = caught;
+    }
+    assert.include(String(error), "keeps stopping");
+    assert.lengthOf(spawns, 3);
+    await restartClaudeBridge();
+    assert.lengthOf(spawns, 4, "Restart forgets earlier crashes");
+  });
+
+  it("explains an old Node.js instead of starting the bridge", async function () {
+    nodeVersion = "v16.20.0";
+    let error: unknown;
+    try {
+      await ensureClaudeBridgeRunning();
+    } catch (caught) {
+      error = caught;
+    }
+    assert.include(String(error), "Node.js 18 or newer");
+    assert.lengthOf(spawns, 0);
+    assert.equal(getClaudeBridgeStatus().state, "failed");
+  });
+
+  it("explains a missing Claude Code path the user typed", async function () {
+    prefs.claudeCodeCliPath = "/opt/missing/claude";
+    let error: unknown;
+    try {
+      await ensureClaudeBridgeRunning();
+    } catch (caught) {
+      error = caught;
+    }
+    assert.include(
+      String(error),
+      "Claude Code was not found at /opt/missing/claude",
+    );
+  });
+
+  it("leaves requests to the user's own bridge alone", async function () {
+    prefs.claudeCodeBridgeMode = "custom";
+    await claudeBridgeFetch("http://127.0.0.1:19787/healthz").catch(
+      () => undefined,
+    );
+    await claudeBridgeFetch(`${MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL}/healthz`);
+    assert.lengthOf(spawns, 0);
+  });
+
+  it("passes extra bridge options through, except the ones the plugin owns", async function () {
+    prefs.claudeCodeBridgeExtraArgs =
+      '--additional-directories "~/My Papers" --port 9999 --setting-sources user';
+    await ensureClaudeBridgeRunning();
+    const args = spawns[0].arguments;
+    assert.include(args, "~/My Papers");
+    assert.include(args, "--setting-sources");
+    assert.notInclude(args, "9999");
+    assert.equal(args.filter((arg) => arg === "--port").length, 1);
+  });
+
+  it("tells the user once about the old background bridge", async function () {
+    legacyHealth = { ok: true, protocolVersion: 2 };
+    const alerts: string[] = [];
+    globalScope.Services = {
+      env: { get: () => "" },
+      prompt: {
+        alert: (_win: unknown, _title: string, text: string) =>
+          alerts.push(text),
+      },
+    };
+    await ensureClaudeBridgeRunning();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.lengthOf(alerts, 1);
+    assert.include(alerts[0], "no longer need to start it yourself");
+    assert.isTrue(prefs.claudeCodeLegacyDaemonNoticeShown as boolean);
+    await restartClaudeBridge();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.lengthOf(alerts, 1);
+  });
+
+  it("does not mistake its own bridge on the old port for the old one", async function () {
+    legacyHealth = { ok: true, managedBy: "llm-for-zotero" };
+    const alerts: string[] = [];
+    globalScope.Services = {
+      env: { get: () => "" },
+      prompt: {
+        alert: (_win: unknown, _title: string, text: string) =>
+          alerts.push(text),
+      },
+    };
+    await ensureClaudeBridgeRunning();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.lengthOf(alerts, 0);
+  });
+});
+
+describe("Claude Code bridge helpers", function () {
+  afterEach(function () {
+    resetManagedClaudeBridgeEndpointForTests();
+  });
+
+  it("matches only whole managed base URLs", function () {
+    setManagedClaudeBridgeBaseUrl("http://127.0.0.1:5000/abc");
+    assert.equal(
+      matchManagedClaudeBridgeBase("http://127.0.0.1:5000/abc/healthz"),
+      "http://127.0.0.1:5000/abc",
+    );
+    assert.equal(
+      matchManagedClaudeBridgeBase("http://127.0.0.1:5000/abcd/healthz"),
+      "",
+    );
+    assert.equal(
+      matchManagedClaudeBridgeBase("http://127.0.0.1:19787/healthz"),
+      "",
+    );
+    setManagedClaudeBridgeBaseUrl("http://127.0.0.1:5001/abc");
+    assert.equal(
+      matchManagedClaudeBridgeBase("http://127.0.0.1:5000/abc/tools"),
+      "http://127.0.0.1:5000/abc",
+      "a base from an earlier bridge still matches",
+    );
+  });
+
+  it("reads the ready line", function () {
+    assert.deepEqual(
+      parseClaudeBridgeReadyLine(
+        'CLAUDE_BRIDGE_READY {"port":1234,"version":"1.0.0","logFile":"/l"}',
+      ),
+      { port: 1234, version: "1.0.0", stateDir: undefined, logFile: "/l" },
+    );
+    assert.isNull(parseClaudeBridgeReadyLine("[cc] listening"));
+    assert.isNull(parseClaudeBridgeReadyLine('CLAUDE_BRIDGE_READY {"port":0}'));
+    assert.isNull(parseClaudeBridgeReadyLine("CLAUDE_BRIDGE_READY not json"));
+  });
+
+  it("splits extra options and drops plugin-owned flags", function () {
+    assert.deepEqual(parseClaudeBridgeExtraArgs(`--a "b c" --d 'e f' g`), [
+      "--a",
+      "b c",
+      "--d",
+      "e f",
+      "g",
+    ]);
+    assert.deepEqual(
+      filterClaudeBridgeExtraArgs(["--claude-path", "/x", "--log-file", "1"]),
+      ["--log-file", "1"],
+    );
+  });
+
+  it("reads node --version output", function () {
+    assert.equal(parseNodeMajorVersion("v20.11.1\n"), 20);
+    assert.equal(parseNodeMajorVersion("18.0.0"), 18);
+    assert.isNull(parseNodeMajorVersion("command not found"));
+    assert.isNull(parseNodeMajorVersion(null));
+  });
+});

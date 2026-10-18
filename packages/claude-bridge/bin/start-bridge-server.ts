@@ -220,8 +220,9 @@ async function main() {
   const rawLogFileSetting =
     getArg("log-file") ?? process.env.ADAPTER_LOG_FILE ?? "";
   const logFileSetting = rawLogFileSetting.trim();
+  let resolvedLogPath: string | undefined;
   if (logFileSetting) {
-    const resolvedLogPath = ["1", "true", "yes", "on"].includes(
+    resolvedLogPath = ["1", "true", "yes", "on"].includes(
       logFileSetting.toLowerCase(),
     )
       ? resolve(stateDirResolved, "bridge.log")
@@ -393,7 +394,14 @@ async function main() {
 
   // One machine-readable line the plugin waits for before it uses the bridge.
   console.log(
-    `CLAUDE_BRIDGE_READY ${JSON.stringify({ host: server.host, port: server.port, version: bridgeVersion })}`,
+    `CLAUDE_BRIDGE_READY ${JSON.stringify({
+      host: server.host,
+      port: server.port,
+      version: bridgeVersion,
+      runtimeCwd,
+      stateDir: stateDirResolved,
+      ...(resolvedLogPath ? { logFile: resolvedLogPath } : {}),
+    })}`,
   );
 }
 
