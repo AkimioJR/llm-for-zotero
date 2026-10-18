@@ -84,6 +84,11 @@ export default defineConfig({
   },
 
   test: {
+    // Tests must never probe or announce the user's own old bridge on port 19787.
+    prefs: {
+      "extensions.zotero.llmforzotero.claudeCodeLegacyDaemonCheck": false,
+      "extensions.zotero.llmforzotero.claudeCodeLegacyDaemonNoticeShown": true,
+    },
     entries:
       process.env.LLM_FOR_ZOTERO_TEST_ENTRIES ||
       (agentLiveTestsEnabled
