@@ -221,7 +221,17 @@ async function resolveWindowsClaudeShim(path: string): Promise<string> {
   return (await pathExists(cliJs)) ? cliJs : path;
 }
 
+export const CLAUDE_BRIDGE_OWN_BRIDGE_HINT =
+  "If Claude Code runs in WSL or on another computer, turn on “Use my own bridge” in Settings > Claude Code and enter its address.";
+
 function notFoundMessage(
+  kind: ClaudeBridgeBinaryKind,
+  explicitPath: string,
+): string {
+  return `${notFoundMessageBody(kind, explicitPath)} ${CLAUDE_BRIDGE_OWN_BRIDGE_HINT}`;
+}
+
+function notFoundMessageBody(
   kind: ClaudeBridgeBinaryKind,
   explicitPath: string,
 ): string {

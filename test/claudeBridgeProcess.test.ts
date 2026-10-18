@@ -528,6 +528,76 @@ describe("Claude Code bridge process", function () {
     assert.lengthOf(spawns, 0);
   });
 
+  describe("a bridge the user runs in WSL on Windows", function () {
+    const url = `${MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL}/models`;
+
+    beforeEach(function () {
+      // Windows looks for node.exe; explicit paths keep the fake binaries.
+      prefs.claudeCodeNodePath = "/usr/bin/node";
+      prefs.claudeCodeCliPath = "/home/u/.local/bin/claude";
+    });
+
+    it("is kept: mode saved as custom, nothing spawned, request goes to it", async function () {
+      globalScope.Zotero.isWin = true;
+      legacyHealth = { ok: true, protocolVersion: 2 };
+      const response = await claudeBridgeFetch(url);
+      assert.isTrue(response.ok);
+      assert.equal(prefs.claudeCodeBridgeMode, "custom");
+      assert.lengthOf(spawns, 0);
+      assert.equal(fetched.at(-1), "http://127.0.0.1:19787/models");
+      assert.equal(getClaudeBridgeUrl(), "http://127.0.0.1:19787");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.lengthOf(notices, 0);
+      assert.equal(getClaudeBridgeStatus().state, "stopped");
+    });
+
+    it("starts the managed bridge and leaves the mode unset when nothing answers", async function () {
+      globalScope.Zotero.isWin = true;
+      await claudeBridgeFetch(url);
+      assert.lengthOf(spawns, 1);
+      assert.isUndefined(prefs.claudeCodeBridgeMode);
+      assert.include(fetched, "http://127.0.0.1:19787/healthz");
+    });
+
+    it("does not probe when the user chose managed", async function () {
+      globalScope.Zotero.isWin = true;
+      prefs.claudeCodeBridgeMode = "managed";
+      // The one-time notice probes the port too; keep it out of this check.
+      prefs.claudeCodeLegacyDaemonNoticeShown = true;
+      legacyHealth = { ok: true, protocolVersion: 2 };
+      await claudeBridgeFetch(url);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.lengthOf(spawns, 1);
+      assert.equal(prefs.claudeCodeBridgeMode, "managed");
+      assert.notInclude(fetched, "http://127.0.0.1:19787/healthz");
+    });
+
+    it("still moves the old LaunchAgent bridge on macOS to the managed bridge", async function () {
+      globalScope.Zotero.isWin = false;
+      globalScope.Zotero.isMac = true;
+      legacyHealth = { ok: true, protocolVersion: 2 };
+      await claudeBridgeFetch(url);
+      assert.lengthOf(spawns, 1);
+      assert.isUndefined(prefs.claudeCodeBridgeMode);
+    });
+
+    it("adds the own-bridge hint to a not-found message", async function () {
+      delete prefs.claudeCodeCliPath;
+      existing.delete("/home/u/.local/bin/claude");
+      let error: unknown;
+      try {
+        await ensureClaudeBridgeRunning();
+      } catch (caught) {
+        error = caught;
+      }
+      assert.include(String(error), "Claude Code was not found.");
+      assert.include(
+        String(error),
+        "If Claude Code runs in WSL or on another computer, turn on “Use my own bridge” in Settings > Claude Code and enter its address.",
+      );
+    });
+  });
+
   it("passes extra bridge options through, except the ones the plugin owns", async function () {
     prefs.claudeCodeBridgeExtraArgs =
       '--additional-directories "~/My Papers" --port 9999 --setting-sources user';

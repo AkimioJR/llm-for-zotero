@@ -33,6 +33,9 @@ import {
   DEFAULT_CLAUDE_BRIDGE_URL,
   getClaudeBridgeExtraArgsPref,
   getClaudeBridgeMode,
+  getCustomClaudeBridgeUrl,
+  isClaudeBridgeModeImplicit,
+  setClaudeBridgeMode,
   getClaudeBridgeNodePathPref,
   getClaudeCliPathPref,
   hasShownClaudeLegacyDaemonNotice,
@@ -536,6 +539,26 @@ async function launchBridge(): Promise<string> {
 }
 
 /**
+ * People on Windows often run the bridge in WSL on the default address. While
+ * the user has not chosen a mode, an unmarked bridge answering there is their
+ * own: save "custom" and return its URL so the managed bridge is not started
+ * (node and claude live in WSL, so it would fail). When nothing answers, the
+ * mode stays unset so a later run can still find a bridge started afterwards.
+ * On macOS the same answer is the old LaunchAgent, which moves to the managed
+ * bridge, so this is Windows only. Returns null to start the managed bridge.
+ */
+async function adoptOwnWindowsBridge(): Promise<string | null> {
+  if (getRuntimePlatformInfo().platform !== "windows") return null;
+  if (!isClaudeBridgeModeImplicit()) return null;
+  if (!(await detectLegacyClaudeBridge())) return null;
+  setClaudeBridgeMode("custom");
+  appLogger.info(
+    "LLM: a Claude Code bridge answers on the default address; using it as your own bridge",
+  );
+  return getCustomClaudeBridgeUrl().replace(/\/+$/, "");
+}
+
+/**
  * Starts the bridge if it is not running, and returns its base URL. Refuses
  * while Claude Code mode is off. Concurrent callers share one start. After
  * repeated crashes it stops trying until the user presses Restart, so a
@@ -560,7 +583,12 @@ export async function ensureClaudeBridgeRunning(): Promise<string> {
     throw new Error(message);
   }
   setStatus({ state: "starting" });
-  startPromise = launchBridge()
+  startPromise = adoptOwnWindowsBridge()
+    .then((ownUrl) => {
+      if (ownUrl === null) return launchBridge();
+      setStatus({ state: "stopped" });
+      return ownUrl;
+    })
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       if (!shuttingDown) setStatus({ ...status, state: "failed", message });

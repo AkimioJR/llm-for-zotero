@@ -195,6 +195,12 @@ export function getClaudeBridgeMode(): ClaudeBridgeMode {
     : "custom";
 }
 
+/** True while the user has not chosen a mode and it comes from the URL. */
+export function isClaudeBridgeModeImplicit(): boolean {
+  const explicit = getStringPref("claudeCodeBridgeMode").trim();
+  return explicit !== "managed" && explicit !== "custom";
+}
+
 export function setClaudeBridgeMode(mode: ClaudeBridgeMode): void {
   setPref("claudeCodeBridgeMode", mode);
 }
