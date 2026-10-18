@@ -100,48 +100,50 @@ export interface RuntimePermissionModeCatalog {
   configuredDefaultMode?: string;
 }
 
-export type StructuredCompletionRequest = { prompt: string; model?: string; timeoutMs: number; signal?: AbortSignal };
+export type StructuredCompletionRequest = {
+  prompt: string;
+  model?: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+};
 export type StructuredCompletionResult = { text: string };
 
 export interface ClaudeCodeRuntimeClient {
   getAccountQuota?(
     options?: RuntimeAccountQuotaOptions,
   ): Promise<RuntimeAccountQuota | null>;
-  completeStructured?(request: StructuredCompletionRequest): Promise<StructuredCompletionResult>;
+  completeStructured?(
+    request: StructuredCompletionRequest,
+  ): Promise<StructuredCompletionResult>;
   startTurn(request: RuntimeTurnRequest): Promise<RuntimeTurnStream>;
-  retainHotRuntime?(request: RuntimeTurnRequest, mountId: string): Promise<void>;
+  retainHotRuntime?(
+    request: RuntimeTurnRequest,
+    mountId: string,
+  ): Promise<void>;
   warmHotRuntime?(request: RuntimeTurnRequest): Promise<void>;
   releaseHotRuntime?(conversationKey: string, mountId: string): Promise<void>;
   invalidateHotRuntime?(conversationKey: string): Promise<void>;
   invalidateAllHotRuntimes?(): Promise<void>;
-  listCommands?(
-    options?: {
-      settingSources?: Array<"user" | "project" | "local">;
-    }
-  ): Promise<Array<{ name: string; description: string; argumentHint: string }>>;
-  listModels?(
-    options?: {
-      settingSources?: Array<"user" | "project" | "local">;
-      runtimeCwdRelative?: string;
-      forceRefresh?: boolean;
-    }
-  ): Promise<Array<RuntimeModelInfo | string>>;
-  listEfforts?(
-    options?: {
-      model?: string;
-      settingSources?: Array<"user" | "project" | "local">;
-      runtimeCwdRelative?: string;
-    }
-  ): Promise<string[]>;
-  listPermissionModes?(
-    options?: {
-      settingSources?: Array<"user" | "project" | "local">;
-      runtimeCwdRelative?: string;
-    }
-  ): Promise<RuntimePermissionModeCatalog>;
-  listMcpServers?(
-    options?: {
-      settingSources?: Array<"user" | "project" | "local">;
-    }
-  ): Promise<McpServerStatus[]>;
+  listCommands?(options?: {
+    settingSources?: Array<"user" | "project" | "local">;
+  }): Promise<
+    Array<{ name: string; description: string; argumentHint: string }>
+  >;
+  listModels?(options?: {
+    settingSources?: Array<"user" | "project" | "local">;
+    runtimeCwdRelative?: string;
+    forceRefresh?: boolean;
+  }): Promise<Array<RuntimeModelInfo | string>>;
+  listEfforts?(options?: {
+    model?: string;
+    settingSources?: Array<"user" | "project" | "local">;
+    runtimeCwdRelative?: string;
+  }): Promise<string[]>;
+  listPermissionModes?(options?: {
+    settingSources?: Array<"user" | "project" | "local">;
+    runtimeCwdRelative?: string;
+  }): Promise<RuntimePermissionModeCatalog>;
+  listMcpServers?(options?: {
+    settingSources?: Array<"user" | "project" | "local">;
+  }): Promise<McpServerStatus[]>;
 }

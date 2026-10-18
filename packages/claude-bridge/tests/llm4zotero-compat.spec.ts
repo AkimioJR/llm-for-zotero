@@ -18,14 +18,13 @@ function createRuntimeWithCommand(): string {
   return runtimeCwd;
 }
 
-
 function providerEvents(events: ProviderEvent[]): AsyncIterable<ProviderEvent> {
   return {
     async *[Symbol.asyncIterator]() {
       for (const event of events) {
         yield event;
       }
-    }
+    },
   };
 }
 
@@ -38,17 +37,23 @@ describe("Llm4ZoteroAgentBackendAdapter", () => {
           events: providerEvents([
             { type: "status", payload: { label: "running" } },
             { type: "message_delta", payload: { delta: "hello " } },
-            { type: "tool_call", payload: { id: "call_1", name: "Read", input: { path: "a.ts" } } },
-            { type: "tool_result", payload: { toolUseId: "call_1", name: "Read", content: "ok" } },
-            { type: "final", payload: { output: "hello world" } }
-          ])
+            {
+              type: "tool_call",
+              payload: { id: "call_1", name: "Read", input: { path: "a.ts" } },
+            },
+            {
+              type: "tool_result",
+              payload: { toolUseId: "call_1", name: "Read", content: "ok" },
+            },
+            { type: "final", payload: { output: "hello world" } },
+          ]),
         };
-      }
+      },
     };
 
     const base = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
-      sessionMapper: new InMemorySessionMapper()
+      sessionMapper: new InMemorySessionMapper(),
     });
 
     const compat = new Llm4ZoteroAgentBackendAdapter({ adapter: base });
@@ -58,12 +63,16 @@ describe("Llm4ZoteroAgentBackendAdapter", () => {
     const outcome = await compat.runTurn({
       request: {
         conversationKey: 42,
-        userText: "test"
+        userText: "test",
       },
       onEvent(event) {
-        if (event.type === "provider_event" && (event as any).providerType === "profiling") return;
+        if (
+          event.type === "provider_event" &&
+          (event as any).providerType === "profiling"
+        )
+          return;
         seen.push({ type: event.type, payload: event });
-      }
+      },
     });
 
     expect(outcome.kind).toBe("completed");
@@ -73,7 +82,7 @@ describe("Llm4ZoteroAgentBackendAdapter", () => {
       "message_delta",
       "tool_call",
       "tool_result",
-      "final"
+      "final",
     ]);
   });
 
@@ -83,10 +92,10 @@ describe("Llm4ZoteroAgentBackendAdapter", () => {
         return {
           runId: "run-z-2",
           events: providerEvents([
-            { type: "status", payload: { text: "starting" } }
-          ])
+            { type: "status", payload: { text: "starting" } },
+          ]),
         };
-      }
+      },
     };
 
     const base = new ClaudeCodeRuntimeAdapter({
@@ -100,16 +109,16 @@ describe("Llm4ZoteroAgentBackendAdapter", () => {
                 yield ev;
               }
               throw new Error("boom");
-            })()
+            })(),
           };
-        }
+        },
       },
-      sessionMapper: new InMemorySessionMapper()
+      sessionMapper: new InMemorySessionMapper(),
     });
 
     const compat = new Llm4ZoteroAgentBackendAdapter({ adapter: base });
     const outcome = await compat.runTurn({
-      request: { conversationKey: "conv-fail", userText: "x" }
+      request: { conversationKey: "conv-fail", userText: "x" },
     });
 
     expect(outcome.kind).toBe("fallback");
@@ -124,15 +133,15 @@ describe("Llm4ZoteroAgentBackendAdapter", () => {
           events: providerEvents([
             { type: "unknown", payload: { sourceType: "stream_event" } },
             { type: "message_delta", payload: { delta: "hello" } },
-            { type: "final", payload: { output: "hello" } }
-          ])
+            { type: "final", payload: { output: "hello" } },
+          ]),
         };
-      }
+      },
     };
 
     const base = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
-      sessionMapper: new InMemorySessionMapper()
+      sessionMapper: new InMemorySessionMapper(),
     });
 
     const compat = new Llm4ZoteroAgentBackendAdapter({ adapter: base });
@@ -141,9 +150,13 @@ describe("Llm4ZoteroAgentBackendAdapter", () => {
     const outcome = await compat.runTurn({
       request: { conversationKey: "conv-noise", userText: "x" },
       onEvent(event) {
-        if (event.type === "provider_event" && (event as any).providerType === "profiling") return;
+        if (
+          event.type === "provider_event" &&
+          (event as any).providerType === "profiling"
+        )
+          return;
         seen.push(event.type);
-      }
+      },
     });
 
     expect(outcome.kind).toBe("completed");
@@ -157,7 +170,9 @@ describe("Llm4ZoteroAgentBackendAdapter", () => {
         turnCalls += 1;
         return {
           runId: "run-z-blocked",
-          events: providerEvents([{ type: "final", payload: { output: "should not run" } }]),
+          events: providerEvents([
+            { type: "final", payload: { output: "should not run" } },
+          ]),
         };
       },
     };
@@ -170,7 +185,9 @@ describe("Llm4ZoteroAgentBackendAdapter", () => {
       adapter: base,
       runtimeCwd: createRuntimeWithCommand(),
     });
-    const candidateTool = (await compat.listTools({ settingSources: ["project"] }))[0];
+    const candidateTool = (
+      await compat.listTools({ settingSources: ["project"] })
+    )[0];
     expect(candidateTool).toBeDefined();
 
     const seen: string[] = [];

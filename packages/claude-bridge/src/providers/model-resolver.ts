@@ -18,9 +18,7 @@ export interface ModelInfo {
 
 function cleanModelName(value: unknown): string {
   if (typeof value !== "string") return "";
-  return value
-    .replace(/\u001b\[[0-9;]*m/g, "")
-    .trim();
+  return value.replace(/\u001b\[[0-9;]*m/g, "").trim();
 }
 
 export function normalizeProviderModelName(value: unknown): string {
@@ -55,7 +53,10 @@ function evictOldestModelCacheEntries(): void {
   }
 }
 
-function getCacheKey(settingSources: string[], providerKey = "default"): string {
+function getCacheKey(
+  settingSources: string[],
+  providerKey = "default",
+): string {
   return `${providerKey}::${settingSources.join(",")}`;
 }
 
@@ -101,7 +102,7 @@ export function setCachedModels(
  */
 export function resolveModelAlias(
   alias: string,
-  availableModels: ModelInfo[]
+  availableModels: ModelInfo[],
 ): string | undefined {
   const normalizedAlias = normalizeProviderModelName(alias);
   if (!normalizedAlias) return undefined;

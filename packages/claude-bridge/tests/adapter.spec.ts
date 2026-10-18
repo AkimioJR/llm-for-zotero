@@ -11,7 +11,7 @@ function providerEvents(events: ProviderEvent[]): AsyncIterable<ProviderEvent> {
       for (const event of events) {
         yield event;
       }
-    }
+    },
   };
 }
 
@@ -26,32 +26,33 @@ describe("ClaudeCodeRuntimeAdapter", () => {
             { type: "message_delta", payload: { delta: "Hello" } },
             { type: "message_delta", payload: { delta: " " } },
             { type: "message_delta", payload: { delta: "world" } },
-            { type: "final", payload: { output: "Hello world" } }
-          ])
+            { type: "final", payload: { output: "Hello world" } },
+          ]),
         };
-      }
+      },
     };
 
     const seen: Array<{ type: string; delta?: string }> = [];
     const adapter = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
-      sessionMapper: new InMemorySessionMapper()
+      sessionMapper: new InMemorySessionMapper(),
     });
 
     const outcome = await adapter.runTurn(
       {
         conversationKey: "conv-coalesce",
-        userMessage: "hello"
+        userMessage: "hello",
       },
       {
         onEvent(event) {
           if (event.type === "provider_event") return;
           seen.push({
             type: event.type,
-            delta: event.type === "message_delta" ? event.payload.delta : undefined,
+            delta:
+              event.type === "message_delta" ? event.payload.delta : undefined,
           });
-        }
-      }
+        },
+      },
     );
 
     expect(outcome.status).toBe("completed");
@@ -72,10 +73,10 @@ describe("ClaudeCodeRuntimeAdapter", () => {
             { type: "status", payload: { label: "running" } },
             { type: "message_delta", payload: { delta: "Hello " } },
             { type: "message_delta", payload: { delta: "world" } },
-            { type: "final", payload: { output: "Hello world" } }
-          ])
+            { type: "final", payload: { output: "Hello world" } },
+          ]),
         };
-      }
+      },
     };
 
     const sessionMapper = new InMemorySessionMapper();
@@ -83,7 +84,7 @@ describe("ClaudeCodeRuntimeAdapter", () => {
     const adapter = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
       sessionMapper,
-      traceStore
+      traceStore,
     });
 
     const seenTypes: string[] = [];
@@ -91,14 +92,14 @@ describe("ClaudeCodeRuntimeAdapter", () => {
     const outcome = await adapter.runTurn(
       {
         conversationKey: "conv-A",
-        userMessage: "summarize this"
+        userMessage: "summarize this",
       },
       {
         onEvent(event) {
           if (event.type === "provider_event") return;
           seenTypes.push(event.type);
-        }
-      }
+        },
+      },
     );
 
     expect(outcome.status).toBe("completed");
@@ -138,12 +139,17 @@ describe("ClaudeCodeRuntimeAdapter", () => {
                 payload: {
                   providerType: "stream_event",
                   sessionId: "ephemeral-session",
-                  payload: { event: { delta: { text: `Read ${firstPathChunk}` } } },
+                  payload: {
+                    event: { delta: { text: `Read ${firstPathChunk}` } },
+                  },
                 },
               },
               {
                 type: "message_delta",
-                payload: { delta: `Read ${firstPathChunk}`, sessionId: "ephemeral-session" },
+                payload: {
+                  delta: `Read ${firstPathChunk}`,
+                  sessionId: "ephemeral-session",
+                },
               },
               {
                 type: "reasoning",
@@ -163,7 +169,10 @@ describe("ClaudeCodeRuntimeAdapter", () => {
               },
               {
                 type: "message_delta",
-                payload: { delta: secondPathChunk, sessionId: "ephemeral-session" },
+                payload: {
+                  delta: secondPathChunk,
+                  sessionId: "ephemeral-session",
+                },
               },
               {
                 type: "reasoning",
@@ -177,13 +186,19 @@ describe("ClaudeCodeRuntimeAdapter", () => {
                 type: "tool_call",
                 payload: {
                   name: "Read",
-                  input: { file_path: pdfPath, session_id: "ephemeral-session" },
+                  input: {
+                    file_path: pdfPath,
+                    session_id: "ephemeral-session",
+                  },
                   sessionId: "ephemeral-session",
                 },
               },
               {
                 type: "final",
-                payload: { output: `Read ${pdfPath}`, sessionId: "ephemeral-session" },
+                payload: {
+                  output: `Read ${pdfPath}`,
+                  sessionId: "ephemeral-session",
+                },
               },
             ]),
           };
@@ -201,34 +216,43 @@ describe("ClaudeCodeRuntimeAdapter", () => {
     const sessionMapper = new InMemorySessionMapper();
     await sessionMapper.set("conv-pdf-continuity", "old-persistent-session");
     const traceStore = new InMemoryTraceStore();
-    const adapter = new ClaudeCodeRuntimeAdapter({ runtimeClient, sessionMapper, traceStore });
+    const adapter = new ClaudeCodeRuntimeAdapter({
+      runtimeClient,
+      sessionMapper,
+      traceStore,
+    });
     const seenEvents: AgentEvent[] = [];
 
-    const pdfOutcome = await adapter.runTurn({
-      conversationKey: "conv-pdf-continuity",
-      userMessage: "read it",
-      providerSessionId: "old-persistent-session",
-      runtimeRequest: {
-        history: [
-          { role: "user", content: "earlier question" },
-          { role: "assistant", content: "earlier answer" },
-        ],
-        localDocuments: [{
-          kind: "local_pdf",
-          sourceKey: "zotero-pdf:10:20",
-          itemId: 10,
-          contextItemId: 20,
-          title: "Paper",
-          name: "paper a.pdf",
-          mimeType: "application/pdf",
-          absolutePath: pdfPath,
-        }],
+    const pdfOutcome = await adapter.runTurn(
+      {
+        conversationKey: "conv-pdf-continuity",
+        userMessage: "read it",
+        providerSessionId: "old-persistent-session",
+        runtimeRequest: {
+          history: [
+            { role: "user", content: "earlier question" },
+            { role: "assistant", content: "earlier answer" },
+          ],
+          localDocuments: [
+            {
+              kind: "local_pdf",
+              sourceKey: "zotero-pdf:10:20",
+              itemId: 10,
+              contextItemId: 20,
+              title: "Paper",
+              name: "paper a.pdf",
+              mimeType: "application/pdf",
+              absolutePath: pdfPath,
+            },
+          ],
+        },
       },
-    }, {
-      onEvent(event) {
-        seenEvents.push(event);
+      {
+        onEvent(event) {
+          seenEvents.push(event);
+        },
       },
-    });
+    );
 
     expect(seenRequests[0]).toEqual({
       providerSessionId: undefined,
@@ -237,12 +261,16 @@ describe("ClaudeCodeRuntimeAdapter", () => {
     expect(pdfOutcome.providerSessionId).toBeUndefined();
     expect(pdfOutcome.finalText).not.toContain(pdfPath);
     expect(await sessionMapper.get("conv-pdf-continuity")).toBeUndefined();
-    expect(await sessionMapper.get("conv-pdf-continuity::local-pdf-history-gap")).toBe("1");
+    expect(
+      await sessionMapper.get("conv-pdf-continuity::local-pdf-history-gap"),
+    ).toBe("1");
     const serializedEvents = JSON.stringify(seenEvents);
     expect(serializedEvents).not.toContain(pdfPath);
     expect(serializedEvents).not.toContain(firstPathChunk);
     expect(serializedEvents).not.toContain(secondPathChunk);
-    const serializedTraces = JSON.stringify(await traceStore.list("conv-pdf-continuity"));
+    const serializedTraces = JSON.stringify(
+      await traceStore.list("conv-pdf-continuity"),
+    );
     expect(serializedTraces).not.toContain(pdfPath);
     expect(serializedTraces).not.toContain(firstPathChunk);
     expect(serializedTraces).not.toContain(secondPathChunk);
@@ -265,8 +293,12 @@ describe("ClaudeCodeRuntimeAdapter", () => {
       fallbackHistory: true,
     });
     expect(normalOutcome.providerSessionId).toBe("new-persistent-session");
-    expect(await sessionMapper.get("conv-pdf-continuity")).toBe("new-persistent-session");
-    expect(await sessionMapper.get("conv-pdf-continuity::local-pdf-history-gap")).toBeUndefined();
+    expect(await sessionMapper.get("conv-pdf-continuity")).toBe(
+      "new-persistent-session",
+    );
+    expect(
+      await sessionMapper.get("conv-pdf-continuity::local-pdf-history-gap"),
+    ).toBeUndefined();
   });
 
   it("resumes the base conversation session when provider identity changes", async () => {
@@ -318,7 +350,10 @@ describe("ClaudeCodeRuntimeAdapter", () => {
     };
 
     const sessionMapper = new InMemorySessionMapper();
-    await sessionMapper.set("conv-legacy::provider:provider-a", "legacy-session");
+    await sessionMapper.set(
+      "conv-legacy::provider:provider-a",
+      "legacy-session",
+    );
     const adapter = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
       sessionMapper,
@@ -339,14 +374,14 @@ describe("ClaudeCodeRuntimeAdapter", () => {
       async startTurn() {
         return {
           runId: "run-2",
-          events: providerEvents([{ type: "unknown", payload: { raw: true } }])
+          events: providerEvents([{ type: "unknown", payload: { raw: true } }]),
         };
-      }
+      },
     };
 
     const adapter = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
-      sessionMapper: new InMemorySessionMapper()
+      sessionMapper: new InMemorySessionMapper(),
     });
 
     const seenTypes: string[] = [];
@@ -354,7 +389,7 @@ describe("ClaudeCodeRuntimeAdapter", () => {
     await adapter.runTurn(
       {
         conversationKey: "conv-B",
-        userMessage: "hello"
+        userMessage: "hello",
       },
       {
         onEvent(event) {
@@ -362,13 +397,14 @@ describe("ClaudeCodeRuntimeAdapter", () => {
             event.type === "provider_event" &&
             event.payload &&
             typeof event.payload === "object" &&
-            (event.payload as Record<string, unknown>).providerType === "profiling"
+            (event.payload as Record<string, unknown>).providerType ===
+              "profiling"
           ) {
             return;
           }
           seenTypes.push(event.type);
-        }
-      }
+        },
+      },
     );
 
     expect(seenTypes).toEqual(["provider_event"]);
@@ -391,17 +427,17 @@ describe("ClaudeCodeRuntimeAdapter", () => {
           providerSessionId: "fresh-session-id",
           events: providerEvents([
             { type: "message_delta", payload: { delta: "ok" } },
-            { type: "final", payload: { output: "ok" } }
-          ])
+            { type: "final", payload: { output: "ok" } },
+          ]),
         };
-      }
+      },
     };
 
     const sessionMapper = new InMemorySessionMapper();
     await sessionMapper.set("conv-retry", "stale-session");
     const adapter = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
-      sessionMapper
+      sessionMapper,
     });
 
     const seenStatuses: string[] = [];
@@ -418,11 +454,14 @@ describe("ClaudeCodeRuntimeAdapter", () => {
       },
       {
         onEvent(event) {
-          if (event.type === "status" && typeof event.payload.text === "string") {
+          if (
+            event.type === "status" &&
+            typeof event.payload.text === "string"
+          ) {
             seenStatuses.push(event.payload.text);
           }
-        }
-      }
+        },
+      },
     );
 
     expect(callCount).toBe(2);
@@ -431,7 +470,11 @@ describe("ClaudeCodeRuntimeAdapter", () => {
     expect(outcome.status).toBe("completed");
     expect(outcome.finalText).toBe("ok");
     expect(await sessionMapper.get("conv-retry")).toBe("fresh-session-id");
-    expect(seenStatuses.some((line) => line.includes("Claude session resume failed"))).toBe(true);
+    expect(
+      seenStatuses.some((line) =>
+        line.includes("Claude session resume failed"),
+      ),
+    ).toBe(true);
   });
 
   it("clears mapper and hot runtime on explicit invalidation", async () => {
@@ -450,13 +493,19 @@ describe("ClaudeCodeRuntimeAdapter", () => {
 
     const sessionMapper = new InMemorySessionMapper();
     await sessionMapper.set("conv-invalidate", "stale-session");
-    await sessionMapper.set("conv-invalidate::provider:provider-a", "stale-session-provider");
+    await sessionMapper.set(
+      "conv-invalidate::provider:provider-a",
+      "stale-session-provider",
+    );
     const adapter = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
       sessionMapper,
     });
 
-    await sessionMapper.set("conv-invalidate::provider:provider-b", "stale-session-provider-b");
+    await sessionMapper.set(
+      "conv-invalidate::provider:provider-b",
+      "stale-session-provider-b",
+    );
 
     await adapter.invalidateConversationSession({
       conversationKey: "conv-invalidate",
@@ -464,8 +513,12 @@ describe("ClaudeCodeRuntimeAdapter", () => {
     });
 
     expect(await sessionMapper.get("conv-invalidate")).toBeUndefined();
-    expect(await sessionMapper.get("conv-invalidate::provider:provider-a")).toBeUndefined();
-    expect(await sessionMapper.get("conv-invalidate::provider:provider-b")).toBeUndefined();
+    expect(
+      await sessionMapper.get("conv-invalidate::provider:provider-a"),
+    ).toBeUndefined();
+    expect(
+      await sessionMapper.get("conv-invalidate::provider:provider-b"),
+    ).toBeUndefined();
     expect(invalidatedConversationKey).toBe("conv-invalidate");
   });
 
@@ -501,6 +554,8 @@ describe("ClaudeCodeRuntimeAdapter", () => {
     expect(outcome.status).toBe("completed");
     expect(seenResumes).toEqual([undefined]);
     expect(await sessionMapper.get("conv-fresh")).toBe("fresh-session");
-    expect(await sessionMapper.get("conv-fresh::provider:provider-a")).toBeUndefined();
+    expect(
+      await sessionMapper.get("conv-fresh::provider:provider-a"),
+    ).toBeUndefined();
   });
 });

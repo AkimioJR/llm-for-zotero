@@ -2,7 +2,9 @@ import type { AgentEvent } from "../types.js";
 import type { Llm4ZoteroAgentEvent } from "../bridge/llm4zotero-contract.js";
 
 function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function asString(value: unknown, fallback = ""): string {
@@ -13,7 +15,9 @@ function asNumber(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-export function mapToLlm4ZoteroEvent(event: AgentEvent): Llm4ZoteroAgentEvent | null {
+export function mapToLlm4ZoteroEvent(
+  event: AgentEvent,
+): Llm4ZoteroAgentEvent | null {
   const payload = asRecord(event.payload);
 
   switch (event.type) {
@@ -25,7 +29,11 @@ export function mapToLlm4ZoteroEvent(event: AgentEvent): Llm4ZoteroAgentEvent | 
       return {
         type: "provider_event",
         providerType: asString(payload.providerType) || "unknown",
-        sessionId: asString(payload.sessionId) || asString(rawPayload.sessionId) || asString(rawPayload.session_id) || undefined,
+        sessionId:
+          asString(payload.sessionId) ||
+          asString(rawPayload.sessionId) ||
+          asString(rawPayload.session_id) ||
+          undefined,
         payload: rawPayload,
         ts: asNumber(payload.ts, event.ts),
       };
@@ -43,7 +51,7 @@ export function mapToLlm4ZoteroEvent(event: AgentEvent): Llm4ZoteroAgentEvent | 
         type: "tool_call",
         callId: asString(payload.callId) || asString(payload.id),
         name: asString(payload.name),
-        args: payload.args ?? payload.input ?? {}
+        args: payload.args ?? payload.input ?? {},
       };
     }
     case "tool_result": {
@@ -53,7 +61,9 @@ export function mapToLlm4ZoteroEvent(event: AgentEvent): Llm4ZoteroAgentEvent | 
         name: asString(payload.name),
         ok: typeof payload.ok === "boolean" ? payload.ok : true,
         content: payload.content,
-        artifacts: Array.isArray(payload.artifacts) ? payload.artifacts : undefined
+        artifacts: Array.isArray(payload.artifacts)
+          ? payload.artifacts
+          : undefined,
       };
     }
     case "tool_error": {
@@ -61,15 +71,16 @@ export function mapToLlm4ZoteroEvent(event: AgentEvent): Llm4ZoteroAgentEvent | 
         type: "tool_error",
         callId: asString(payload.callId) || asString(payload.id),
         name: asString(payload.name),
-        error: asString(payload.error) || asString(payload.message) || "tool_error",
-        round: asNumber(payload.round, 0)
+        error:
+          asString(payload.error) || asString(payload.message) || "tool_error",
+        round: asNumber(payload.round, 0),
       };
     }
     case "confirmation_required": {
       return {
         type: "confirmation_required",
         requestId: asString(payload.requestId) || asString(payload.id),
-        action: payload.action
+        action: payload.action,
       };
     }
     case "confirmation_resolved": {
@@ -78,7 +89,7 @@ export function mapToLlm4ZoteroEvent(event: AgentEvent): Llm4ZoteroAgentEvent | 
         requestId: asString(payload.requestId) || asString(payload.id),
         approved: Boolean(payload.approved),
         actionId: asString(payload.actionId) || undefined,
-        data: payload.data
+        data: payload.data,
       };
     }
     case "reasoning": {
@@ -92,14 +103,14 @@ export function mapToLlm4ZoteroEvent(event: AgentEvent): Llm4ZoteroAgentEvent | 
     case "message_delta": {
       return {
         type: "message_delta",
-        text: asString(payload.text) || asString(payload.delta)
+        text: asString(payload.text) || asString(payload.delta),
       };
     }
     case "message_rollback": {
       return {
         type: "message_rollback",
         length: asNumber(payload.length),
-        text: asString(payload.text)
+        text: asString(payload.text),
       };
     }
     case "usage": {
@@ -110,13 +121,18 @@ export function mapToLlm4ZoteroEvent(event: AgentEvent): Llm4ZoteroAgentEvent | 
         cacheCreationInputTokens: asNumber(payload.cacheCreationInputTokens),
         cacheReadInputTokens: asNumber(payload.cacheReadInputTokens),
         contextTokens: asNumber(payload.contextTokens),
-        contextWindow: typeof payload.contextWindow === "number" && Number.isFinite(payload.contextWindow)
-          ? payload.contextWindow
-          : undefined,
-        contextWindowIsAuthoritative: payload.contextWindowIsAuthoritative === true,
-        percentage: typeof payload.percentage === "number" && Number.isFinite(payload.percentage)
-          ? payload.percentage
-          : undefined,
+        contextWindow:
+          typeof payload.contextWindow === "number" &&
+          Number.isFinite(payload.contextWindow)
+            ? payload.contextWindow
+            : undefined,
+        contextWindowIsAuthoritative:
+          payload.contextWindowIsAuthoritative === true,
+        percentage:
+          typeof payload.percentage === "number" &&
+          Number.isFinite(payload.percentage)
+            ? payload.percentage
+            : undefined,
         sessionId: asString(payload.sessionId) || undefined,
         model: asString(payload.model) || undefined,
       };
@@ -131,13 +147,13 @@ export function mapToLlm4ZoteroEvent(event: AgentEvent): Llm4ZoteroAgentEvent | 
       const reason = asString(payload.reason) || "fallback";
       return {
         type: "fallback",
-        reason
+        reason,
       };
     }
     case "final": {
       return {
         type: "final",
-        text: asString(payload.text) || asString(payload.output)
+        text: asString(payload.text) || asString(payload.output),
       };
     }
     default:

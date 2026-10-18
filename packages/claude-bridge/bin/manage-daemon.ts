@@ -1,6 +1,12 @@
 #!/usr/bin/env tsx
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +18,13 @@ const DEFAULT_PORT = "19787";
 const HEALTH_PATH = "/healthz";
 const HELP_BASE_URL = `http://127.0.0.1:${DEFAULT_PORT}`;
 
-type CommandName = "install" | "start" | "stop" | "restart" | "status" | "uninstall";
+type CommandName =
+  | "install"
+  | "start"
+  | "stop"
+  | "restart"
+  | "status"
+  | "uninstall";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
@@ -40,10 +52,16 @@ const daemonPath = [
   "/sbin",
 ].join(":");
 
-function run(cmd: string, args: string[], opts?: { allowFailure?: boolean; silent?: boolean }): string {
+function run(
+  cmd: string,
+  args: string[],
+  opts?: { allowFailure?: boolean; silent?: boolean },
+): string {
   const result = spawnSync(cmd, args, {
     encoding: "utf8",
-    stdio: opts?.silent ? ["ignore", "pipe", "pipe"] : ["inherit", "pipe", "pipe"],
+    stdio: opts?.silent
+      ? ["ignore", "pipe", "pipe"]
+      : ["inherit", "pipe", "pipe"],
   });
   const out = `${result.stdout || ""}${result.stderr || ""}`.trim();
   if (result.status !== 0 && !opts?.allowFailure) {
@@ -118,13 +136,20 @@ function ensureNodeAndNpm(): void {
 }
 
 function hasLaunchdEntry(): boolean {
-  const output = run("launchctl", ["list"], { allowFailure: true, silent: true });
+  const output = run("launchctl", ["list"], {
+    allowFailure: true,
+    silent: true,
+  });
   return output.split("\n").some((line) => line.includes(SERVICE_LABEL));
 }
 
 function bootstrap(): void {
-  run("launchctl", ["bootstrap", `gui/${uid}`, plistPath], { allowFailure: true });
-  run("launchctl", ["enable", `gui/${uid}/${SERVICE_LABEL}`], { allowFailure: true });
+  run("launchctl", ["bootstrap", `gui/${uid}`, plistPath], {
+    allowFailure: true,
+  });
+  run("launchctl", ["enable", `gui/${uid}/${SERVICE_LABEL}`], {
+    allowFailure: true,
+  });
 }
 
 function install(): void {
@@ -132,7 +157,9 @@ function install(): void {
   ensureDirectories();
   const xml = buildPlistXml();
   writeFileSync(plistPath, xml, "utf8");
-  run("launchctl", ["bootout", `gui/${uid}/${SERVICE_LABEL}`], { allowFailure: true });
+  run("launchctl", ["bootout", `gui/${uid}/${SERVICE_LABEL}`], {
+    allowFailure: true,
+  });
   bootstrap();
   console.log(`Installed ${SERVICE_LABEL}`);
   console.log(`plist: ${plistPath}`);
@@ -155,7 +182,11 @@ function stop(): void {
   console.log(`Stopped ${SERVICE_LABEL}`);
 }
 
-async function healthCheck(): Promise<{ ok: boolean; status?: number; error?: string }> {
+async function healthCheck(): Promise<{
+  ok: boolean;
+  status?: number;
+  error?: string;
+}> {
   const target = `${HELP_BASE_URL}${HEALTH_PATH}`;
   try {
     const response = await fetch(target, {
@@ -165,7 +196,10 @@ async function healthCheck(): Promise<{ ok: boolean; status?: number; error?: st
     });
     return { ok: response.ok, status: response.status };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -178,13 +212,17 @@ async function status(): Promise<void> {
   const health = await healthCheck();
   console.log(`Service: ${SERVICE_LABEL}`);
   console.log(`Loaded: ${loaded ? "yes" : "no"}`);
-  console.log(`Plist: ${plistPath} ${existsSync(plistPath) ? "(exists)" : "(missing)"}`);
+  console.log(
+    `Plist: ${plistPath} ${existsSync(plistPath) ? "(exists)" : "(missing)"}`,
+  );
   if (serviceSummary) {
     console.log("launchctl:");
     console.log(serviceSummary);
   }
   if (health.ok) {
-    console.log(`Health: OK (${HELP_BASE_URL}${HEALTH_PATH}, HTTP ${health.status})`);
+    console.log(
+      `Health: OK (${HELP_BASE_URL}${HEALTH_PATH}, HTTP ${health.status})`,
+    );
   } else {
     console.log(`Health: DOWN (${HELP_BASE_URL}${HEALTH_PATH})`);
     if (health.error) {
@@ -200,8 +238,12 @@ async function status(): Promise<void> {
 
 function uninstall(): void {
   run("launchctl", ["stop", SERVICE_LABEL], { allowFailure: true });
-  run("launchctl", ["bootout", `gui/${uid}/${SERVICE_LABEL}`], { allowFailure: true });
-  run("launchctl", ["disable", `gui/${uid}/${SERVICE_LABEL}`], { allowFailure: true });
+  run("launchctl", ["bootout", `gui/${uid}/${SERVICE_LABEL}`], {
+    allowFailure: true,
+  });
+  run("launchctl", ["disable", `gui/${uid}/${SERVICE_LABEL}`], {
+    allowFailure: true,
+  });
   if (existsSync(plistPath)) {
     rmSync(plistPath, { force: true });
   }
@@ -219,7 +261,9 @@ function printUsage(): void {
   const pkg = readFileSync(resolve(repoRoot, "package.json"), "utf8");
   const version = JSON.parse(pkg).version as string;
   console.log(`cc-llm4zotero-adapter daemon manager v${version}`);
-  console.log("Usage: tsx bin/manage-daemon.ts <install|start|stop|restart|status|uninstall>");
+  console.log(
+    "Usage: tsx bin/manage-daemon.ts <install|start|stop|restart|status|uninstall>",
+  );
 }
 
 async function main(): Promise<void> {

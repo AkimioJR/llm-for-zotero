@@ -19,9 +19,13 @@ const posixOnly = process.platform === "win32" ? describe.skip : describe;
 posixOnly("collectLocalPdfs on POSIX", () => {
   it("maps a Windows drive-letter path onto the WSL automount root", () => {
     const [pdf] = collectLocalPdfs({
-      localDocuments: [resource("C:\\Users\\yche\\Zotero\\storage\\AB12\\paper.pdf")],
+      localDocuments: [
+        resource("C:\\Users\\yche\\Zotero\\storage\\AB12\\paper.pdf"),
+      ],
     });
-    expect(pdf.absolutePath).toBe("/mnt/c/Users/yche/Zotero/storage/AB12/paper.pdf");
+    expect(pdf.absolutePath).toBe(
+      "/mnt/c/Users/yche/Zotero/storage/AB12/paper.pdf",
+    );
   });
 
   it("accepts forward slashes after the drive letter", () => {
@@ -45,7 +49,9 @@ posixOnly("collectLocalPdfs on POSIX", () => {
 
   it("still rejects a UNC path, which has no mount to map onto", () => {
     expect(() =>
-      collectLocalPdfs({ localDocuments: [resource("\\\\server\\share\\paper.pdf")] }),
+      collectLocalPdfs({
+        localDocuments: [resource("\\\\server\\share\\paper.pdf")],
+      }),
     ).toThrow("Invalid local PDF resource batch.");
   });
 

@@ -92,8 +92,12 @@ describe("mapSdkMessageToProviderEvents", () => {
     const assistantEvents = mapSdkMessageToProviderEvents(assistantMessage);
     const streamEvents = mapSdkMessageToProviderEvents(streamEvent);
 
-    expect(assistantEvents.filter((event) => event.type === "tool_call")).toHaveLength(0);
-    expect(streamEvents.filter((event) => event.type === "tool_call")).toHaveLength(1);
+    expect(
+      assistantEvents.filter((event) => event.type === "tool_call"),
+    ).toHaveLength(0);
+    expect(
+      streamEvents.filter((event) => event.type === "tool_call"),
+    ).toHaveLength(1);
   });
 
   it("does not duplicate tool_result when user message contains both top-level and content-block results", () => {
@@ -204,7 +208,9 @@ describe("mapSdkMessageToProviderEvents", () => {
             type: "tool_use",
             id: "todo-1",
             name: "TodoWrite",
-            input: { todos: [{ content: "Inspect targets", status: "completed" }] },
+            input: {
+              todos: [{ content: "Inspect targets", status: "completed" }],
+            },
           },
         ],
       },

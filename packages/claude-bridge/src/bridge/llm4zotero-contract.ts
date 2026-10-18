@@ -17,7 +17,13 @@ export type Llm4ZoteroAgentEvent =
       content: unknown;
       artifacts?: unknown[];
     }
-  | { type: "tool_error"; callId: string; name: string; error: string; round: number }
+  | {
+      type: "tool_error";
+      callId: string;
+      name: string;
+      error: string;
+      round: number;
+    }
   | { type: "confirmation_required"; requestId: string; action: unknown }
   | {
       type: "confirmation_resolved";
@@ -45,7 +51,10 @@ export type Llm4ZoteroAgentEvent =
   | { type: "fallback"; reason: string }
   | { type: "final"; text: string };
 
-export type Llm4ZoteroMcpServersConfig = Record<string, Record<string, unknown>>;
+export type Llm4ZoteroMcpServersConfig = Record<
+  string,
+  Record<string, unknown>
+>;
 
 export interface Llm4ZoteroRunTurnRequest {
   conversationKey: string | number;

@@ -1,7 +1,6 @@
 import type { ProviderEvent } from "../runtime.js";
 import { globalPermissionStore } from "../permissions/permission-store.js";
 
-
 interface ClaudeContentBlock {
   type?: string;
   id?: string;
@@ -22,23 +21,32 @@ interface ModelUsageEntry {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function getSessionId(msg: unknown): string | undefined {
   const record = asRecord(msg);
-  if (typeof record.sessionId === "string" && record.sessionId.trim()) return record.sessionId.trim();
-  if (typeof record.session_id === "string" && record.session_id.trim()) return record.session_id.trim();
+  if (typeof record.sessionId === "string" && record.sessionId.trim())
+    return record.sessionId.trim();
+  if (typeof record.session_id === "string" && record.session_id.trim())
+    return record.session_id.trim();
   return undefined;
 }
 
 function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function formatApiRetryStatus(msg: Record<string, unknown>): string {
   const status = asFiniteNumber(msg.error_status);
-  const error = typeof msg.error === "string" && msg.error.trim() ? msg.error.trim() : undefined;
+  const error =
+    typeof msg.error === "string" && msg.error.trim()
+      ? msg.error.trim()
+      : undefined;
   const attempt = asFiniteNumber(msg.attempt);
   const maxRetries = asFiniteNumber(msg.max_retries);
   const retrySuffix =
@@ -52,7 +60,9 @@ function formatApiRetryStatus(msg: Record<string, unknown>): string {
     return `Claude API rate limited. Retrying request${retrySuffix}.`;
   }
   if (status !== undefined || error) {
-    const detail = [status !== undefined ? `HTTP ${status}` : undefined, error].filter(Boolean).join(", ");
+    const detail = [status !== undefined ? `HTTP ${status}` : undefined, error]
+      .filter(Boolean)
+      .join(", ");
     return `Claude API request failed (${detail}). Retrying${retrySuffix}.`;
   }
   return `Claude API request failed. Retrying${retrySuffix}.`;
@@ -64,8 +74,14 @@ function normalizeUsagePayload(args: {
   sessionId?: string;
   includeOutputTokens?: boolean;
 }): ProviderEvent | null {
-  const inputTokens = asFiniteNumber(args.usage?.input_tokens) ?? asFiniteNumber(args.usage?.inputTokens) ?? 0;
-  const outputTokens = asFiniteNumber(args.usage?.output_tokens) ?? asFiniteNumber(args.usage?.outputTokens) ?? 0;
+  const inputTokens =
+    asFiniteNumber(args.usage?.input_tokens) ??
+    asFiniteNumber(args.usage?.inputTokens) ??
+    0;
+  const outputTokens =
+    asFiniteNumber(args.usage?.output_tokens) ??
+    asFiniteNumber(args.usage?.outputTokens) ??
+    0;
   const cacheCreationInputTokens =
     asFiniteNumber(args.usage?.cache_creation_input_tokens) ??
     asFiniteNumber(args.usage?.cacheCreationInputTokens) ??
@@ -84,7 +100,9 @@ function normalizeUsagePayload(args: {
 
   let model: string | undefined;
   let contextWindow: number | undefined;
-  const modelUsageEntries = args.modelUsage ? Object.entries(args.modelUsage) : [];
+  const modelUsageEntries = args.modelUsage
+    ? Object.entries(args.modelUsage)
+    : [];
   if (modelUsageEntries.length === 1) {
     const [modelName, entry] = modelUsageEntries[0]!;
     model = modelName || undefined;
@@ -93,14 +111,23 @@ function normalizeUsagePayload(args: {
 
   if (
     contextTokens <= 0 &&
-    !(typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0)
+    !(
+      typeof contextWindow === "number" &&
+      Number.isFinite(contextWindow) &&
+      contextWindow > 0
+    )
   ) {
     return null;
   }
 
   const percentage =
-    typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
-      ? Math.max(0, Math.min(100, Math.round((contextTokens / contextWindow) * 100)))
+    typeof contextWindow === "number" &&
+    Number.isFinite(contextWindow) &&
+    contextWindow > 0
+      ? Math.max(
+          0,
+          Math.min(100, Math.round((contextTokens / contextWindow) * 100)),
+        )
       : undefined;
 
   return {
@@ -113,7 +140,9 @@ function normalizeUsagePayload(args: {
       contextTokens,
       contextWindow,
       contextWindowIsAuthoritative:
-        typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0,
+        typeof contextWindow === "number" &&
+        Number.isFinite(contextWindow) &&
+        contextWindow > 0,
       percentage,
       sessionId: args.sessionId,
       model,
@@ -125,11 +154,19 @@ function normalizeContextWindowPayload(args: {
   modelUsage?: Record<string, ModelUsageEntry> | undefined;
   sessionId?: string;
 }): ProviderEvent | null {
-  const modelUsageEntries = args.modelUsage ? Object.entries(args.modelUsage) : [];
+  const modelUsageEntries = args.modelUsage
+    ? Object.entries(args.modelUsage)
+    : [];
   if (modelUsageEntries.length !== 1) return null;
   const [modelName, entry] = modelUsageEntries[0]!;
   const contextWindow = asFiniteNumber(entry?.contextWindow);
-  if (!(typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0)) {
+  if (
+    !(
+      typeof contextWindow === "number" &&
+      Number.isFinite(contextWindow) &&
+      contextWindow > 0
+    )
+  ) {
     return null;
   }
   return {
@@ -196,7 +233,7 @@ function extractResultOutput(msg: Record<string, unknown>): string {
     }
     return `Error: ${rawErrors}`;
   }
-  if (Boolean(msg.is_error)) {
+  if (msg.is_error) {
     return "Error: runtime returned an empty error result.";
   }
   return "";
@@ -234,24 +271,28 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
         : undefined);
     const looksLikeSdkPermission = globalPermissionStore.hasPending(requestId);
     const isAskUserQuestion =
-      (typeof msg.tool_name === "string" && msg.tool_name === "AskUserQuestion") ||
-      (typeof msg.toolName === "string" && msg.toolName === "AskUserQuestion") ||
+      (typeof msg.tool_name === "string" &&
+        msg.tool_name === "AskUserQuestion") ||
+      (typeof msg.toolName === "string" &&
+        msg.toolName === "AskUserQuestion") ||
       (typeof msg.name === "string" && msg.name === "AskUserQuestion") ||
-      (typeof msg.message === "string" && msg.message.includes("AskUserQuestion"));
+      (typeof msg.message === "string" &&
+        msg.message.includes("AskUserQuestion"));
     if (!looksLikeSdkPermission && !isAskUserQuestion && !actionCandidate) {
       return [providerEvent];
     }
-    const action =
-      (actionCandidate as Record<string, unknown> | undefined) ?? {
-        toolName: isAskUserQuestion ? "AskUserQuestion" : "action",
-        title: isAskUserQuestion ? "Question from Claude" : "Approval required",
-        mode: isAskUserQuestion ? "question" : "approval",
-        confirmLabel: isAskUserQuestion ? "Submit" : "Approve",
-        cancelLabel: isAskUserQuestion ? "Cancel" : "Deny",
-        description:
-          typeof msg.message === "string" ? msg.message : "The runtime requests confirmation.",
-        fields: Array.isArray(msg.fields) ? msg.fields : [],
-      };
+    const action = (actionCandidate as Record<string, unknown> | undefined) ?? {
+      toolName: isAskUserQuestion ? "AskUserQuestion" : "action",
+      title: isAskUserQuestion ? "Question from Claude" : "Approval required",
+      mode: isAskUserQuestion ? "question" : "approval",
+      confirmLabel: isAskUserQuestion ? "Submit" : "Approve",
+      cancelLabel: isAskUserQuestion ? "Cancel" : "Deny",
+      description:
+        typeof msg.message === "string"
+          ? msg.message
+          : "The runtime requests confirmation.",
+      fields: Array.isArray(msg.fields) ? msg.fields : [],
+    };
     return [
       providerEvent,
       {
@@ -292,8 +333,9 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
     const events: ProviderEvent[] = [providerEvent];
     const message = asRecord(msg.message) as MessageContainer;
     const contentBlocks = Array.isArray(message.content) ? message.content : [];
-     const parentToolUseId =
-      (typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id.trim())
+    const parentToolUseId =
+      typeof msg.parent_tool_use_id === "string" &&
+      msg.parent_tool_use_id.trim()
         ? msg.parent_tool_use_id.trim()
         : null;
     const usageEvent =
@@ -307,7 +349,9 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
     if (usageEvent) {
       events.push(usageEvent);
     }
-    const hasText = contentBlocks.some((block) => block.type === "text" && typeof block.text === "string");
+    const hasText = contentBlocks.some(
+      (block) => block.type === "text" && typeof block.text === "string",
+    );
     const hasToolUse = contentBlocks.some((block) => block.type === "tool_use");
     for (const block of contentBlocks) {
       if (block.type === "text" && typeof block.text === "string") {
@@ -316,8 +360,8 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
           payload: {
             delta: block.text,
             sessionId,
-            source: "assistant"
-          }
+            source: "assistant",
+          },
         });
       }
       if (hasText && hasToolUse && block.type === "tool_use") {
@@ -362,8 +406,8 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
         type: "status",
         payload: {
           phase: "assistant",
-          sessionId
-        }
+          sessionId,
+        },
       });
     }
 
@@ -380,8 +424,8 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
           payload: {
             toolUseId: block.tool_use_id,
             content: normalizeToolResultContent(block.content),
-            sessionId
-          }
+            sessionId,
+          },
         });
       }
     }
@@ -396,7 +440,9 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
     const output = extractResultOutput(msg);
     const events: ProviderEvent[] = [providerEvent];
     const contextWindowEvent = normalizeContextWindowPayload({
-      modelUsage: asRecord(msg.modelUsage) as Record<string, ModelUsageEntry> | undefined,
+      modelUsage: asRecord(msg.modelUsage) as
+        | Record<string, ModelUsageEntry>
+        | undefined,
       sessionId,
     });
     if (contextWindowEvent) {
@@ -410,8 +456,8 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
         subtype: msg.subtype,
         durationMs: msg.duration_ms,
         numTurns: msg.num_turns,
-        sessionId
-      }
+        sessionId,
+      },
     });
     return events;
   }
@@ -452,9 +498,9 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
           text,
           phase: "system",
           subtype,
-          sessionId
-        }
-      }
+          sessionId,
+        },
+      },
     ];
   }
 
@@ -466,9 +512,9 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
         payload: {
           phase: "tool_progress",
           ...msg,
-          sessionId
-        }
-      }
+          sessionId,
+        },
+      },
     ];
   }
 
@@ -490,8 +536,14 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
           {
             type: "tool_call",
             payload: {
-              id: typeof contentBlock.id === "string" ? contentBlock.id : undefined,
-              name: typeof contentBlock.name === "string" ? contentBlock.name : undefined,
+              id:
+                typeof contentBlock.id === "string"
+                  ? contentBlock.id
+                  : undefined,
+              name:
+                typeof contentBlock.name === "string"
+                  ? contentBlock.name
+                  : undefined,
               input: contentBlock.input,
               sessionId,
             },
@@ -509,13 +561,14 @@ export function mapSdkMessageToProviderEvents(raw: unknown): ProviderEvent[] {
             payload: {
               delta: delta.text,
               partial: true,
-              sessionId
-            }
-          }
+              sessionId,
+            },
+          },
         ];
       }
       if (delta.type === "thinking_delta") {
-        const thinking = typeof delta.thinking === "string" ? delta.thinking : "";
+        const thinking =
+          typeof delta.thinking === "string" ? delta.thinking : "";
         if (thinking) {
           return [
             providerEvent,

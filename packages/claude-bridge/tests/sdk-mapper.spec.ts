@@ -9,23 +9,28 @@ describe("mapSdkMessageToProviderEvents", () => {
       message: {
         content: [
           { type: "text", text: "hello" },
-          { type: "tool_use", id: "toolu_1", name: "Read", input: { file: "a.ts" } }
-        ]
-      }
+          {
+            type: "tool_use",
+            id: "toolu_1",
+            name: "Read",
+            input: { file: "a.ts" },
+          },
+        ],
+      },
     });
 
     expect(events).toHaveLength(3);
     expect(events[0]).toMatchObject({
       type: "provider_event",
-      payload: { providerType: "assistant", sessionId: "sess-1" }
+      payload: { providerType: "assistant", sessionId: "sess-1" },
     });
     expect(events[1]).toMatchObject({
       type: "message_delta",
-      payload: { delta: "hello", sessionId: "sess-1" }
+      payload: { delta: "hello", sessionId: "sess-1" },
     });
     expect(events[2]).toMatchObject({
       type: "tool_call",
-      payload: { id: "toolu_1", name: "Read", sessionId: "sess-1" }
+      payload: { id: "toolu_1", name: "Read", sessionId: "sess-1" },
     });
   });
 
@@ -35,7 +40,7 @@ describe("mapSdkMessageToProviderEvents", () => {
       session_id: "sess-2",
       result: "done",
       is_error: false,
-      num_turns: 3
+      num_turns: 3,
     });
 
     expect(events).toEqual([
@@ -44,7 +49,7 @@ describe("mapSdkMessageToProviderEvents", () => {
         payload: expect.objectContaining({
           providerType: "result",
           sessionId: "sess-2",
-        })
+        }),
       },
       {
         type: "final",
@@ -54,9 +59,9 @@ describe("mapSdkMessageToProviderEvents", () => {
           subtype: undefined,
           durationMs: undefined,
           numTurns: 3,
-          sessionId: "sess-2"
-        }
-      }
+          sessionId: "sess-2",
+        },
+      },
     ]);
   });
 
@@ -68,9 +73,9 @@ describe("mapSdkMessageToProviderEvents", () => {
         type: "content_block_delta",
         delta: {
           type: "text_delta",
-          text: "chunk"
-        }
-      }
+          text: "chunk",
+        },
+      },
     });
 
     expect(events).toEqual([
@@ -86,9 +91,9 @@ describe("mapSdkMessageToProviderEvents", () => {
         payload: {
           delta: "chunk",
           partial: true,
-          sessionId: "sess-3"
-        }
-      }
+          sessionId: "sess-3",
+        },
+      },
     ]);
   });
 

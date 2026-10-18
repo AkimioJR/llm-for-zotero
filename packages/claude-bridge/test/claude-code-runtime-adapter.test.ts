@@ -53,6 +53,9 @@ describe("ClaudeCodeRuntimeAdapter session adoption", () => {
     });
 
     expect(outcome.providerSessionId).toBe("main-session");
-    expect(sessionMapper.set).not.toHaveBeenCalledWith("conv-1", "hook-session");
+    expect(sessionMapper.set).not.toHaveBeenCalledWith(
+      "conv-1",
+      "hook-session",
+    );
   });
 });

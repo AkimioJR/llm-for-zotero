@@ -58,7 +58,7 @@ export class PermissionStore {
       displayName?: string;
       blockedPath?: string;
       decisionReason?: string;
-    }
+    },
   ): { requestId: string; promise: Promise<PermissionResult> } {
     const requestId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -96,7 +96,7 @@ export class PermissionStore {
 
   resolve(
     requestId: string,
-    result: { approved: boolean; data?: unknown }
+    result: { approved: boolean; data?: unknown },
   ): boolean {
     const pending = this.pending.get(requestId);
     if (!pending) return false;
@@ -106,8 +106,12 @@ export class PermissionStore {
     }
 
     if (result.approved) {
-      const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
-      const rawUpdatedInput = typeof data.input === "string" ? data.input.trim() : "";
+      const data =
+        result.data && typeof result.data === "object"
+          ? (result.data as Record<string, unknown>)
+          : {};
+      const rawUpdatedInput =
+        typeof data.input === "string" ? data.input.trim() : "";
       let updatedInput: Record<string, unknown> = {};
       if (rawUpdatedInput) {
         try {
@@ -127,7 +131,8 @@ export class PermissionStore {
     } else {
       pending.resolve({
         behavior: "deny",
-        message: typeof result.data === "string" ? result.data : "User denied action",
+        message:
+          typeof result.data === "string" ? result.data : "User denied action",
         interrupt: false,
         toolUseID: pending.toolUseID,
       });

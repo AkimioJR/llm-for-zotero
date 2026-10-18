@@ -51,10 +51,18 @@ function inferRisk(allowedTools: string[] | undefined): {
     set.has("multiedit") ||
     set.has("notebookedit");
   if (hasWrite) {
-    return { mutability: "write", riskLevel: "high", requiresConfirmation: true };
+    return {
+      mutability: "write",
+      riskLevel: "high",
+      requiresConfirmation: true,
+    };
   }
   if (set.size > 0) {
-    return { mutability: "read", riskLevel: "medium", requiresConfirmation: false };
+    return {
+      mutability: "read",
+      riskLevel: "medium",
+      requiresConfirmation: false,
+    };
   }
   return { mutability: "read", riskLevel: "low", requiresConfirmation: false };
 }
@@ -128,7 +136,9 @@ function getCommandDirs(options?: ToolCatalogOptions): string[] {
   if (settingSources.includes("project") || settingSources.includes("local")) {
     roots.push(
       join(runtimeCwd, ".claude", "commands"),
-      ...walkDirsForCommands(join(runtimeCwd, ".claude", "plugins", "marketplaces")),
+      ...walkDirsForCommands(
+        join(runtimeCwd, ".claude", "plugins", "marketplaces"),
+      ),
     );
   }
 
@@ -153,7 +163,9 @@ function listCommandFiles(options?: ToolCatalogOptions): string[] {
   return files;
 }
 
-function parseCommandDescriptor(filePath: string): Llm4ZoteroToolDescriptor | null {
+function parseCommandDescriptor(
+  filePath: string,
+): Llm4ZoteroToolDescriptor | null {
   let content = "";
   try {
     content = readFileSync(filePath, "utf8");
@@ -188,7 +200,9 @@ function parseCommandDescriptor(filePath: string): Llm4ZoteroToolDescriptor | nu
   };
 }
 
-export function getToolCatalog(options?: ToolCatalogOptions): Llm4ZoteroToolDescriptor[] {
+export function getToolCatalog(
+  options?: ToolCatalogOptions,
+): Llm4ZoteroToolDescriptor[] {
   const settingSources = normalizeSettingSources(options?.settingSources);
   const runtimeCwd = resolve(options?.runtimeCwd || process.cwd());
   const cacheKey = `${runtimeCwd}|${settingSources.join(",")}`;

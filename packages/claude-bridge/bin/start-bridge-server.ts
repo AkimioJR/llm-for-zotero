@@ -69,7 +69,10 @@ function getArg(name: string): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
+function parseBoolean(
+  value: string | undefined,
+  defaultValue: boolean,
+): boolean {
   if (value === undefined) return defaultValue;
   const v = value.trim().toLowerCase();
   if (["1", "true", "yes", "on"].includes(v)) return true;
@@ -81,7 +84,8 @@ function parseBoolean(value: string | undefined, defaultValue: boolean): boolean
 declare const __CLAUDE_BRIDGE_VERSION__: string | undefined;
 
 function getBridgeVersion(): string {
-  return typeof __CLAUDE_BRIDGE_VERSION__ === "string" && __CLAUDE_BRIDGE_VERSION__
+  return typeof __CLAUDE_BRIDGE_VERSION__ === "string" &&
+    __CLAUDE_BRIDGE_VERSION__
     ? __CLAUDE_BRIDGE_VERSION__
     : "dev";
 }
@@ -102,7 +106,10 @@ function parseSettingSources(value: string | undefined): SettingSource[] {
   return accepted.length > 0 ? accepted : DEFAULT_SETTING_SOURCES;
 }
 
-function normalizePathWithHome(value: string, homeDir: string | undefined): string | undefined {
+function normalizePathWithHome(
+  value: string,
+  homeDir: string | undefined,
+): string | undefined {
   const raw = value.trim();
   if (!raw) return undefined;
   if (raw === "~") {
@@ -175,15 +182,12 @@ async function main() {
     throw new Error(`Invalid port: ${portRaw}`);
   }
 
-  const homeDir = (
-    process.env.HOME ||
-    process.env.USERPROFILE ||
-    homedir() ||
-    ""
-  ).trim() || undefined;
-  const explicitZoteroRoot = (
-    getArg("zotero-root") || process.env.ZOTERO_ROOT || ""
-  ).trim() || undefined;
+  const homeDir =
+    (process.env.HOME || process.env.USERPROFILE || homedir() || "").trim() ||
+    undefined;
+  const explicitZoteroRoot =
+    (getArg("zotero-root") || process.env.ZOTERO_ROOT || "").trim() ||
+    undefined;
   const legacyPaths = explicitZoteroRoot
     ? (() => {
         const zoteroRoot = resolve(explicitZoteroRoot);
@@ -198,11 +202,10 @@ async function main() {
   const defaultRuntimeCwd = legacyPaths.runtimeCwd;
   const defaultStateDir = legacyPaths.stateDir;
   const stateDirCandidate =
-    getArg("state-dir") ||
-    process.env.ADAPTER_STATE_DIR ||
-    defaultStateDir;
+    getArg("state-dir") || process.env.ADAPTER_STATE_DIR || defaultStateDir;
   const forwardFrontendModel = parseBoolean(
-    getArg("forward-frontend-model") ?? process.env.ADAPTER_FORWARD_FRONTEND_MODEL,
+    getArg("forward-frontend-model") ??
+      process.env.ADAPTER_FORWARD_FRONTEND_MODEL,
     true,
   );
   const runtimeCwdCandidate =
@@ -218,10 +221,11 @@ async function main() {
     getArg("log-file") ?? process.env.ADAPTER_LOG_FILE ?? "";
   const logFileSetting = rawLogFileSetting.trim();
   if (logFileSetting) {
-    const resolvedLogPath =
-      ["1", "true", "yes", "on"].includes(logFileSetting.toLowerCase())
-        ? resolve(stateDirResolved, "bridge.log")
-        : resolve(logFileSetting);
+    const resolvedLogPath = ["1", "true", "yes", "on"].includes(
+      logFileSetting.toLowerCase(),
+    )
+      ? resolve(stateDirResolved, "bridge.log")
+      : resolve(logFileSetting);
     installFileLogger(resolvedLogPath);
   }
   const projectClaudeDir = resolve(runtimeCwd, ".claude");
@@ -262,12 +266,15 @@ async function main() {
     normalizePathWithHome("~/Documents", homeDir),
   ].filter((entry): entry is string => Boolean(entry));
   const configuredAdditionalDirs = parseDirectoryList(
-    getArg("additional-directories") || process.env.ADAPTER_ADDITIONAL_DIRECTORIES,
+    getArg("additional-directories") ||
+      process.env.ADAPTER_ADDITIONAL_DIRECTORIES,
     homeDir,
   );
   const additionalDirectories = Array.from(
     new Set(
-      [...defaultAdditionalDirs, ...configuredAdditionalDirs].filter((entry) => entry !== runtimeCwd),
+      [...defaultAdditionalDirs, ...configuredAdditionalDirs].filter(
+        (entry) => entry !== runtimeCwd,
+      ),
     ),
   );
   const defaultAllowedTools = parseStringList(
@@ -280,11 +287,13 @@ async function main() {
   }
 
   const claudeCodeExecutablePath =
-    (getArg("claude-path") || process.env.ADAPTER_CLAUDE_PATH || "").trim() || undefined;
+    (getArg("claude-path") || process.env.ADAPTER_CLAUDE_PATH || "").trim() ||
+    undefined;
   // The token stays out of argv so other users cannot read it from `ps`.
   const authToken = (process.env.ADAPTER_AUTH_TOKEN || "").trim() || undefined;
   const managedBy =
-    (getArg("managed-by") || process.env.ADAPTER_MANAGED_BY || "").trim() || undefined;
+    (getArg("managed-by") || process.env.ADAPTER_MANAGED_BY || "").trim() ||
+    undefined;
   const exitOnStdinClose = parseBoolean(
     getArg("exit-on-stdin-close") ?? process.env.ADAPTER_EXIT_ON_STDIN_CLOSE,
     false,
@@ -332,12 +341,16 @@ async function main() {
     `[cc-llm4zotero-adapter] healthz: ${baseUrl}${authToken ? "/<token>" : ""}/healthz`,
   );
   if (claudeCodeExecutablePath) {
-    console.log(`[cc-llm4zotero-adapter] claude executable: ${claudeCodeExecutablePath}`);
+    console.log(
+      `[cc-llm4zotero-adapter] claude executable: ${claudeCodeExecutablePath}`,
+    );
   }
   console.log(`[cc-llm4zotero-adapter] runtime cwd: ${runtimeCwd}`);
   console.log(
     `[cc-llm4zotero-adapter] additional directories: ${
-      additionalDirectories.length > 0 ? additionalDirectories.join(", ") : "(none)"
+      additionalDirectories.length > 0
+        ? additionalDirectories.join(", ")
+        : "(none)"
     }`,
   );
   console.log(
@@ -346,7 +359,9 @@ async function main() {
     }`,
   );
   console.log(`[cc-llm4zotero-adapter] state dir: ${stateDirResolved}`);
-  console.log(`[cc-llm4zotero-adapter] settingSources: ${settingSources.join(",")}`);
+  console.log(
+    `[cc-llm4zotero-adapter] settingSources: ${settingSources.join(",")}`,
+  );
   if (appendSystemPrompt) {
     console.log("[cc-llm4zotero-adapter] appendSystemPrompt: enabled");
   }

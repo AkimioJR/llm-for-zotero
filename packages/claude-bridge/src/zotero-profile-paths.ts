@@ -50,7 +50,9 @@ export function resolveLegacyAdapterPaths(
   return {
     homeDir,
     zoteroRoot,
-    runtimeCwd: hasLegacyZoteroRoot ? resolve(zoteroRoot, "agent-runtime") : cwd,
+    runtimeCwd: hasLegacyZoteroRoot
+      ? resolve(zoteroRoot, "agent-runtime")
+      : cwd,
     stateDir: hasLegacyZoteroRoot
       ? resolve(zoteroRoot, "agent-state")
       : homeDir
@@ -64,7 +66,12 @@ export function resolveDefaultZoteroProfilePaths(
 ): ZoteroProfilePaths | null {
   const homeDir = (homeDirInput || homedir()).trim();
   if (!homeDir) return null;
-  const zoteroAppDir = resolve(homeDir, "Library", "Application Support", "Zotero");
+  const zoteroAppDir = resolve(
+    homeDir,
+    "Library",
+    "Application Support",
+    "Zotero",
+  );
   const profilesIni = resolve(zoteroAppDir, "profiles.ini");
   if (!existsSync(profilesIni)) return null;
   try {
@@ -72,13 +79,16 @@ export function resolveDefaultZoteroProfilePaths(
     const sections = parseIniSections(raw);
     const profileSection =
       sections.find(
-        (section) => /^Profile\d+$/i.test(section.name) && section.values.Default === "1",
+        (section) =>
+          /^Profile\d+$/i.test(section.name) && section.values.Default === "1",
       ) || sections.find((section) => /^Profile\d+$/i.test(section.name));
     if (!profileSection) return null;
     const profilePath = profileSection.values.Path?.trim();
     if (!profilePath) return null;
     const isRelative = profileSection.values.IsRelative !== "0";
-    const profileDir = isRelative ? resolve(zoteroAppDir, profilePath) : resolve(profilePath);
+    const profileDir = isRelative
+      ? resolve(zoteroAppDir, profilePath)
+      : resolve(profilePath);
     return {
       profileDir,
       runtimeCwd: resolve(profileDir, "agent-runtime"),

@@ -1,8 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type {
-  Llm4ZoteroAgentBackendAdapter
-} from "../bridge/llm4zotero-agent-backend-adapter.js";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import type { Llm4ZoteroAgentBackendAdapter } from "../bridge/llm4zotero-agent-backend-adapter.js";
 import type {
   Llm4ZoteroAgentEvent,
   Llm4ZoteroRunActionRequest,
@@ -30,12 +32,16 @@ export interface HttpBridgeServerOptions {
  * Strips the `/<token>` prefix from a request path. Returns undefined when the
  * path does not carry the token.
  */
-export function stripAuthTokenPrefix(url: string, authToken: string): string | undefined {
+export function stripAuthTokenPrefix(
+  url: string,
+  authToken: string,
+): string | undefined {
   const match = /^\/([^/?#]*)(.*)$/s.exec(url);
   if (!match) return undefined;
   const given = Buffer.from(match[1]);
   const expected = Buffer.from(authToken);
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
+  if (given.length !== expected.length || !timingSafeEqual(given, expected))
+    return undefined;
   const rest = match[2];
   if (!rest) return "/";
   return rest.startsWith("/") ? rest : `/${rest}`;
@@ -53,8 +59,18 @@ type BridgeStreamLine =
   | {
       type: "outcome";
       outcome:
-        | { kind: "completed"; runId: string; text: string; usedFallback: false }
-        | { kind: "fallback"; runId: string; reason: string; usedFallback: true };
+        | {
+            kind: "completed";
+            runId: string;
+            text: string;
+            usedFallback: false;
+          }
+        | {
+            kind: "fallback";
+            runId: string;
+            reason: string;
+            usedFallback: true;
+          };
     }
   | { type: "error"; error: string };
 
@@ -76,9 +92,7 @@ function parseScopeType(
   }
 }
 
-function parseConversationKey(
-  value: unknown,
-): string | number | undefined {
+function parseConversationKey(value: unknown): string | number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.floor(value);
   }
@@ -108,22 +122,30 @@ function parseSettingSources(
 function parseMcpServers(
   value: unknown,
 ): Record<string, Record<string, unknown>> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
   const servers: Record<string, Record<string, unknown>> = {};
-  for (const [name, config] of Object.entries(value as Record<string, unknown>)) {
+  for (const [name, config] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
     const normalizedName = name.trim();
     if (
       !normalizedName ||
       !config ||
       typeof config !== "object" ||
       Array.isArray(config)
-    ) continue;
+    )
+      continue;
     servers[normalizedName] = config as Record<string, unknown>;
   }
   return Object.keys(servers).length > 0 ? servers : undefined;
 }
 
-function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
+function sendJson(
+  res: ServerResponse,
+  statusCode: number,
+  body: unknown,
+): void {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
@@ -135,7 +157,9 @@ function redactSecrets(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
       key,
-      /authorization|api[-_]?key|token|secret|password/i.test(key) ? "[redacted]" : redactSecrets(entry),
+      /authorization|api[-_]?key|token|secret|password/i.test(key)
+        ? "[redacted]"
+        : redactSecrets(entry),
     ]),
   );
 }
@@ -153,11 +177,18 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 }
 
 function toRequestPayload(body: unknown): Llm4ZoteroRunTurnRequest {
-  const record = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const record =
+    body !== null && typeof body === "object"
+      ? (body as Record<string, unknown>)
+      : {};
   const conversationKey = record.conversationKey;
   const userText = record.userText;
 
-  if (!(typeof conversationKey === "string" || typeof conversationKey === "number")) {
+  if (
+    !(
+      typeof conversationKey === "string" || typeof conversationKey === "number"
+    )
+  ) {
     throw new Error("conversationKey must be string or number");
   }
 
@@ -169,7 +200,8 @@ function toRequestPayload(body: unknown): Llm4ZoteroRunTurnRequest {
     conversationKey,
     userText,
     providerSessionId:
-      typeof record.providerSessionId === "string" && record.providerSessionId.trim().length > 0
+      typeof record.providerSessionId === "string" &&
+      record.providerSessionId.trim().length > 0
         ? record.providerSessionId.trim()
         : undefined,
     allowedTools: Array.isArray(record.allowedTools)
@@ -181,7 +213,8 @@ function toRequestPayload(body: unknown): Llm4ZoteroRunTurnRequest {
         ? record.scopeId.trim()
         : undefined,
     scopeLabel:
-      typeof record.scopeLabel === "string" && record.scopeLabel.trim().length > 0
+      typeof record.scopeLabel === "string" &&
+      record.scopeLabel.trim().length > 0
         ? record.scopeLabel.trim()
         : undefined,
     runtimeRequest:
@@ -192,15 +225,22 @@ function toRequestPayload(body: unknown): Llm4ZoteroRunTurnRequest {
     metadata:
       record.metadata && typeof record.metadata === "object"
         ? (record.metadata as Record<string, unknown>)
-        : undefined
+        : undefined,
   };
 }
 
 function toActionPayload(body: unknown): Llm4ZoteroRunActionRequest {
-  const record = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const record =
+    body !== null && typeof body === "object"
+      ? (body as Record<string, unknown>)
+      : {};
   const conversationKey = record.conversationKey;
   const toolName = record.toolName;
-  if (!(typeof conversationKey === "string" || typeof conversationKey === "number")) {
+  if (
+    !(
+      typeof conversationKey === "string" || typeof conversationKey === "number"
+    )
+  ) {
     throw new Error("conversationKey must be string or number");
   }
   if (typeof toolName !== "string" || !toolName.trim()) {
@@ -217,11 +257,14 @@ function toActionPayload(body: unknown): Llm4ZoteroRunActionRequest {
         ? record.scopeId.trim()
         : undefined,
     scopeLabel:
-      typeof record.scopeLabel === "string" && record.scopeLabel.trim().length > 0
+      typeof record.scopeLabel === "string" &&
+      record.scopeLabel.trim().length > 0
         ? record.scopeLabel.trim()
         : undefined,
-    activeItemId: typeof record.activeItemId === "number" ? record.activeItemId : undefined,
-    libraryID: typeof record.libraryID === "number" ? record.libraryID : undefined,
+    activeItemId:
+      typeof record.activeItemId === "number" ? record.activeItemId : undefined,
+    libraryID:
+      typeof record.libraryID === "number" ? record.libraryID : undefined,
     contextEnvelope:
       record.contextEnvelope && typeof record.contextEnvelope === "object"
         ? (record.contextEnvelope as Record<string, unknown>)
@@ -239,8 +282,12 @@ function toResolveConfirmationPayload(body: unknown): {
   actionId?: string;
   data?: unknown;
 } {
-  const record = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const requestId = typeof record.requestId === "string" ? record.requestId.trim() : "";
+  const record =
+    body !== null && typeof body === "object"
+      ? (body as Record<string, unknown>)
+      : {};
+  const requestId =
+    typeof record.requestId === "string" ? record.requestId.trim() : "";
   if (!requestId) {
     throw new Error("requestId must be a non-empty string");
   }
@@ -256,10 +303,18 @@ function toResolveConfirmationPayload(body: unknown): {
 }
 
 function toRetentionPayload(body: unknown): Llm4ZoteroRuntimeRetentionRequest {
-  const record = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const record =
+    body !== null && typeof body === "object"
+      ? (body as Record<string, unknown>)
+      : {};
   const conversationKey = record.conversationKey;
-  const mountId = typeof record.mountId === "string" ? record.mountId.trim() : "";
-  if (!(typeof conversationKey === "string" || typeof conversationKey === "number")) {
+  const mountId =
+    typeof record.mountId === "string" ? record.mountId.trim() : "";
+  if (
+    !(
+      typeof conversationKey === "string" || typeof conversationKey === "number"
+    )
+  ) {
     throw new Error("conversationKey must be string or number");
   }
   if (!mountId) {
@@ -268,7 +323,8 @@ function toRetentionPayload(body: unknown): Llm4ZoteroRuntimeRetentionRequest {
   return {
     conversationKey,
     providerSessionId:
-      typeof record.providerSessionId === "string" && record.providerSessionId.trim().length > 0
+      typeof record.providerSessionId === "string" &&
+      record.providerSessionId.trim().length > 0
         ? record.providerSessionId.trim()
         : undefined,
     scopeType: parseScopeType(record.scopeType),
@@ -277,7 +333,8 @@ function toRetentionPayload(body: unknown): Llm4ZoteroRuntimeRetentionRequest {
         ? record.scopeId.trim()
         : undefined,
     scopeLabel:
-      typeof record.scopeLabel === "string" && record.scopeLabel.trim().length > 0
+      typeof record.scopeLabel === "string" &&
+      record.scopeLabel.trim().length > 0
         ? record.scopeLabel.trim()
         : undefined,
     mountId,
@@ -285,10 +342,19 @@ function toRetentionPayload(body: unknown): Llm4ZoteroRuntimeRetentionRequest {
   };
 }
 
-function toSessionInvalidationPayload(body: unknown): Llm4ZoteroSessionInvalidationRequest {
-  const record = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+function toSessionInvalidationPayload(
+  body: unknown,
+): Llm4ZoteroSessionInvalidationRequest {
+  const record =
+    body !== null && typeof body === "object"
+      ? (body as Record<string, unknown>)
+      : {};
   const conversationKey = record.conversationKey;
-  if (!(typeof conversationKey === "string" || typeof conversationKey === "number")) {
+  if (
+    !(
+      typeof conversationKey === "string" || typeof conversationKey === "number"
+    )
+  ) {
     throw new Error("conversationKey must be string or number");
   }
   return {
@@ -299,7 +365,8 @@ function toSessionInvalidationPayload(body: unknown): Llm4ZoteroSessionInvalidat
         ? record.scopeId.trim()
         : undefined,
     scopeLabel:
-      typeof record.scopeLabel === "string" && record.scopeLabel.trim().length > 0
+      typeof record.scopeLabel === "string" &&
+      record.scopeLabel.trim().length > 0
         ? record.scopeLabel.trim()
         : undefined,
     metadata:
@@ -315,7 +382,7 @@ function writeLine(res: ServerResponse, line: BridgeStreamLine): void {
 }
 
 export async function startHttpBridgeServer(
-  options: HttpBridgeServerOptions
+  options: HttpBridgeServerOptions,
 ): Promise<HttpBridgeServerHandle> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 0;
@@ -337,30 +404,62 @@ export async function startHttpBridgeServer(
         sendJson(res, 200, {
           ok: true,
           protocolVersion: 2,
-          capabilities: ["local_pdf_paths", "model_catalog_v1", "permission_modes_v1", ...(options.adapter.supportsStructuredCompletion ? ["structured_completion_v1"] : [])],
-          ...(options.bridgeVersion ? { bridgeVersion: options.bridgeVersion } : {}),
+          capabilities: [
+            "local_pdf_paths",
+            "model_catalog_v1",
+            "permission_modes_v1",
+            ...(options.adapter.supportsStructuredCompletion
+              ? ["structured_completion_v1"]
+              : []),
+          ],
+          ...(options.bridgeVersion
+            ? { bridgeVersion: options.bridgeVersion }
+            : {}),
           ...(options.managedBy ? { managedBy: options.managedBy } : {}),
           ts: Date.now(),
         });
         return;
       }
 
-      if (req.method === "POST" && reqUrl.pathname === "/structured-completion") {
-        if (!options.adapter.supportsStructuredCompletion) { sendJson(res, 503, {error: "structured_completion_v1 is unavailable"}); return; }
-        const body = await readJson(req) as Record<string, unknown>;
-        if (!body || typeof body.prompt !== "string" || !body.prompt.trim() || (body.model !== undefined && typeof body.model !== "string")) {
-          sendJson(res, 400, { error: "A prompt and optional model are required" });
+      if (
+        req.method === "POST" &&
+        reqUrl.pathname === "/structured-completion"
+      ) {
+        if (!options.adapter.supportsStructuredCompletion) {
+          sendJson(res, 503, {
+            error: "structured_completion_v1 is unavailable",
+          });
+          return;
+        }
+        const body = (await readJson(req)) as Record<string, unknown>;
+        if (
+          !body ||
+          typeof body.prompt !== "string" ||
+          !body.prompt.trim() ||
+          (body.model !== undefined && typeof body.model !== "string")
+        ) {
+          sendJson(res, 400, {
+            error: "A prompt and optional model are required",
+          });
           return;
         }
         const controller = new AbortController();
         const cancel = () => controller.abort();
         res.once("close", cancel);
         try {
-          const result = await options.adapter.completeStructured({ prompt: body.prompt,
+          const result = await options.adapter.completeStructured({
+            prompt: body.prompt,
             model: body.model as string | undefined,
-            timeoutMs: Math.min(300000, Math.max(1000, Number(body.timeoutMs) || 20000)), signal: controller.signal });
+            timeoutMs: Math.min(
+              300000,
+              Math.max(1000, Number(body.timeoutMs) || 20000),
+            ),
+            signal: controller.signal,
+          });
           sendJson(res, 200, result);
-        } finally { res.off("close", cancel); }
+        } finally {
+          res.off("close", cancel);
+        }
         return;
       }
 
@@ -377,7 +476,9 @@ export async function startHttpBridgeServer(
         const settingSources = parseSettingSources(
           reqUrl.searchParams.get("settingSources"),
         );
-        const servers = await options.adapter.listMcpServers({ settingSources });
+        const servers = await options.adapter.listMcpServers({
+          settingSources,
+        });
         sendJson(res, 200, { servers: redactSecrets(servers) });
         return;
       }
@@ -407,7 +508,9 @@ export async function startHttpBridgeServer(
           reqUrl.searchParams.get("conversationKey"),
         );
         if (conversationKey === undefined) {
-          sendJson(res, 400, { error: "conversationKey query param is required" });
+          sendJson(res, 400, {
+            error: "conversationKey query param is required",
+          });
           return;
         }
         const quota = await options.adapter.getAccountQuota({
@@ -417,7 +520,8 @@ export async function startHttpBridgeServer(
           ),
           scopeType: parseScopeType(reqUrl.searchParams.get("scopeType")),
           scopeId: reqUrl.searchParams.get("scopeId")?.trim() || undefined,
-          scopeLabel: reqUrl.searchParams.get("scopeLabel")?.trim() || undefined,
+          scopeLabel:
+            reqUrl.searchParams.get("scopeLabel")?.trim() || undefined,
         });
         sendJson(res, 200, { quota });
         return;
@@ -495,7 +599,9 @@ export async function startHttpBridgeServer(
           reqUrl.searchParams.get("conversationKey"),
         );
         if (conversationKey === undefined) {
-          sendJson(res, 400, { error: "conversationKey query param is required" });
+          sendJson(res, 400, {
+            error: "conversationKey query param is required",
+          });
           return;
         }
         const scopeType = parseScopeType(reqUrl.searchParams.get("scopeType"));
@@ -524,7 +630,8 @@ export async function startHttpBridgeServer(
         try {
           payload = toRetentionPayload(await readJson(req));
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           sendJson(res, 400, { error: message });
           return;
         }
@@ -538,7 +645,8 @@ export async function startHttpBridgeServer(
         try {
           payload = toSessionInvalidationPayload(await readJson(req));
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           sendJson(res, 400, { error: message });
           return;
         }
@@ -558,7 +666,8 @@ export async function startHttpBridgeServer(
         try {
           payload = toRequestPayload(await readJson(req));
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           sendJson(res, 400, { error: message });
           return;
         }
@@ -575,7 +684,7 @@ export async function startHttpBridgeServer(
           },
           onEvent: (event) => {
             writeLine(res, { type: "event", event });
-          }
+          },
         });
 
         writeLine(res, { type: "outcome", outcome });
@@ -588,7 +697,8 @@ export async function startHttpBridgeServer(
         try {
           payload = toActionPayload(await readJson(req));
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           sendJson(res, 400, { error: message });
           return;
         }
@@ -623,15 +733,19 @@ export async function startHttpBridgeServer(
         try {
           payload = toResolveConfirmationPayload(await readJson(req));
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           sendJson(res, 400, { error: message });
           return;
         }
-        const resolution = options.adapter.resolveExternalConfirmation(payload.requestId, {
-          approved: payload.approved,
-          actionId: payload.actionId,
-          data: payload.data,
-        });
+        const resolution = options.adapter.resolveExternalConfirmation(
+          payload.requestId,
+          {
+            approved: payload.approved,
+            actionId: payload.actionId,
+            data: payload.data,
+          },
+        );
         console.log(
           `[confirm] rid=${payload.requestId} source=${resolution.source} accepted=${resolution.accepted}`,
         );
@@ -688,6 +802,6 @@ export async function startHttpBridgeServer(
           resolve();
         });
       });
-    }
+    },
   };
 }

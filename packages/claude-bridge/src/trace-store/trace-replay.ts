@@ -17,7 +17,10 @@ export class TraceReplayService {
       .map((record) => ({ runId: record.runId, event: record.event }));
   }
 
-  async getRunReplay(conversationKey: string, runId: string): Promise<AgentEvent[]> {
+  async getRunReplay(
+    conversationKey: string,
+    runId: string,
+  ): Promise<AgentEvent[]> {
     const records = await this.traceStore.list(conversationKey);
     return records
       .filter((record) => record.runId === runId)

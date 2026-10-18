@@ -19,7 +19,7 @@ describe("PermissionStore", () => {
         displayName: "Run command",
         blockedPath: undefined,
         decisionReason: "Bash tool requires confirmation",
-      }
+      },
     );
 
     expect(requestId).toMatch(/^perm-\d+-[a-z0-9]+$/);
@@ -42,7 +42,7 @@ describe("PermissionStore", () => {
       {
         title: "Allow file write?",
         description: "Claude wants to write to a file",
-      }
+      },
     );
 
     store.resolve(requestId, { approved: false, data: "User denied" });
@@ -70,7 +70,7 @@ describe("PermissionStore", () => {
         displayName: "Read file",
         blockedPath: "/tmp/test.txt",
         decisionReason: "Outside allowed directories",
-      }
+      },
     );
 
     const event = store.getPendingForEvent(requestId);
@@ -88,13 +88,15 @@ describe("PermissionStore", () => {
 
   it("should auto-deny after default timeout period", async () => {
     const shortTimeoutStore = new PermissionStore();
-    (shortTimeoutStore as unknown as { defaultTimeoutMs: number }).defaultTimeoutMs = 50;
+    (
+      shortTimeoutStore as unknown as { defaultTimeoutMs: number }
+    ).defaultTimeoutMs = 50;
 
     const { promise } = shortTimeoutStore.create(
       "tool-use-timeout",
       "Bash",
       { command: "sleep 100" },
-      {}
+      {},
     );
 
     const result = await promise;
@@ -119,12 +121,10 @@ describe("PermissionStore", () => {
 
 describe("globalPermissionStore", () => {
   it("should be a singleton", async () => {
-    const { globalPermissionStore } = await import(
-      "../src/permissions/permission-store.js"
-    );
-    const { globalPermissionStore: globalPermissionStore2 } = await import(
-      "../src/permissions/permission-store.js"
-    );
+    const { globalPermissionStore } =
+      await import("../src/permissions/permission-store.js");
+    const { globalPermissionStore: globalPermissionStore2 } =
+      await import("../src/permissions/permission-store.js");
     expect(globalPermissionStore).toBe(globalPermissionStore2);
   });
 });

@@ -11,7 +11,11 @@ import type {
 import { mapToLlm4ZoteroEvent } from "../event-mapper/map-to-llm4zotero-event.js";
 import { findToolByName, getToolCatalog } from "./tool-catalog.js";
 import { globalPermissionStore } from "../permissions/permission-store.js";
-import type { RuntimeAccountQuota, RuntimeModelCatalog, RuntimePermissionModeCatalog } from "../runtime.js";
+import type {
+  RuntimeAccountQuota,
+  RuntimeModelCatalog,
+  RuntimePermissionModeCatalog,
+} from "../runtime.js";
 
 const CATASTROPHIC_ARG_PATTERNS: RegExp[] = [
   /\brm\s+-rf\s+\/(?!\S)/i,
@@ -60,24 +64,33 @@ function normalizeScopeId(value: unknown): string | undefined {
 }
 
 function toSafePathSegment(value: string): string {
-  const invalidChars = process.platform === "win32" ? /[^\w.\-@]/g : /[^\w.\-:@]/g;
-  return value
-    .trim()
-    .replace(/[\/\\]/g, "_")
-    .replace(/\s+/g, "_")
-    .replace(invalidChars, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 120) || "unknown";
+  const invalidChars =
+    process.platform === "win32" ? /[^\w.\-@]/g : /[^\w.\-:@]/g;
+  return (
+    value
+      .trim()
+      .replace(/[/\\]/g, "_")
+      .replace(/\s+/g, "_")
+      .replace(invalidChars, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 120) || "unknown"
+  );
 }
 
 function toScopeInfo(
-  request: Pick<Llm4ZoteroRunTurnRequest, "scopeType" | "scopeId" | "scopeLabel" | "metadata">,
+  request: Pick<
+    Llm4ZoteroRunTurnRequest,
+    "scopeType" | "scopeId" | "scopeLabel" | "metadata"
+  >,
 ): ScopeInfo | undefined {
-  const metadata = request.metadata && typeof request.metadata === "object"
-    ? request.metadata
-    : undefined;
-  const scopeType = normalizeScopeType(request.scopeType ?? metadata?.scopeType);
+  const metadata =
+    request.metadata && typeof request.metadata === "object"
+      ? request.metadata
+      : undefined;
+  const scopeType = normalizeScopeType(
+    request.scopeType ?? metadata?.scopeType,
+  );
   const scopeId = normalizeScopeId(request.scopeId ?? metadata?.scopeId);
   if (!scopeType || !scopeId) return undefined;
   const scopeLabelRaw = request.scopeLabel ?? metadata?.scopeLabel;
@@ -88,7 +101,10 @@ function toScopeInfo(
   return { scopeType, scopeId, scopeLabel };
 }
 
-function buildScopedConversationKey(conversationKey: string, scope?: ScopeInfo): string {
+function buildScopedConversationKey(
+  conversationKey: string,
+  scope?: ScopeInfo,
+): string {
   if (!scope) return conversationKey;
   return `${conversationKey}::${scope.scopeType}:${scope.scopeId}`;
 }
@@ -98,8 +114,12 @@ function buildRuntimeCwdRelative(
   originalConversationKey: string,
 ): string | undefined {
   if (!scope) return undefined;
-  const profileSegment = scope.scopeId.match(/^(profile-[a-zA-Z0-9_-]+)(?::|$)/)?.[1];
-  const profilePrefix = profileSegment ? `${toSafePathSegment(profileSegment)}/` : "";
+  const profileSegment = scope.scopeId.match(
+    /^(profile-[a-zA-Z0-9_-]+)(?::|$)/,
+  )?.[1];
+  const profilePrefix = profileSegment
+    ? `${toSafePathSegment(profileSegment)}/`
+    : "";
   const scopeType = toSafePathSegment(scope.scopeType);
   const scopeId = toSafePathSegment(scope.scopeId);
   const conversationDir = toSafePathSegment(originalConversationKey);
@@ -120,17 +140,28 @@ export class Llm4ZoteroAgentBackendAdapter {
   private readonly runtimeCwd?: string;
   private readonly pendingExternalConfirmations = new Map<
     string,
-    (resolution: { approved: boolean; actionId?: string; data?: unknown }) => void
+    (resolution: {
+      approved: boolean;
+      actionId?: string;
+      data?: unknown;
+    }) => void
   >();
 
-  constructor(options: { adapter: ClaudeCodeRuntimeAdapter; runtimeCwd?: string }) {
+  constructor(options: {
+    adapter: ClaudeCodeRuntimeAdapter;
+    runtimeCwd?: string;
+  }) {
     this.adapter = options.adapter;
     this.runtimeCwd = options.runtimeCwd;
   }
 
-  get supportsStructuredCompletion(): boolean { return this.adapter.supportsStructuredCompletion; }
+  get supportsStructuredCompletion(): boolean {
+    return this.adapter.supportsStructuredCompletion;
+  }
 
-  completeStructured(request: import("../runtime.js").StructuredCompletionRequest): Promise<import("../runtime.js").StructuredCompletionResult> {
+  completeStructured(
+    request: import("../runtime.js").StructuredCompletionRequest,
+  ): Promise<import("../runtime.js").StructuredCompletionResult> {
     return this.adapter.completeStructured(request);
   }
 
@@ -193,32 +224,41 @@ export class Llm4ZoteroAgentBackendAdapter {
     settingSources?: Array<"user" | "project" | "local">;
   }) {
     const servers = await this.adapter.listRuntimeMcpServers(options);
-    return servers.flatMap((server) => {
-      if (server.status !== "connected" || !Array.isArray(server.tools)) return [];
-      return server.tools.map((tool) => {
-        const destructive = Boolean(tool.annotations?.destructive);
-        return {
-          name: `${server.name}.${tool.name}`,
-          description: tool.description || `MCP tool ${tool.name} from ${server.name}`,
-          inputSchema: {
-            type: "object",
-            properties: {},
-            additionalProperties: true,
-          },
-          mutability: destructive ? "write" as const : "read" as const,
-          riskLevel: destructive ? "high" as const : "medium" as const,
-          requiresConfirmation: destructive,
-          source: "mcp" as const,
-        };
-      });
-    }).sort((a, b) => a.name.localeCompare(b.name));
+    return servers
+      .flatMap((server) => {
+        if (server.status !== "connected" || !Array.isArray(server.tools))
+          return [];
+        return server.tools.map((tool) => {
+          const destructive = Boolean(tool.annotations?.destructive);
+          return {
+            name: `${server.name}.${tool.name}`,
+            description:
+              tool.description || `MCP tool ${tool.name} from ${server.name}`,
+            inputSchema: {
+              type: "object",
+              properties: {},
+              additionalProperties: true,
+            },
+            mutability: destructive ? ("write" as const) : ("read" as const),
+            riskLevel: destructive ? ("high" as const) : ("medium" as const),
+            requiresConfirmation: destructive,
+            source: "mcp" as const,
+          };
+        });
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  async listCommands(
-    options?: {
-      settingSources?: Array<"user" | "project" | "local">;
-    },
-  ): Promise<Array<{ name: string; description: string; argumentHint: string; source: "sdk" | "fallback" }>> {
+  async listCommands(options?: {
+    settingSources?: Array<"user" | "project" | "local">;
+  }): Promise<
+    Array<{
+      name: string;
+      description: string;
+      argumentHint: string;
+      source: "sdk" | "fallback";
+    }>
+  > {
     const fromSdk = await this.adapter.listRuntimeCommands(options);
     const normalizedFromSdk = fromSdk
       .map((entry) => ({
@@ -291,16 +331,14 @@ export class Llm4ZoteroAgentBackendAdapter {
     });
   }
 
-  async listEfforts(
-    options?: {
-      model?: string;
-      settingSources?: Array<"user" | "project" | "local">;
-      conversationKey?: string | number;
-      scopeType?: ScopeType;
-      scopeId?: string;
-      scopeLabel?: string;
-    },
-  ): Promise<string[]> {
+  async listEfforts(options?: {
+    model?: string;
+    settingSources?: Array<"user" | "project" | "local">;
+    conversationKey?: string | number;
+    scopeType?: ScopeType;
+    scopeId?: string;
+    scopeLabel?: string;
+  }): Promise<string[]> {
     const originalConversationKey =
       options?.conversationKey === undefined
         ? undefined
@@ -329,11 +367,9 @@ export class Llm4ZoteroAgentBackendAdapter {
     return Array.from(unique);
   }
 
-  async listMcpServers(
-    options?: {
-      settingSources?: Array<"user" | "project" | "local">;
-    },
-  ) {
+  async listMcpServers(options?: {
+    settingSources?: Array<"user" | "project" | "local">;
+  }) {
     return this.adapter.listRuntimeMcpServers(options);
   }
 
@@ -364,7 +400,10 @@ export class Llm4ZoteroAgentBackendAdapter {
       originalConversationKey,
       scope,
     );
-    const runtimeCwdRelative = buildRuntimeCwdRelative(scope, originalConversationKey);
+    const runtimeCwdRelative = buildRuntimeCwdRelative(
+      scope,
+      originalConversationKey,
+    );
     const providerSessionId = await this.adapter.getMappedProviderSessionId(
       scopedConversationKey,
     );
@@ -380,7 +419,9 @@ export class Llm4ZoteroAgentBackendAdapter {
     };
   }
 
-  async updateRuntimeRetention(params: Llm4ZoteroRuntimeRetentionRequest): Promise<{
+  async updateRuntimeRetention(
+    params: Llm4ZoteroRuntimeRetentionRequest,
+  ): Promise<{
     originalConversationKey: string;
     scopedConversationKey: string;
     retained: boolean;
@@ -401,7 +442,10 @@ export class Llm4ZoteroAgentBackendAdapter {
             scopeType: scope?.scopeType,
             scopeId: scope?.scopeId,
             scopeLabel: scope?.scopeLabel,
-            runtimeCwdRelative: buildRuntimeCwdRelative(scope, originalConversationKey),
+            runtimeCwdRelative: buildRuntimeCwdRelative(
+              scope,
+              originalConversationKey,
+            ),
             retentionProbeId: params.probeId,
           },
           providerSessionId: params.providerSessionId,
@@ -409,7 +453,10 @@ export class Llm4ZoteroAgentBackendAdapter {
         params.mountId,
       );
     } else {
-      await this.adapter.releaseHotRuntime?.(scopedConversationKey, params.mountId);
+      await this.adapter.releaseHotRuntime?.(
+        scopedConversationKey,
+        params.mountId,
+      );
     }
     return {
       originalConversationKey,
@@ -418,7 +465,9 @@ export class Llm4ZoteroAgentBackendAdapter {
     };
   }
 
-  async invalidateSession(params: Llm4ZoteroSessionInvalidationRequest): Promise<{
+  async invalidateSession(
+    params: Llm4ZoteroSessionInvalidationRequest,
+  ): Promise<{
     originalConversationKey: string;
     scopedConversationKey: string;
     invalidated: boolean;
@@ -445,7 +494,9 @@ export class Llm4ZoteroAgentBackendAdapter {
     return { invalidated: true };
   }
 
-  async runTurn(params: Llm4ZoteroRunTurnParams): Promise<Llm4ZoteroRunTurnOutcome> {
+  async runTurn(
+    params: Llm4ZoteroRunTurnParams,
+  ): Promise<Llm4ZoteroRunTurnOutcome> {
     let lastFallbackReason = "";
     let finalText = "";
 
@@ -455,7 +506,10 @@ export class Llm4ZoteroAgentBackendAdapter {
       originalConversationKey,
       scope,
     );
-    const runtimeCwdRelative = buildRuntimeCwdRelative(scope, originalConversationKey);
+    const runtimeCwdRelative = buildRuntimeCwdRelative(
+      scope,
+      originalConversationKey,
+    );
     const mergedMetadata: Record<string, unknown> = {
       ...(params.request.metadata || {}),
       originalConversationKey,
@@ -476,7 +530,7 @@ export class Llm4ZoteroAgentBackendAdapter {
         runtimeRequest: params.request.runtimeRequest,
         mcpServers: params.request.mcpServers,
         metadata: mergedMetadata,
-        signal: params.signal
+        signal: params.signal,
       },
       {
         signal: params.signal,
@@ -500,8 +554,8 @@ export class Llm4ZoteroAgentBackendAdapter {
           }
 
           await params.onEvent?.(mapped);
-        }
-      }
+        },
+      },
     );
 
     if (outcome.status === "failed") {
@@ -509,7 +563,7 @@ export class Llm4ZoteroAgentBackendAdapter {
         kind: "fallback",
         runId: outcome.runId,
         reason: lastFallbackReason || outcome.error || "runtime_failed",
-        usedFallback: true
+        usedFallback: true,
       };
     }
 
@@ -530,14 +584,18 @@ export class Llm4ZoteroAgentBackendAdapter {
       kind: "completed",
       runId: outcome.runId,
       text: finalText,
-      usedFallback: false
+      usedFallback: false,
     };
   }
 
-  async runAction(params: Llm4ZoteroRunActionParams): Promise<Llm4ZoteroRunTurnOutcome> {
+  async runAction(
+    params: Llm4ZoteroRunActionParams,
+  ): Promise<Llm4ZoteroRunTurnOutcome> {
     const requested = params.request;
     // Project commands live under the runtime folder, not the bridge's cwd.
-    const tool = findToolByName(requested.toolName, { runtimeCwd: this.runtimeCwd });
+    const tool = findToolByName(requested.toolName, {
+      runtimeCwd: this.runtimeCwd,
+    });
     if (!tool) {
       return {
         kind: "fallback",

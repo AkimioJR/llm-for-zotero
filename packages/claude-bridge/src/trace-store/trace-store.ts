@@ -1,4 +1,10 @@
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  readFile,
+  rename,
+  writeFile,
+} from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AgentEvent } from "../types.js";
 
@@ -54,7 +60,9 @@ export class JsonFileTraceStore implements TraceStore {
   }
 
   async clear(conversationKey: string): Promise<void> {
-    this.pending = this.pending.filter((r) => r.conversationKey !== conversationKey);
+    this.pending = this.pending.filter(
+      (r) => r.conversationKey !== conversationKey,
+    );
     await this.flush();
     const all = await this.readState();
     const next = all.filter((r) => r.conversationKey !== conversationKey);
@@ -70,11 +78,13 @@ export class JsonFileTraceStore implements TraceStore {
   }
 
   private async enqueueFlush(): Promise<void> {
-    this.flushChain = this.flushChain.then(async () => {
-      if (!this.pending.length) return;
-      const batch = this.pending.splice(0, this.pending.length);
-      await this.appendBatch(batch);
-    }).catch(() => {});
+    this.flushChain = this.flushChain
+      .then(async () => {
+        if (!this.pending.length) return;
+        const batch = this.pending.splice(0, this.pending.length);
+        await this.appendBatch(batch);
+      })
+      .catch(() => {});
     await this.flushChain;
   }
 
@@ -82,7 +92,8 @@ export class JsonFileTraceStore implements TraceStore {
     if (!records.length) return;
     await mkdir(dirname(this.filePath), { recursive: true });
     await this.migrateLegacyFileIfNeeded();
-    const payload = records.map((record) => JSON.stringify(record)).join("\n") + "\n";
+    const payload =
+      records.map((record) => JSON.stringify(record)).join("\n") + "\n";
     await appendFile(this.filePath, payload, "utf8");
   }
 

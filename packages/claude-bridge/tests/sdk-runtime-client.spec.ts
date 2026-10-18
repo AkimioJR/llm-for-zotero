@@ -14,7 +14,7 @@ function makeStream(items: unknown[]): any {
       for (const item of items) {
         yield item;
       }
-    }
+    },
   };
 }
 
@@ -41,7 +41,10 @@ function makeModelProbe(models: unknown[] = []): any {
 
 const temporaryDirectories = new Set<string>();
 
-async function createPdfFile(name = "paper.pdf", contents = "%PDF-1.4\n% test\n"): Promise<string> {
+async function createPdfFile(
+  name = "paper.pdf",
+  contents = "%PDF-1.4\n% test\n",
+): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "cc-l4z-pdf-"));
   temporaryDirectories.add(directory);
   const path = join(directory, name);
@@ -62,7 +65,10 @@ async function nextEvent(
   return Promise.race([
     iterator.next(),
     new Promise<IteratorResult<any>>((_, reject) => {
-      setTimeout(() => reject(new Error("Timed out waiting for event")), timeoutMs);
+      setTimeout(
+        () => reject(new Error("Timed out waiting for event")),
+        timeoutMs,
+      );
     }),
   ]);
 }
@@ -90,7 +96,9 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     }
     globalPermissionStore.cleanup();
     await Promise.all(
-      Array.from(temporaryDirectories, (directory) => rm(directory, { recursive: true, force: true })),
+      Array.from(temporaryDirectories, (directory) =>
+        rm(directory, { recursive: true, force: true }),
+      ),
     );
     temporaryDirectories.clear();
   });
@@ -106,10 +114,19 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
         seenOptions = args.options;
         return makeStream([
           { type: "system", session_id: "session-new", subtype: "init" },
-          { type: "assistant", session_id: "session-new", message: { content: [{ type: "text", text: "hi" }] } },
-          { type: "result", session_id: "session-new", result: "hi", is_error: false }
+          {
+            type: "assistant",
+            session_id: "session-new",
+            message: { content: [{ type: "text", text: "hi" }] },
+          },
+          {
+            type: "result",
+            session_id: "session-new",
+            result: "hi",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     const mcpServers = {
@@ -146,7 +163,7 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       "provider_event",
       "message_delta",
       "provider_event",
-      "final"
+      "final",
     ]);
   });
 
@@ -163,14 +180,20 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
             session_id: "session-scope",
             message: { content: [{ type: "text", text: "ok" }] },
           },
-          { type: "result", session_id: "session-scope", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-scope",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     const stream = await runtime.startTurn({
       conversationKey: "conv-scope",
-      userMessage: "can you find the commonality of the papers inside this folder?",
+      userMessage:
+        "can you find the commonality of the papers inside this folder?",
       runtimeRequest: {
         selectedCollectionContexts: [
           {
@@ -193,11 +216,13 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       // Drain the provider stream so the runtime reaches its final state.
     }
 
-    expect(seenPrompt).toContain("Selected Zotero collection scope for this turn:");
+    expect(seenPrompt).toContain(
+      "Selected Zotero collection scope for this turn:",
+    );
     expect(seenPrompt).toContain("Computational_Psychiatry");
     expect(seenPrompt).toContain("collectionId=42");
     expect(seenPrompt).toContain("libraryID=1");
-    expect(seenPrompt).toContain("\"this folder\"");
+    expect(seenPrompt).toContain('"this folder"');
     expect(seenPrompt).toContain("library_search");
     expect(seenPrompt).toContain("library_retrieve");
     expect(seenPrompt).toContain("Selected Zotero tag scope for this turn:");
@@ -217,7 +242,12 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
         seenOptions = args.options;
         return makeStream([
           { type: "system", session_id: "session-pdf", subtype: "init" },
-          { type: "result", session_id: "session-pdf", result: "ok", is_error: false },
+          {
+            type: "result",
+            session_id: "session-pdf",
+            result: "ok",
+            is_error: false,
+          },
         ]);
       },
     });
@@ -226,12 +256,14 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       conversationKey: "conv-pdf",
       userMessage: "compare them",
       runtimeRequest: {
-        selectedPaperContexts: [{
-          itemId: 10,
-          contextItemId: 20,
-          title: "Legacy duplicate",
-          contentSourceMode: "pdf",
-        }],
+        selectedPaperContexts: [
+          {
+            itemId: 10,
+            contextItemId: 20,
+            title: "Legacy duplicate",
+            contentSourceMode: "pdf",
+          },
+        ],
         localDocuments: [
           {
             kind: "local_pdf",
@@ -278,30 +310,48 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     const hooks = seenOptions.hooks as {
       PreToolUse?: Array<{
         matcher?: string;
-        hooks?: Array<(input: unknown, toolUseId: string | undefined, options: unknown) => Promise<unknown>>;
+        hooks?: Array<
+          (
+            input: unknown,
+            toolUseId: string | undefined,
+            options: unknown,
+          ) => Promise<unknown>
+        >;
       }>;
     };
     const readMatcher = hooks.PreToolUse?.[0];
     const readHook = readMatcher?.hooks?.[0];
     expect(readMatcher?.matcher).toBe("Read");
     expect(readHook).toBeTypeOf("function");
-    await expect(readHook?.({
-      hook_event_name: "PreToolUse",
-      tool_name: "Read",
-      tool_input: { file_path: firstPdf },
-      tool_use_id: "read-selected",
-    }, "read-selected", {})).resolves.toMatchObject({
+    await expect(
+      readHook?.(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "Read",
+          tool_input: { file_path: firstPdf },
+          tool_use_id: "read-selected",
+        },
+        "read-selected",
+        {},
+      ),
+    ).resolves.toMatchObject({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "allow",
       },
     });
-    await expect(readHook?.({
-      hook_event_name: "PreToolUse",
-      tool_name: "Read",
-      tool_input: { file_path: join(dirname(firstPdf), "sibling.pdf") },
-      tool_use_id: "read-sibling",
-    }, "read-sibling", {})).resolves.toMatchObject({
+    await expect(
+      readHook?.(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "Read",
+          tool_input: { file_path: join(dirname(firstPdf), "sibling.pdf") },
+          tool_use_id: "read-sibling",
+        },
+        "read-sibling",
+        {},
+      ),
+    ).resolves.toMatchObject({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
@@ -322,7 +372,12 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
         seenPrompt = typeof args.prompt === "string" ? args.prompt : "";
         seenOptions = args.options;
         return makeStream([
-          { type: "result", session_id: "session-skill", result: "ok", is_error: false },
+          {
+            type: "result",
+            session_id: "session-skill",
+            result: "ok",
+            is_error: false,
+          },
         ]);
       },
     });
@@ -332,16 +387,18 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       userMessage: "/my-pdf-skill answer with my format",
       allowedTools: ["Read", "Skill"],
       runtimeRequest: {
-        localDocuments: [{
-          kind: "local_pdf",
-          sourceKey: "zotero-pdf:10:20",
-          itemId: 10,
-          contextItemId: 20,
-          title: "Paper",
-          name: "paper.pdf",
-          mimeType: "application/pdf",
-          absolutePath: pdfPath,
-        }],
+        localDocuments: [
+          {
+            kind: "local_pdf",
+            sourceKey: "zotero-pdf:10:20",
+            itemId: 10,
+            contextItemId: 20,
+            title: "Paper",
+            name: "paper.pdf",
+            mimeType: "application/pdf",
+            absolutePath: pdfPath,
+          },
+        ],
       },
     });
     for await (const _event of stream.events) void _event;
@@ -359,7 +416,9 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     const runtime = new ClaudeAgentSdkRuntimeClient({
       queryImpl(args) {
         queryCount += 1;
-        seenPrompts.push(typeof args.prompt === "string" ? args.prompt : "[stream]");
+        seenPrompts.push(
+          typeof args.prompt === "string" ? args.prompt : "[stream]",
+        );
         if (queryCount === 1) {
           return makeStream([
             {
@@ -398,16 +457,18 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
         claudeAutoCompactThresholdPercent: 80,
       },
       runtimeRequest: {
-        localDocuments: [{
-          kind: "local_pdf",
-          sourceKey: "zotero-pdf:10:20",
-          itemId: 10,
-          contextItemId: 20,
-          title: "Paper",
-          name: "paper.pdf",
-          mimeType: "application/pdf",
-          absolutePath: pdfPath,
-        }],
+        localDocuments: [
+          {
+            kind: "local_pdf",
+            sourceKey: "zotero-pdf:10:20",
+            itemId: 10,
+            contextItemId: 20,
+            title: "Paper",
+            name: "paper.pdf",
+            mimeType: "application/pdf",
+            absolutePath: pdfPath,
+          },
+        ],
       },
     });
     for await (const _event of pdfTurn.events) void _event;
@@ -434,22 +495,26 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       },
     });
 
-    await expect(runtime.startTurn({
-      conversationKey: "conv-invalid-pdf",
-      userMessage: "read it",
-      runtimeRequest: {
-        localDocuments: [{
-          kind: "local_pdf",
-          sourceKey: "zotero-pdf:10:999",
-          itemId: 10,
-          contextItemId: 20,
-          title: "Wrong identity",
-          name: "paper.pdf",
-          mimeType: "application/pdf",
-          absolutePath: "/papers/paper.pdf",
-        }],
-      },
-    })).rejects.toThrow("Invalid local PDF resource batch");
+    await expect(
+      runtime.startTurn({
+        conversationKey: "conv-invalid-pdf",
+        userMessage: "read it",
+        runtimeRequest: {
+          localDocuments: [
+            {
+              kind: "local_pdf",
+              sourceKey: "zotero-pdf:10:999",
+              itemId: 10,
+              contextItemId: 20,
+              title: "Wrong identity",
+              name: "paper.pdf",
+              mimeType: "application/pdf",
+              absolutePath: "/papers/paper.pdf",
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow("Invalid local PDF resource batch");
     expect(queryCalls).toBe(0);
   });
 
@@ -464,37 +529,38 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       },
     });
 
-    await expect(runtime.startTurn({
-      conversationKey: "conv-invalid-file",
-      userMessage: "compare",
-      runtimeRequest: {
-        localDocuments: [
-          {
-            kind: "local_pdf",
-            sourceKey: "zotero-pdf:10:20",
-            itemId: 10,
-            contextItemId: 20,
-            title: "Valid",
-            name: "valid.pdf",
-            mimeType: "application/pdf",
-            absolutePath: validPdf,
-          },
-          {
-            kind: "local_pdf",
-            sourceKey: "zotero-pdf:11:21",
-            itemId: 11,
-            contextItemId: 21,
-            title: "Invalid",
-            name: "invalid.pdf",
-            mimeType: "application/pdf",
-            absolutePath: invalidPdf,
-          },
-        ],
-      },
-    })).rejects.toThrow("zotero-pdf:11:21");
+    await expect(
+      runtime.startTurn({
+        conversationKey: "conv-invalid-file",
+        userMessage: "compare",
+        runtimeRequest: {
+          localDocuments: [
+            {
+              kind: "local_pdf",
+              sourceKey: "zotero-pdf:10:20",
+              itemId: 10,
+              contextItemId: 20,
+              title: "Valid",
+              name: "valid.pdf",
+              mimeType: "application/pdf",
+              absolutePath: validPdf,
+            },
+            {
+              kind: "local_pdf",
+              sourceKey: "zotero-pdf:11:21",
+              itemId: 11,
+              contextItemId: 21,
+              title: "Invalid",
+              name: "invalid.pdf",
+              mimeType: "application/pdf",
+              absolutePath: invalidPdf,
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow("zotero-pdf:11:21");
     expect(queryCalls).toBe(0);
   });
-
 
   it("does not request live context usage after normal final results", async () => {
     let contextUsageCalls = 0;
@@ -502,8 +568,17 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl() {
         return {
           async *[Symbol.asyncIterator]() {
-            yield { type: "system", session_id: "session-final", subtype: "init" };
-            yield { type: "result", session_id: "session-final", result: "done", is_error: false };
+            yield {
+              type: "system",
+              session_id: "session-final",
+              subtype: "init",
+            };
+            yield {
+              type: "result",
+              session_id: "session-final",
+              result: "done",
+              is_error: false,
+            };
           },
           async getContextUsage() {
             contextUsageCalls += 1;
@@ -583,7 +658,11 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
 
     expect(confirmation?.payload?.requestId).toMatch(/^perm-/);
     expect(confirmation?.payload?.action?.toolName).toBe("Bash");
-    expect(globalPermissionStore.resolve(confirmation.payload.requestId, { approved: true })).toBe(true);
+    expect(
+      globalPermissionStore.resolve(confirmation.payload.requestId, {
+        approved: true,
+      }),
+    ).toBe(true);
 
     const remainingTypes: string[] = [];
     for (;;) {
@@ -600,7 +679,12 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl(args) {
         seenOptions = args.options;
         return makeStream([
-          { type: "result", session_id: "session-yolo", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-yolo",
+            result: "ok",
+            is_error: false,
+          },
         ]);
       },
     });
@@ -628,7 +712,12 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl(args) {
         seenModes.push(args.options.permissionMode);
         return makeStream([
-          { type: "result", session_id: "session-mode", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-mode",
+            result: "ok",
+            is_error: false,
+          },
         ]);
       },
     });
@@ -710,15 +799,20 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl(args) {
         seenOptions = args.options;
         return makeStream([
-          { type: "result", session_id: "session-new", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-new",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     await runtime.startTurn({
       conversationKey: "conv-1",
       userMessage: "hello",
-      metadata: { model: "gemini-3.1-pro-preview", activeItemId: 123 }
+      metadata: { model: "gemini-3.1-pro-preview", activeItemId: 123 },
     });
 
     expect(seenOptions.model).toBeUndefined();
@@ -733,15 +827,20 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl(args) {
         seenOptions = args.options;
         return makeStream([
-          { type: "result", session_id: "session-new", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-new",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     await runtime.startTurn({
       conversationKey: "conv-1",
       userMessage: "hello",
-      metadata: { model: "gemini-3.1-pro-preview" }
+      metadata: { model: "gemini-3.1-pro-preview" },
     });
 
     expect(seenOptions.model).toBe("gemini-3.1-pro-preview");
@@ -997,7 +1096,9 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
   });
 
   it("bounds per-runtime scoped model caches and drops completed generations", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "cc-l4z-model-cache-bound-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "cc-l4z-model-cache-bound-"),
+    );
     temporaryDirectories.add(directory);
     let queryCount = 0;
     const runtime = new ClaudeAgentSdkRuntimeClient({
@@ -1374,19 +1475,26 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
         }
         seenOptions = args.options;
         return makeStream([
-          { type: "result", session_id: "session-new", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-new",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     await runtime.startTurn({
       conversationKey: "conv-effort",
       userMessage: "hello",
-      metadata: { model: "haiku", effort: "xhigh" }
+      metadata: { model: "haiku", effort: "xhigh" },
     });
 
     expect(seenOptions.effort).toBe("high");
-    expect(String(seenOptions.effortFallbackNotice)).toBe("XHigh is unavailable for this model. Using High.");
+    expect(String(seenOptions.effortFallbackNotice)).toBe(
+      "XHigh is unavailable for this model. Using High.",
+    );
   });
 
   it("retries unknown xhigh effort with high when SDK init fails early", async () => {
@@ -1404,15 +1512,20 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
         }
         return makeStream([
           { type: "system", session_id: "session-new", subtype: "init" },
-          { type: "result", session_id: "session-new", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-new",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     const stream = await runtime.startTurn({
       conversationKey: "conv-effort-retry",
       userMessage: "hello",
-      metadata: { model: "haiku", effort: "xhigh" }
+      metadata: { model: "haiku", effort: "xhigh" },
     });
 
     const events = [];
@@ -1425,7 +1538,9 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
 
     expect(seenEfforts).toEqual(["xhigh", "high"]);
     expect(events).toContain("final");
-    expect(seenStatus.some((text) => text.includes("Retrying with High"))).toBe(true);
+    expect(seenStatus.some((text) => text.includes("Retrying with High"))).toBe(
+      true,
+    );
   });
 
   it("remembers the last good effort after an early retry", async () => {
@@ -1441,24 +1556,39 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
           return makeFailingStream(new Error("unsupported effort"));
         }
         return makeStream([
-          { type: "system", session_id: `session-${seenEfforts.length}`, subtype: "init" },
-          { type: "result", session_id: `session-${seenEfforts.length}`, result: "ok", is_error: false }
+          {
+            type: "system",
+            session_id: `session-${seenEfforts.length}`,
+            subtype: "init",
+          },
+          {
+            type: "result",
+            session_id: `session-${seenEfforts.length}`,
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
-    for (const conversationKey of ["conv-effort-cache-a", "conv-effort-cache-b"]) {
+    for (const conversationKey of [
+      "conv-effort-cache-a",
+      "conv-effort-cache-b",
+    ]) {
       const stream = await runtime.startTurn({
         conversationKey,
         userMessage: "hello",
-        metadata: { model: "haiku", effort: "xhigh" }
+        metadata: { model: "haiku", effort: "xhigh" },
       });
       for await (const _event of stream.events) {
         void _event;
       }
     }
 
-    const cache = (runtime as any).effortSuccessCache as Map<string, { updatedAt: number }>;
+    const cache = (runtime as any).effortSuccessCache as Map<
+      string,
+      { updatedAt: number }
+    >;
     for (const record of cache.values()) {
       record.updatedAt = Date.now() - 10 * 60_000;
     }
@@ -1466,7 +1596,7 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     const stream = await runtime.startTurn({
       conversationKey: "conv-effort-cache-c",
       userMessage: "hello",
-      metadata: { model: "haiku", effort: "xhigh" }
+      metadata: { model: "haiku", effort: "xhigh" },
     });
     for await (const _event of stream.events) {
       void _event;
@@ -1483,9 +1613,14 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl(args) {
         seenOptions = args.options;
         return makeStream([
-          { type: "result", session_id: "session-new", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-new",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     await runtime.startTurn({
@@ -1493,7 +1628,9 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       userMessage: "hello",
     });
 
-    expect(seenOptions.appendSystemPrompt).toBe("Use evidence-first reading style.");
+    expect(seenOptions.appendSystemPrompt).toBe(
+      "Use evidence-first reading style.",
+    );
   });
 
   it("falls back to USERPROFILE for user settings path", async () => {
@@ -1507,17 +1644,24 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl(args) {
         seenOptions = args.options;
         return makeStream([
-          { type: "result", session_id: "session-new", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-new",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     await runtime.startTurn({
       conversationKey: "conv-1",
-      userMessage: "hello"
+      userMessage: "hello",
     });
 
-    expect(String(seenOptions.appendSystemPrompt)).toContain("/tmp/windows-home/.claude/settings.json");
+    expect(String(seenOptions.appendSystemPrompt)).toContain(
+      "/tmp/windows-home/.claude/settings.json",
+    );
   });
 
   it("includes paper, attachment, and note context in prompt text", async () => {
@@ -1527,19 +1671,36 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl(args) {
         seenPrompt = args.prompt;
         return makeStream([
-          { type: "result", session_id: "session-new", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-new",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     await runtime.startTurn({
       conversationKey: "conv-light",
       userMessage: "hello",
       runtimeRequest: {
-        selectedPaperContexts: [{ title: "Paper A", contextItemId: 1, contextFilePath: "/tmp/a.md" }],
-        fullTextPaperContexts: [{ title: "Paper B", contextItemId: 2, contextFilePath: "/tmp/b.md" }],
-        pinnedPaperContexts: [{ title: "Paper C", contextItemId: 3, contextFilePath: "/tmp/c.md" }],
-        attachments: [{ name: "notes.txt", storedPath: "/tmp/notes.txt", mimeType: "text/plain" }],
+        selectedPaperContexts: [
+          { title: "Paper A", contextItemId: 1, contextFilePath: "/tmp/a.md" },
+        ],
+        fullTextPaperContexts: [
+          { title: "Paper B", contextItemId: 2, contextFilePath: "/tmp/b.md" },
+        ],
+        pinnedPaperContexts: [
+          { title: "Paper C", contextItemId: 3, contextFilePath: "/tmp/c.md" },
+        ],
+        attachments: [
+          {
+            name: "notes.txt",
+            storedPath: "/tmp/notes.txt",
+            mimeType: "text/plain",
+          },
+        ],
         activeNoteContext: { title: "Note", noteText: "content" },
       } as Record<string, unknown>,
     });
@@ -1547,7 +1708,9 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     expect(typeof seenPrompt).toBe("string");
     expect(String(seenPrompt)).toContain("Selected papers for this turn:");
     expect(String(seenPrompt)).toContain("Paper A");
-    expect(String(seenPrompt)).toContain("Papers marked for full-text reading on this turn:");
+    expect(String(seenPrompt)).toContain(
+      "Papers marked for full-text reading on this turn:",
+    );
     expect(String(seenPrompt)).toContain("Paper B");
     expect(String(seenPrompt)).toContain("Pinned papers:");
     expect(String(seenPrompt)).toContain("Paper C");
@@ -1565,9 +1728,14 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl(args) {
         fallbackPrompt = args.prompt;
         return makeStream([
-          { type: "result", session_id: "session-fallback", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-fallback",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
     await fallbackRuntime.startTurn({
       conversationKey: "conv-fallback-history",
@@ -1585,9 +1753,14 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl(args) {
         normalPrompt = args.prompt;
         return makeStream([
-          { type: "result", session_id: "session-normal", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "session-normal",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
     await normalRuntime.startTurn({
       conversationKey: "conv-normal-history",
@@ -1600,9 +1773,13 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       } as Record<string, unknown>,
     });
 
-    expect(String(fallbackPrompt)).toContain("Local Zotero conversation history");
+    expect(String(fallbackPrompt)).toContain(
+      "Local Zotero conversation history",
+    );
     expect(String(fallbackPrompt)).toContain("old answer");
-    expect(String(normalPrompt)).not.toContain("Local Zotero conversation history");
+    expect(String(normalPrompt)).not.toContain(
+      "Local Zotero conversation history",
+    );
     expect(String(normalPrompt)).not.toContain("old answer");
   });
 
@@ -1613,7 +1790,9 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     const runtime = new ClaudeAgentSdkRuntimeClient({
       queryImpl(args) {
         queryCalls += 1;
-        seenPrompts.push(typeof args.prompt === "string" ? args.prompt : "[stream]");
+        seenPrompts.push(
+          typeof args.prompt === "string" ? args.prompt : "[stream]",
+        );
         return makeStream([
           {
             type: "result",
@@ -1635,31 +1814,41 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       userMessage: "read the selected PDF",
       runtimeRequest: {
         history: [{ role: "user", content: "earlier question" }],
-        localDocuments: [{
-          kind: "local_pdf",
-          sourceKey: "zotero-pdf:10:20",
-          itemId: 10,
-          contextItemId: 20,
-          title: "Paper",
-          name: "paper.pdf",
-          mimeType: "application/pdf",
-          absolutePath: pdfPath,
-        }],
+        localDocuments: [
+          {
+            kind: "local_pdf",
+            sourceKey: "zotero-pdf:10:20",
+            itemId: 10,
+            contextItemId: 20,
+            title: "Paper",
+            name: "paper.pdf",
+            mimeType: "application/pdf",
+            absolutePath: pdfPath,
+          },
+        ],
       },
     });
-    expect(await sessionMapper.get("conv-gap-command::local-pdf-history-gap")).toBe("1");
+    expect(
+      await sessionMapper.get("conv-gap-command::local-pdf-history-gap"),
+    ).toBe("1");
 
     const history = [
       { role: "user", content: "read the selected PDF" },
       { role: "assistant", content: "PDF summary" },
     ];
-    await expect(adapter.runTurn({
-      conversationKey: "conv-gap-command",
-      userMessage: "/compact",
-      runtimeRequest: { history },
-    })).rejects.toThrow("Cannot compact while Claude continuity is being rebuilt");
+    await expect(
+      adapter.runTurn({
+        conversationKey: "conv-gap-command",
+        userMessage: "/compact",
+        runtimeRequest: { history },
+      }),
+    ).rejects.toThrow(
+      "Cannot compact while Claude continuity is being rebuilt",
+    );
     expect(queryCalls).toBe(1);
-    expect(await sessionMapper.get("conv-gap-command::local-pdf-history-gap")).toBe("1");
+    expect(
+      await sessionMapper.get("conv-gap-command::local-pdf-history-gap"),
+    ).toBe("1");
 
     await adapter.runTurn({
       conversationKey: "conv-gap-command",
@@ -1670,7 +1859,9 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     expect(seenPrompts[1]).toMatch(/^\/my-skill compare the result/);
     expect(seenPrompts[1]).toContain("Local Zotero conversation history");
     expect(seenPrompts[1]).toContain("PDF summary");
-    expect(await sessionMapper.get("conv-gap-command::local-pdf-history-gap")).toBeUndefined();
+    expect(
+      await sessionMapper.get("conv-gap-command::local-pdf-history-gap"),
+    ).toBeUndefined();
   });
 
   it("adapter updates session mapper from streamed sessionId", async () => {
@@ -1678,20 +1869,25 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       queryImpl() {
         return makeStream([
           { type: "system", session_id: "sess-live", subtype: "init" },
-          { type: "result", session_id: "sess-live", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "sess-live",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     const sessionMapper = new InMemorySessionMapper();
     const adapter = new ClaudeCodeRuntimeAdapter({
       runtimeClient: runtime,
-      sessionMapper
+      sessionMapper,
     });
 
     const outcome = await adapter.runTurn({
       conversationKey: "conv-session",
-      userMessage: "ping"
+      userMessage: "ping",
     });
 
     expect(outcome.providerSessionId).toBe("sess-live");
@@ -1708,15 +1904,20 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
         seenModels.push(options.model);
         return makeStream([
           { type: "system", session_id: "sess-1m", subtype: "init" },
-          { type: "result", session_id: "sess-1m", result: "ok", is_error: false }
+          {
+            type: "result",
+            session_id: "sess-1m",
+            result: "ok",
+            is_error: false,
+          },
         ]);
-      }
+      },
     });
 
     const stream = await runtime.startTurn({
       conversationKey: "conv-1m-model",
       userMessage: "hello",
-      metadata: { model: "sonnet[1m]" }
+      metadata: { model: "sonnet[1m]" },
     });
     for await (const _event of stream.events) {
       void _event;
@@ -1746,25 +1947,33 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
             for await (const _message of prompt as AsyncIterable<unknown>) {
               turnIndex += 1;
               yield { type: "system", session_id: "sess-hot", subtype: "init" };
-              yield { type: "result", session_id: "sess-hot", result: `ok-${turnIndex}`, is_error: false };
+              yield {
+                type: "result",
+                session_id: "sess-hot",
+                result: `ok-${turnIndex}`,
+                is_error: false,
+              };
             }
           },
           close() {},
         } as any;
-      }
+      },
     });
 
-    await runtime.retainHotRuntime({ conversationKey: "conv-hot", userMessage: "" }, "mount-1");
+    await runtime.retainHotRuntime(
+      { conversationKey: "conv-hot", userMessage: "" },
+      "mount-1",
+    );
     await runtime.warmHotRuntime?.({
       conversationKey: "conv-hot",
       userMessage: "",
-      metadata: { model: "sonnet" }
+      metadata: { model: "sonnet" },
     });
 
     const first = await runtime.startTurn({
       conversationKey: "conv-hot",
       userMessage: "hello",
-      metadata: { model: "sonnet" }
+      metadata: { model: "sonnet" },
     });
     for await (const _event of first.events) {
       void _event;
@@ -1775,7 +1984,7 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     const second = await runtime.startTurn({
       conversationKey: "conv-hot",
       userMessage: "again",
-      metadata: { model: "sonnet" }
+      metadata: { model: "sonnet" },
     });
     for await (const _event of second.events) {
       void _event;
@@ -1805,20 +2014,32 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
           async *[Symbol.asyncIterator]() {
             for await (const _message of prompt as AsyncIterable<unknown>) {
               turnIndex += 1;
-              yield { type: "system", session_id: "sess-hot-rebuild", subtype: "init" };
-              yield { type: "result", session_id: "sess-hot-rebuild", result: `ok-${turnIndex}`, is_error: false };
+              yield {
+                type: "system",
+                session_id: "sess-hot-rebuild",
+                subtype: "init",
+              };
+              yield {
+                type: "result",
+                session_id: "sess-hot-rebuild",
+                result: `ok-${turnIndex}`,
+                is_error: false,
+              };
             }
           },
           close() {},
         } as any;
-      }
+      },
     });
 
-    await runtime.retainHotRuntime({ conversationKey: "conv-hot-rebuild", userMessage: "" }, "mount-1");
+    await runtime.retainHotRuntime(
+      { conversationKey: "conv-hot-rebuild", userMessage: "" },
+      "mount-1",
+    );
     const first = await runtime.startTurn({
       conversationKey: "conv-hot-rebuild",
       userMessage: "hello",
-      metadata: { model: "sonnet", permissionMode: "default" }
+      metadata: { model: "sonnet", permissionMode: "default" },
     });
     for await (const _event of first.events) {
       void _event;
@@ -1827,7 +2048,7 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     const second = await runtime.startTurn({
       conversationKey: "conv-hot-rebuild",
       userMessage: "again",
-      metadata: { model: "opus", permissionMode: "default" }
+      metadata: { model: "opus", permissionMode: "default" },
     });
     for await (const _event of second.events) {
       void _event;
@@ -1836,7 +2057,7 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     const third = await runtime.startTurn({
       conversationKey: "conv-hot-rebuild",
       userMessage: "one more time",
-      metadata: { model: "opus", permissionMode: "plan" }
+      metadata: { model: "opus", permissionMode: "plan" },
     });
     for await (const _event of third.events) {
       void _event;
@@ -1863,12 +2084,19 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
         queryCount += 1;
         const sessionId = `sess-${queryCount}`;
         seenDirectories.push(args.options.additionalDirectories);
-        seenPrompts.push(typeof args.prompt === "string" ? args.prompt : "[stream]");
+        seenPrompts.push(
+          typeof args.prompt === "string" ? args.prompt : "[stream]",
+        );
         seenPersistence.push(args.options.persistSession);
         if (typeof args.prompt === "string") {
           return makeStream([
             { type: "system", session_id: sessionId, subtype: "init" },
-            { type: "result", session_id: sessionId, result: "ok", is_error: false },
+            {
+              type: "result",
+              session_id: sessionId,
+              result: "ok",
+              is_error: false,
+            },
           ]);
         }
         const prompt = args.prompt as AsyncIterable<unknown>;
@@ -1876,14 +2104,23 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
           async *[Symbol.asyncIterator]() {
             for await (const _message of prompt) {
               yield { type: "system", session_id: sessionId, subtype: "init" };
-              yield { type: "result", session_id: sessionId, result: "ok", is_error: false };
+              yield {
+                type: "result",
+                session_id: sessionId,
+                result: "ok",
+                is_error: false,
+              };
             }
           },
           close() {},
         } as any;
       },
     });
-    const document = (itemId: number, contextItemId: number, absolutePath: string) => ({
+    const document = (
+      itemId: number,
+      contextItemId: number,
+      absolutePath: string,
+    ) => ({
       kind: "local_pdf",
       sourceKey: `zotero-pdf:${itemId}:${contextItemId}`,
       itemId,
@@ -1894,7 +2131,10 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       absolutePath,
     });
 
-    await runtime.retainHotRuntime({ conversationKey: "conv-hot-pdf", userMessage: "" }, "mount-1");
+    await runtime.retainHotRuntime(
+      { conversationKey: "conv-hot-pdf", userMessage: "" },
+      "mount-1",
+    );
     const first = await runtime.startTurn({
       conversationKey: "conv-hot-pdf",
       userMessage: "read A",
@@ -1918,7 +2158,10 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
       if (event.type !== "provider_event") continue;
       const payload = event.payload as Record<string, unknown>;
       const nested = payload.payload as Record<string, unknown> | undefined;
-      if (payload.providerType === "profiling" && typeof nested?.stage === "string") {
+      if (
+        payload.providerType === "profiling" &&
+        typeof nested?.stage === "string"
+      ) {
         thirdTurnStages.push(nested.stage);
       }
     }
@@ -1941,7 +2184,6 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     expect(Array.from(retainedEntry?.mounts || [])).toEqual(["mount-1"]);
     await runtime.invalidateHotRuntime("conv-hot-pdf");
   });
-
 
   it("rebuilds retained hot runtime when MCP server config changes", async () => {
     let queryCount = 0;
@@ -1972,16 +2214,28 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
           async *[Symbol.asyncIterator]() {
             for await (const _message of prompt as AsyncIterable<unknown>) {
               turnIndex += 1;
-              yield { type: "system", session_id: "sess-hot-mcp", subtype: "init" };
-              yield { type: "result", session_id: "sess-hot-mcp", result: `ok-${turnIndex}`, is_error: false };
+              yield {
+                type: "system",
+                session_id: "sess-hot-mcp",
+                subtype: "init",
+              };
+              yield {
+                type: "result",
+                session_id: "sess-hot-mcp",
+                result: `ok-${turnIndex}`,
+                is_error: false,
+              };
             }
           },
           close() {},
         } as any;
-      }
+      },
     });
 
-    await runtime.retainHotRuntime({ conversationKey: "conv-hot-mcp", userMessage: "" }, "mount-1");
+    await runtime.retainHotRuntime(
+      { conversationKey: "conv-hot-mcp", userMessage: "" },
+      "mount-1",
+    );
     const first = await runtime.startTurn({
       conversationKey: "conv-hot-mcp",
       userMessage: "hello",
@@ -2026,20 +2280,32 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
               throw new Error("unsupported effort");
             }
             for await (const _message of prompt) {
-              yield { type: "system", session_id: "sess-hot-effort", subtype: "init" };
-              yield { type: "result", session_id: "sess-hot-effort", result: "ok", is_error: false };
+              yield {
+                type: "system",
+                session_id: "sess-hot-effort",
+                subtype: "init",
+              };
+              yield {
+                type: "result",
+                session_id: "sess-hot-effort",
+                result: "ok",
+                is_error: false,
+              };
             }
           },
           close() {},
         } as any;
-      }
+      },
     });
 
-    await runtime.retainHotRuntime({ conversationKey: "conv-hot-effort", userMessage: "" }, "mount-1");
+    await runtime.retainHotRuntime(
+      { conversationKey: "conv-hot-effort", userMessage: "" },
+      "mount-1",
+    );
     const stream = await runtime.startTurn({
       conversationKey: "conv-hot-effort",
       userMessage: "hello",
-      metadata: { model: "haiku", effort: "xhigh" }
+      metadata: { model: "haiku", effort: "xhigh" },
     });
 
     const seenEvents = [];
@@ -2052,7 +2318,9 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
 
     expect(seenEfforts).toEqual(["xhigh", "high"]);
     expect(seenEvents).toContain("final");
-    expect(seenStatus.some((text) => text.includes("Retrying with High"))).toBe(true);
+    expect(seenStatus.some((text) => text.includes("Retrying with High"))).toBe(
+      true,
+    );
   });
 
   it("bypasses retained hot runtime when forceFreshSession is requested", async () => {
@@ -2070,15 +2338,27 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
           async *[Symbol.asyncIterator]() {
             for await (const _message of prompt) {
               turnIndex += 1;
-              yield { type: "system", session_id: turnIndex === 1 ? "sess-old" : "sess-fresh", subtype: "init" };
-              yield { type: "result", session_id: turnIndex === 1 ? "sess-old" : "sess-fresh", result: `ok-${turnIndex}`, is_error: false };
+              yield {
+                type: "system",
+                session_id: turnIndex === 1 ? "sess-old" : "sess-fresh",
+                subtype: "init",
+              };
+              yield {
+                type: "result",
+                session_id: turnIndex === 1 ? "sess-old" : "sess-fresh",
+                result: `ok-${turnIndex}`,
+                is_error: false,
+              };
             }
-          }
+          },
         } as any;
-      }
+      },
     });
 
-    await runtime.retainHotRuntime({ conversationKey: "conv-fresh-hot", userMessage: "" }, "mount-1");
+    await runtime.retainHotRuntime(
+      { conversationKey: "conv-fresh-hot", userMessage: "" },
+      "mount-1",
+    );
 
     const first = await runtime.startTurn({
       conversationKey: "conv-fresh-hot",
@@ -2114,16 +2394,28 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
           async *[Symbol.asyncIterator]() {
             for await (const _message of prompt) {
               turnIndex += 1;
-              yield { type: "system", session_id: "sess-retained", subtype: "init" };
-              yield { type: "result", session_id: "sess-retained", result: `ok-${turnIndex}`, is_error: false };
+              yield {
+                type: "system",
+                session_id: "sess-retained",
+                subtype: "init",
+              };
+              yield {
+                type: "result",
+                session_id: "sess-retained",
+                result: `ok-${turnIndex}`,
+                is_error: false,
+              };
             }
           },
           close() {},
         } as any;
-      }
+      },
     });
 
-    await runtime.retainHotRuntime({ conversationKey: "conv-retained", userMessage: "" }, "mount-1");
+    await runtime.retainHotRuntime(
+      { conversationKey: "conv-retained", userMessage: "" },
+      "mount-1",
+    );
     const first = await runtime.startTurn({
       conversationKey: "conv-retained",
       userMessage: "hello",
@@ -2133,7 +2425,10 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
     }
 
     await runtime.releaseHotRuntime("conv-retained", "mount-1");
-    await runtime.retainHotRuntime({ conversationKey: "conv-retained", userMessage: "" }, "mount-2");
+    await runtime.retainHotRuntime(
+      { conversationKey: "conv-retained", userMessage: "" },
+      "mount-2",
+    );
 
     const second = await runtime.startTurn({
       conversationKey: "conv-retained",
@@ -2161,16 +2456,28 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
           async *[Symbol.asyncIterator]() {
             for await (const _message of prompt) {
               turnIndex += 1;
-              yield { type: "system", session_id: "sess-warm", subtype: "init" };
-              yield { type: "result", session_id: "sess-warm", result: `ok-${turnIndex}`, is_error: false };
+              yield {
+                type: "system",
+                session_id: "sess-warm",
+                subtype: "init",
+              };
+              yield {
+                type: "result",
+                session_id: "sess-warm",
+                result: `ok-${turnIndex}`,
+                is_error: false,
+              };
             }
           },
           close() {},
         } as any;
-      }
+      },
     });
 
-    await runtime.retainHotRuntime({ conversationKey: "conv-warm", userMessage: "" }, "mount-1");
+    await runtime.retainHotRuntime(
+      { conversationKey: "conv-warm", userMessage: "" },
+      "mount-1",
+    );
     await runtime.warmHotRuntime?.({
       conversationKey: "conv-warm",
       userMessage: "",
@@ -2234,10 +2541,13 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
           },
           close() {},
         } as any;
-      }
+      },
     });
 
-    await runtime.retainHotRuntime({ conversationKey: "conv-hot-permission", userMessage: "" }, "mount-1");
+    await runtime.retainHotRuntime(
+      { conversationKey: "conv-hot-permission", userMessage: "" },
+      "mount-1",
+    );
     await runtime.warmHotRuntime?.({
       conversationKey: "conv-hot-permission",
       userMessage: "",
@@ -2260,7 +2570,11 @@ describe("ClaudeAgentSdkRuntimeClient", () => {
 
     expect(confirmation?.payload?.requestId).toMatch(/^perm-/);
     expect(confirmation?.payload?.action?.toolName).toBe("Bash");
-    expect(globalPermissionStore.resolve(confirmation.payload.requestId, { approved: true })).toBe(true);
+    expect(
+      globalPermissionStore.resolve(confirmation.payload.requestId, {
+        approved: true,
+      }),
+    ).toBe(true);
 
     const remainingTypes: string[] = [];
     for (;;) {

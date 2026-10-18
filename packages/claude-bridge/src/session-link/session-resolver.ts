@@ -42,7 +42,7 @@ export class SessionResolver {
     const sessions = await this.discoveryClient.listSessions({
       dir: params.dir,
       limit: 1,
-      includeWorktrees: params.includeWorktrees ?? true
+      includeWorktrees: params.includeWorktrees ?? true,
     });
 
     const latest = sessions[0]?.sessionId;
@@ -54,7 +54,10 @@ export class SessionResolver {
     return latest;
   }
 
-  async bindConversation(conversationKey: string, sessionId: string): Promise<void> {
+  async bindConversation(
+    conversationKey: string,
+    sessionId: string,
+  ): Promise<void> {
     await this.sessionMapper.set(conversationKey, sessionId);
   }
 }

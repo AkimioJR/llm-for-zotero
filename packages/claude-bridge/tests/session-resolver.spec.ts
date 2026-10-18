@@ -2,8 +2,14 @@ import { rm, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { InMemorySessionMapper, JsonFileSessionMapper } from "../src/session-link/session-mapper.js";
-import { SessionResolver, type SessionDiscoveryClient } from "../src/session-link/session-resolver.js";
+import {
+  InMemorySessionMapper,
+  JsonFileSessionMapper,
+} from "../src/session-link/session-mapper.js";
+import {
+  SessionResolver,
+  type SessionDiscoveryClient,
+} from "../src/session-link/session-resolver.js";
 
 describe("SessionResolver", () => {
   it("returns existing mapped session without discovery", async () => {
@@ -15,11 +21,16 @@ describe("SessionResolver", () => {
       async listSessions() {
         discoveryCalls += 1;
         return [{ sessionId: "sess-new" }];
-      }
+      },
     };
 
-    const resolver = new SessionResolver({ sessionMapper: mapper, discoveryClient });
-    const sessionId = await resolver.resolveForConversation({ conversationKey: "conv-1" });
+    const resolver = new SessionResolver({
+      sessionMapper: mapper,
+      discoveryClient,
+    });
+    const sessionId = await resolver.resolveForConversation({
+      conversationKey: "conv-1",
+    });
 
     expect(sessionId).toBe("sess-existing");
     expect(discoveryCalls).toBe(0);
@@ -32,13 +43,16 @@ describe("SessionResolver", () => {
         expect(options?.limit).toBe(1);
         expect(options?.includeWorktrees).toBe(true);
         return [{ sessionId: "sess-latest", summary: "latest" }];
-      }
+      },
     };
 
-    const resolver = new SessionResolver({ sessionMapper: mapper, discoveryClient });
+    const resolver = new SessionResolver({
+      sessionMapper: mapper,
+      discoveryClient,
+    });
     const sessionId = await resolver.resolveForConversation({
       conversationKey: "conv-2",
-      dir: "/tmp/project"
+      dir: "/tmp/project",
     });
 
     expect(sessionId).toBe("sess-latest");
@@ -50,11 +64,16 @@ describe("SessionResolver", () => {
     const discoveryClient: SessionDiscoveryClient = {
       async listSessions() {
         return [];
-      }
+      },
     };
 
-    const resolver = new SessionResolver({ sessionMapper: mapper, discoveryClient });
-    const sessionId = await resolver.resolveForConversation({ conversationKey: "conv-3" });
+    const resolver = new SessionResolver({
+      sessionMapper: mapper,
+      discoveryClient,
+    });
+    const sessionId = await resolver.resolveForConversation({
+      conversationKey: "conv-3",
+    });
 
     expect(sessionId).toBeUndefined();
     expect(await mapper.get("conv-3")).toBeUndefined();

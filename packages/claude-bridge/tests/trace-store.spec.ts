@@ -106,6 +106,9 @@ describe("JsonFileTraceStore", () => {
     expect(backup.trim().startsWith("[")).toBe(true);
 
     const records = await store.list("conv-legacy");
-    expect(records.map((record) => record.runId)).toEqual(["run-legacy", "run-new"]);
+    expect(records.map((record) => record.runId)).toEqual([
+      "run-legacy",
+      "run-new",
+    ]);
   });
 });

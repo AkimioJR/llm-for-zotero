@@ -1,4 +1,10 @@
-import type { ClaudeCodeRuntimeClient, RuntimeAccountQuota, RuntimeAccountQuotaOptions, RuntimeModelInfo, RuntimePermissionModeCatalog } from "../runtime.js";
+import type {
+  ClaudeCodeRuntimeClient,
+  RuntimeAccountQuota,
+  RuntimeAccountQuotaOptions,
+  RuntimeModelInfo,
+  RuntimePermissionModeCatalog,
+} from "../runtime.js";
 import type { SessionMapper } from "../session-link/session-mapper.js";
 import type { TraceStore } from "../trace-store/trace-store.js";
 import type {
@@ -30,10 +36,15 @@ type ResumeSource =
   | "local_pdf";
 
 export class ClaudeCodeRuntimeAdapter {
-  get supportsStructuredCompletion(): boolean { return typeof this.runtimeClient.completeStructured === "function"; }
+  get supportsStructuredCompletion(): boolean {
+    return typeof this.runtimeClient.completeStructured === "function";
+  }
 
-  async completeStructured(request: import("../runtime.js").StructuredCompletionRequest): Promise<import("../runtime.js").StructuredCompletionResult> {
-    if (!this.runtimeClient.completeStructured) throw new Error("structured_completion_v1 is unavailable");
+  async completeStructured(
+    request: import("../runtime.js").StructuredCompletionRequest,
+  ): Promise<import("../runtime.js").StructuredCompletionResult> {
+    if (!this.runtimeClient.completeStructured)
+      throw new Error("structured_completion_v1 is unavailable");
     return this.runtimeClient.completeStructured(request);
   }
 
@@ -91,7 +102,7 @@ export class ClaudeCodeRuntimeAdapter {
     options: RuntimeAccountQuotaOptions,
   ): Promise<RuntimeAccountQuota | null> {
     try {
-      return await this.runtimeClient.getAccountQuota?.(options) ?? null;
+      return (await this.runtimeClient.getAccountQuota?.(options)) ?? null;
     } catch {
       return null;
     }
@@ -155,7 +166,9 @@ export class ClaudeCodeRuntimeAdapter {
     runtimeCwdRelative?: string;
   }): Promise<RuntimePermissionModeCatalog> {
     if (typeof this.runtimeClient.listPermissionModes !== "function") {
-      throw new Error("Claude Code runtime permission mode catalog is unavailable");
+      throw new Error(
+        "Claude Code runtime permission mode catalog is unavailable",
+      );
     }
     return this.runtimeClient.listPermissionModes(options);
   }

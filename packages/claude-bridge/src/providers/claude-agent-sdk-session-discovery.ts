@@ -1,5 +1,8 @@
 import { listSessions } from "@anthropic-ai/claude-agent-sdk";
-import type { SessionDiscoveryClient, SessionListItem } from "../session-link/session-resolver.js";
+import type {
+  SessionDiscoveryClient,
+  SessionListItem,
+} from "../session-link/session-resolver.js";
 
 export class ClaudeAgentSdkSessionDiscoveryClient implements SessionDiscoveryClient {
   async listSessions(options?: {
@@ -10,14 +13,14 @@ export class ClaudeAgentSdkSessionDiscoveryClient implements SessionDiscoveryCli
     const sessions = await listSessions({
       dir: options?.dir,
       limit: options?.limit,
-      includeWorktrees: options?.includeWorktrees
+      includeWorktrees: options?.includeWorktrees,
     });
 
     return sessions.map((session) => ({
       sessionId: session.sessionId,
       summary: session.summary,
       lastModified: session.lastModified,
-      cwd: session.cwd
+      cwd: session.cwd,
     }));
   }
 }

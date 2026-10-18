@@ -14,7 +14,7 @@ function providerEvents(events: ProviderEvent[]): AsyncIterable<ProviderEvent> {
       for (const event of events) {
         yield event;
       }
-    }
+    },
   };
 }
 
@@ -29,7 +29,9 @@ function createRuntimeWithCommand(): string {
   return runtimeCwd;
 }
 
-async function readNdjsonLines(response: Response): Promise<Array<Record<string, unknown>>> {
+async function readNdjsonLines(
+  response: Response,
+): Promise<Array<Record<string, unknown>>> {
   const text = await response.text();
   return text
     .split("\n")
@@ -42,21 +44,37 @@ describe("http bridge server", () => {
   it("honors the host semantic deadline within the bounded completion limit", async () => {
     const deadlines: number[] = [];
     const runtimeClient: ClaudeCodeRuntimeClient = {
-      async startTurn() { return { runId: "fixture", events: providerEvents([]) }; },
-      async completeStructured(request) { deadlines.push(request.timeoutMs); return { text: "{}" }; },
+      async startTurn() {
+        return { runId: "fixture", events: providerEvents([]) };
+      },
+      async completeStructured(request) {
+        deadlines.push(request.timeoutMs);
+        return { text: "{}" };
+      },
     };
-    const base = new ClaudeCodeRuntimeAdapter({ runtimeClient, sessionMapper: new InMemorySessionMapper() });
-    const server = await startHttpBridgeServer({ adapter: new Llm4ZoteroAgentBackendAdapter({ adapter: base }) });
+    const base = new ClaudeCodeRuntimeAdapter({
+      runtimeClient,
+      sessionMapper: new InMemorySessionMapper(),
+    });
+    const server = await startHttpBridgeServer({
+      adapter: new Llm4ZoteroAgentBackendAdapter({ adapter: base }),
+    });
     try {
       for (const timeoutMs of [180000, 300000, 900000]) {
-        const response = await fetch(`http://${server.host}:${server.port}/structured-completion`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: "Interpret", timeoutMs }),
-        });
+        const response = await fetch(
+          `http://${server.host}:${server.port}/structured-completion`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: "Interpret", timeoutMs }),
+          },
+        );
         expect(response.status).toBe(200);
       }
       expect(deadlines).toEqual([180000, 300000, 300000]);
-    } finally { await server.close(); }
+    } finally {
+      await server.close();
+    }
   });
 
   it("advertises local PDF path protocol support", async () => {
@@ -74,11 +92,17 @@ describe("http bridge server", () => {
     });
 
     try {
-      const response = await fetch(`http://${server.host}:${server.port}/healthz`);
+      const response = await fetch(
+        `http://${server.host}:${server.port}/healthz`,
+      );
       expect(await response.json()).toMatchObject({
         ok: true,
         protocolVersion: 2,
-        capabilities: ["local_pdf_paths", "model_catalog_v1", "permission_modes_v1"],
+        capabilities: [
+          "local_pdf_paths",
+          "model_catalog_v1",
+          "permission_modes_v1",
+        ],
       });
     } finally {
       await server.close();
@@ -114,7 +138,9 @@ describe("http bridge server", () => {
         bridgeVersion: "9.9.9",
         managedBy: "llm-for-zotero",
       });
-      const tools = await fetch(`${origin}/secret-token/tools?settingSources=user`);
+      const tools = await fetch(
+        `${origin}/secret-token/tools?settingSources=user`,
+      );
       expect(tools.status).toBe(200);
     } finally {
       await server.close();
@@ -423,13 +449,13 @@ describe("http bridge server", () => {
       async startTurn() {
         return {
           runId: "run-http-tools",
-          events: providerEvents([])
+          events: providerEvents([]),
         };
-      }
+      },
     };
     const base = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
-      sessionMapper: new InMemorySessionMapper()
+      sessionMapper: new InMemorySessionMapper(),
     });
     const compat = new Llm4ZoteroAgentBackendAdapter({
       adapter: base,
@@ -438,11 +464,17 @@ describe("http bridge server", () => {
     const server = await startHttpBridgeServer({ adapter: compat });
 
     try {
-      const response = await fetch(`http://${server.host}:${server.port}/tools?settingSources=project`);
+      const response = await fetch(
+        `http://${server.host}:${server.port}/tools?settingSources=project`,
+      );
       expect(response.ok).toBe(true);
-      const payload = await response.json() as { tools?: Array<{ name: string }> };
+      const payload = (await response.json()) as {
+        tools?: Array<{ name: string }>;
+      };
       expect(Array.isArray(payload.tools)).toBe(true);
-      expect((payload.tools || []).map((tool) => tool.name)).toContain("summarize");
+      expect((payload.tools || []).map((tool) => tool.name)).toContain(
+        "summarize",
+      );
     } finally {
       await server.close();
     }
@@ -453,7 +485,7 @@ describe("http bridge server", () => {
       async startTurn() {
         return {
           runId: "run-http-mcp-tools",
-          events: providerEvents([])
+          events: providerEvents([]),
         };
       },
       async listMcpServers() {
@@ -473,23 +505,41 @@ describe("http bridge server", () => {
             tools: [{ name: "should_not_show" }],
           },
         ];
-      }
+      },
     };
     const base = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
-      sessionMapper: new InMemorySessionMapper()
+      sessionMapper: new InMemorySessionMapper(),
     });
     const compat = new Llm4ZoteroAgentBackendAdapter({ adapter: base });
     const server = await startHttpBridgeServer({ adapter: compat });
 
     try {
-      const response = await fetch(`http://${server.host}:${server.port}/tools?settingSources=user`);
+      const response = await fetch(
+        `http://${server.host}:${server.port}/tools?settingSources=user`,
+      );
       expect(response.ok).toBe(true);
-      const payload = await response.json() as { tools?: Array<{ name: string; source: string; mutability: string; requiresConfirmation: boolean }> };
+      const payload = (await response.json()) as {
+        tools?: Array<{
+          name: string;
+          source: string;
+          mutability: string;
+          requiresConfirmation: boolean;
+        }>;
+      };
       const tools = payload.tools || [];
-      expect(tools.some((tool) => tool.name === "grok-search.web_search" && tool.source === "mcp")).toBe(true);
-      expect(tools.some((tool) => tool.name === "broken-mcp.should_not_show")).toBe(false);
-      expect(tools.find((tool) => tool.name === "grok-search.switch_model")).toMatchObject({
+      expect(
+        tools.some(
+          (tool) =>
+            tool.name === "grok-search.web_search" && tool.source === "mcp",
+        ),
+      ).toBe(true);
+      expect(
+        tools.some((tool) => tool.name === "broken-mcp.should_not_show"),
+      ).toBe(false);
+      expect(
+        tools.find((tool) => tool.name === "grok-search.switch_model"),
+      ).toMatchObject({
         mutability: "write",
         requiresConfirmation: true,
       });
@@ -520,31 +570,34 @@ describe("http bridge server", () => {
           providerSessionId: request.providerSessionId,
           events: providerEvents([
             { type: "message_delta", payload: { delta: "hello" } },
-            { type: "final", payload: { output: "hello" } }
-          ])
+            { type: "final", payload: { output: "hello" } },
+          ]),
         };
-      }
+      },
     };
 
     const base = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
-      sessionMapper: new InMemorySessionMapper()
+      sessionMapper: new InMemorySessionMapper(),
     });
     const compat = new Llm4ZoteroAgentBackendAdapter({ adapter: base });
     const server = await startHttpBridgeServer({ adapter: compat });
 
     try {
-      const response = await fetch(`http://${server.host}:${server.port}/run-turn`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          conversationKey: "conv-1",
-          userText: "hello",
-          providerSessionId: "sess-http-resume",
-          allowedTools,
-          mcpServers,
-        })
-      });
+      const response = await fetch(
+        `http://${server.host}:${server.port}/run-turn`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            conversationKey: "conv-1",
+            userText: "hello",
+            providerSessionId: "sess-http-resume",
+            allowedTools,
+            mcpServers,
+          }),
+        },
+      );
 
       expect(response.ok).toBe(true);
       const lines = await readNdjsonLines(response);
@@ -572,24 +625,27 @@ describe("http bridge server", () => {
       async startTurn() {
         return {
           runId: "run-http-2",
-          events: providerEvents([])
+          events: providerEvents([]),
         };
-      }
+      },
     };
 
     const base = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
-      sessionMapper: new InMemorySessionMapper()
+      sessionMapper: new InMemorySessionMapper(),
     });
     const compat = new Llm4ZoteroAgentBackendAdapter({ adapter: base });
     const server = await startHttpBridgeServer({ adapter: compat });
 
     try {
-      const response = await fetch(`http://${server.host}:${server.port}/run-turn`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userText: "missing conversation key" })
-      });
+      const response = await fetch(
+        `http://${server.host}:${server.port}/run-turn`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ userText: "missing conversation key" }),
+        },
+      );
 
       expect(response.status).toBe(400);
     } finally {
@@ -605,14 +661,16 @@ describe("http bridge server", () => {
         return {
           runId: "run-http-string-key",
           providerSessionId: "sess-http-string-key",
-          events: providerEvents([{ type: "final", payload: { output: "ok" } }]),
+          events: providerEvents([
+            { type: "final", payload: { output: "ok" } },
+          ]),
         };
-      }
+      },
     };
 
     const base = new ClaudeCodeRuntimeAdapter({
       runtimeClient,
-      sessionMapper: new InMemorySessionMapper()
+      sessionMapper: new InMemorySessionMapper(),
     });
     const compat = new Llm4ZoteroAgentBackendAdapter({
       adapter: base,
@@ -621,25 +679,28 @@ describe("http bridge server", () => {
     const server = await startHttpBridgeServer({ adapter: compat });
 
     try {
-      const runResponse = await fetch(`http://${server.host}:${server.port}/run-turn`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          conversationKey: "0042",
-          userText: "hello",
-          scopeType: "paper",
-          scopeId: "profile-test:1:42",
-          scopeLabel: "Paper 42",
-        })
-      });
+      const runResponse = await fetch(
+        `http://${server.host}:${server.port}/run-turn`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            conversationKey: "0042",
+            userText: "hello",
+            scopeType: "paper",
+            scopeId: "profile-test:1:42",
+            scopeLabel: "Paper 42",
+          }),
+        },
+      );
       expect(runResponse.ok).toBe(true);
       await readNdjsonLines(runResponse);
 
       const sessionInfoResponse = await fetch(
-        `http://${server.host}:${server.port}/session-info?conversationKey=0042&scopeType=paper&scopeId=profile-test%3A1%3A42&scopeLabel=Paper%2042`
+        `http://${server.host}:${server.port}/session-info?conversationKey=0042&scopeType=paper&scopeId=profile-test%3A1%3A42&scopeLabel=Paper%2042`,
       );
       expect(sessionInfoResponse.ok).toBe(true);
-      const payload = await sessionInfoResponse.json() as {
+      const payload = (await sessionInfoResponse.json()) as {
         session?: {
           originalConversationKey: string;
           scopedConversationKey: string;
@@ -656,7 +717,8 @@ describe("http bridge server", () => {
         scopeType: "paper",
         scopeId: "profile-test:1:42",
         scopeLabel: "Paper 42",
-        runtimeCwdRelative: "profile-test/scopes/paper/profile-test:1:42/conversations/0042",
+        runtimeCwdRelative:
+          "profile-test/scopes/paper/profile-test:1:42/conversations/0042",
         cwd: "/tmp/adapter-runtime/profile-test/scopes/paper/profile-test:1:42/conversations/0042",
       });
     } finally {
@@ -721,16 +783,19 @@ describe("http bridge server", () => {
     const server = await startHttpBridgeServer({ adapter: compat });
 
     try {
-      const response = await fetch(`http://${server.host}:${server.port}/run-action`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          conversationKey: "conv-action-1",
-          toolName: "Read",
-          args: { file_path: "README.md" },
-          approved: true
-        })
-      });
+      const response = await fetch(
+        `http://${server.host}:${server.port}/run-action`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            conversationKey: "conv-action-1",
+            toolName: "Read",
+            args: { file_path: "README.md" },
+            approved: true,
+          }),
+        },
+      );
 
       expect(response.ok).toBe(true);
       const lines = await readNdjsonLines(response);

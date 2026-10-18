@@ -56,7 +56,10 @@ function createMessageChannel(): {
               return Promise.resolve({ value: queue.shift()!, done: false });
             }
             if (closed) {
-              return Promise.resolve({ value: undefined, done: true } as IteratorResult<SDKUserMessage>);
+              return Promise.resolve({
+                value: undefined,
+                done: true,
+              } as IteratorResult<SDKUserMessage>);
             }
             return new Promise((resolve) => {
               waiter = resolve;
@@ -81,7 +84,10 @@ function createMessageChannel(): {
       if (waiter) {
         const resolve = waiter;
         waiter = null;
-        resolve({ value: undefined, done: true } as IteratorResult<SDKUserMessage>);
+        resolve({
+          value: undefined,
+          done: true,
+        } as IteratorResult<SDKUserMessage>);
       }
     },
   };
@@ -111,7 +117,10 @@ export function createHotRuntimeTurn(runId: string): HotRuntimeTurn {
     if (done) {
       const resolve = waiter.resolve;
       waiter = null;
-      resolve({ value: undefined, done: true } as IteratorResult<ProviderEvent>);
+      resolve({
+        value: undefined,
+        done: true,
+      } as IteratorResult<ProviderEvent>);
     }
   };
 
@@ -145,7 +154,10 @@ export function createHotRuntimeTurn(runId: string): HotRuntimeTurn {
               return Promise.reject(error);
             }
             if (done) {
-              return Promise.resolve({ value: undefined, done: true } as IteratorResult<ProviderEvent>);
+              return Promise.resolve({
+                value: undefined,
+                done: true,
+              } as IteratorResult<ProviderEvent>);
             }
             return new Promise((resolve, reject) => {
               waiter = { resolve, reject };
@@ -157,7 +169,9 @@ export function createHotRuntimeTurn(runId: string): HotRuntimeTurn {
   };
 }
 
-export function createHotRuntimeEntry(conversationKey: string): HotRuntimeEntry {
+export function createHotRuntimeEntry(
+  conversationKey: string,
+): HotRuntimeEntry {
   const channel = createMessageChannel();
   return {
     conversationKey,
@@ -213,7 +227,11 @@ export class HotRuntimePool {
     return entry;
   }
 
-  release(conversationKey: string, mountId: string, onExpire: (entry: HotRuntimeEntry) => void): void {
+  release(
+    conversationKey: string,
+    mountId: string,
+    onExpire: (entry: HotRuntimeEntry) => void,
+  ): void {
     const entry = this.entries.get(conversationKey);
     if (!entry) return;
     entry.mounts.delete(mountId);
@@ -221,7 +239,10 @@ export class HotRuntimePool {
     this.scheduleCloseIfIdle(entry, onExpire);
   }
 
-  scheduleCloseIfIdle(entry: HotRuntimeEntry, onExpire: (entry: HotRuntimeEntry) => void): void {
+  scheduleCloseIfIdle(
+    entry: HotRuntimeEntry,
+    onExpire: (entry: HotRuntimeEntry) => void,
+  ): void {
     if (entry.mounts.size > 0 || entry.currentTurn) return;
     if (entry.closeTimer) return;
     entry.closeRequested = true;

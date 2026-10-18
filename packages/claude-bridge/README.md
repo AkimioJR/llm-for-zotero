@@ -222,21 +222,21 @@ Server start command:
 npm run serve:bridge
 ```
 
-| Flag | Env | Description |
-|------|-----|-------------|
-| `--host` | `ADAPTER_HOST` | Bind host (default `127.0.0.1`) |
-| `--port` | `ADAPTER_PORT` | Bind port (default `19787`) |
-| `--runtime-cwd` | `ADAPTER_RUNTIME_CWD` | Workspace root for Claude Agent SDK. Defaults to the legacy Zotero runtime path when available. |
-| `--state-dir` | `ADAPTER_STATE_DIR` | Session/trace persistence directory. Defaults to the legacy Zotero state path when available. |
-| `--zotero-root` | `ZOTERO_ROOT` | Override the legacy Zotero root used to derive default runtime/state paths. Useful when Zotero data is not under the home directory. |
-| `--additional-directories` | `ADAPTER_ADDITIONAL_DIRECTORIES` | Extra readable directories (comma-separated, `~` supported). |
-| (env only) | `ADAPTER_WINDOWS_DRIVE_MOUNT_ROOT` | Where Windows drives are mounted when the bridge runs under WSL while Zotero runs on Windows (default `/mnt`). Raw PDF paths such as `C:\Users\...` are mapped to `<root>/c/Users/...`. |
-| `--default-allowed-tools` | `ADAPTER_DEFAULT_ALLOWED_TOOLS` | Tools always auto-allowed (comma-separated). Default: `WebFetch,WebSearch`. |
-| `--setting-sources` | `ADAPTER_SETTING_SOURCES` | Claude settings sources: `user`, `project`, `local` (comma-separated). Default: `user,project,local`. |
-| `--append-system-prompt` | `ADAPTER_APPEND_SYSTEM_PROMPT` | Inline overlay prompt text. |
-| `--append-system-prompt-file` | `ADAPTER_APPEND_SYSTEM_PROMPT_FILE` | File-based overlay prompt. Missing optional files are ignored. |
-| `--forward-frontend-model` | `ADAPTER_FORWARD_FRONTEND_MODEL` | Pass every non-empty frontend `metadata.model` value to Claude Code unchanged (default `true`). Claude Code resolves aliases, custom provider names, and future model families. |
-| `--log-file` | `ADAPTER_LOG_FILE` | Mirror bridge stdout/stderr to a file. Use `1` / `true` to write to `<state-dir>/bridge.log`. |
+| Flag                          | Env                                 | Description                                                                                                                                                                             |
+| ----------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--host`                      | `ADAPTER_HOST`                      | Bind host (default `127.0.0.1`)                                                                                                                                                         |
+| `--port`                      | `ADAPTER_PORT`                      | Bind port (default `19787`)                                                                                                                                                             |
+| `--runtime-cwd`               | `ADAPTER_RUNTIME_CWD`               | Workspace root for Claude Agent SDK. Defaults to the legacy Zotero runtime path when available.                                                                                         |
+| `--state-dir`                 | `ADAPTER_STATE_DIR`                 | Session/trace persistence directory. Defaults to the legacy Zotero state path when available.                                                                                           |
+| `--zotero-root`               | `ZOTERO_ROOT`                       | Override the legacy Zotero root used to derive default runtime/state paths. Useful when Zotero data is not under the home directory.                                                    |
+| `--additional-directories`    | `ADAPTER_ADDITIONAL_DIRECTORIES`    | Extra readable directories (comma-separated, `~` supported).                                                                                                                            |
+| (env only)                    | `ADAPTER_WINDOWS_DRIVE_MOUNT_ROOT`  | Where Windows drives are mounted when the bridge runs under WSL while Zotero runs on Windows (default `/mnt`). Raw PDF paths such as `C:\Users\...` are mapped to `<root>/c/Users/...`. |
+| `--default-allowed-tools`     | `ADAPTER_DEFAULT_ALLOWED_TOOLS`     | Tools always auto-allowed (comma-separated). Default: `WebFetch,WebSearch`.                                                                                                             |
+| `--setting-sources`           | `ADAPTER_SETTING_SOURCES`           | Claude settings sources: `user`, `project`, `local` (comma-separated). Default: `user,project,local`.                                                                                   |
+| `--append-system-prompt`      | `ADAPTER_APPEND_SYSTEM_PROMPT`      | Inline overlay prompt text.                                                                                                                                                             |
+| `--append-system-prompt-file` | `ADAPTER_APPEND_SYSTEM_PROMPT_FILE` | File-based overlay prompt. Missing optional files are ignored.                                                                                                                          |
+| `--forward-frontend-model`    | `ADAPTER_FORWARD_FRONTEND_MODEL`    | Pass every non-empty frontend `metadata.model` value to Claude Code unchanged (default `true`). Claude Code resolves aliases, custom provider names, and future model families.         |
+| `--log-file`                  | `ADAPTER_LOG_FILE`                  | Mirror bridge stdout/stderr to a file. Use `1` / `true` to write to `<state-dir>/bridge.log`.                                                                                           |
 
 Default additional readable directories:
 

@@ -8,12 +8,25 @@ describe("isolated semantic completion", () => {
     const client = new ClaudeAgentSdkRuntimeClient({
       queryImpl: ((input: any) => {
         options = input.options;
-        return { async *[Symbol.asyncIterator]() {
-          yield { type: "result", subtype: "success", result: '{"actionIntents":[]}' };
-        }, close() { closed = true; } };
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield {
+              type: "result",
+              subtype: "success",
+              result: '{"actionIntents":[]}',
+            };
+          },
+          close() {
+            closed = true;
+          },
+        };
       }) as any,
     });
-    const result = await client.completeStructured({ prompt: "Interpret this request", model: "sonnet", timeoutMs: 1000 });
+    const result = await client.completeStructured({
+      prompt: "Interpret this request",
+      model: "sonnet",
+      timeoutMs: 1000,
+    });
     expect(result).toEqual({ text: '{"actionIntents":[]}' });
     expect(options.tools).toEqual([]);
     expect(options.mcpServers).toEqual({});
@@ -31,14 +44,21 @@ describe("isolated semantic completion", () => {
     let closed = false;
     const client = new ClaudeAgentSdkRuntimeClient({
       queryImpl: (() => ({
-        async *[Symbol.asyncIterator]() { await new Promise(() => {}); },
-        close() { closed = true; },
+        async *[Symbol.asyncIterator]() {
+          await new Promise(() => {});
+        },
+        close() {
+          closed = true;
+        },
       })) as any,
     });
-    const pending = client.completeStructured({prompt: "Interpret", timeoutMs: 10000, signal: controller.signal});
+    const pending = client.completeStructured({
+      prompt: "Interpret",
+      timeoutMs: 10000,
+      signal: controller.signal,
+    });
     controller.abort();
     await expect(pending).rejects.toThrow(/cancelled/);
     expect(closed).toBe(true);
   }, 500);
-
 });

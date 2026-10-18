@@ -14,15 +14,18 @@ const SUPPORTED_TYPES = new Set([
   "message_rollback",
   "usage",
   "context_compacted",
-  "final"
+  "final",
 ]);
 
-export function mapProviderEvent(event: ProviderEvent, ts = Date.now()): AgentEvent {
+export function mapProviderEvent(
+  event: ProviderEvent,
+  ts = Date.now(),
+): AgentEvent {
   if (SUPPORTED_TYPES.has(event.type)) {
     return {
       type: event.type,
       ts,
-      payload: event.payload
+      payload: event.payload,
     } as AgentEvent;
   }
 
@@ -35,6 +38,6 @@ export function mapProviderEvent(event: ProviderEvent, ts = Date.now()): AgentEv
         event.payload && typeof event.payload === "object"
           ? (event.payload as Record<string, unknown>)
           : { value: event.payload },
-    }
+    },
   };
 }

@@ -41,7 +41,10 @@ function isHostAbsolutePath(value: string): boolean {
   if (!value || value.includes("\0")) return false;
   if (process.platform !== "win32") return isAbsolute(value);
   const windowsPath = value.replace(/\//g, "\\");
-  return /^[A-Za-z]:\\/.test(windowsPath) || /^\\\\[^\\]+\\[^\\]+(?:\\|$)/.test(windowsPath);
+  return (
+    /^[A-Za-z]:\\/.test(windowsPath) ||
+    /^\\\\[^\\]+\\[^\\]+(?:\\|$)/.test(windowsPath)
+  );
 }
 
 const WINDOWS_DRIVE_PATH = /^([A-Za-z]):[\\/](.*)$/;
@@ -59,7 +62,9 @@ function translateWindowsPathForPosix(value: string): string {
   if (process.platform === "win32") return value;
   const match = value.match(WINDOWS_DRIVE_PATH);
   if (!match) return value;
-  const mountRoot = (process.env.ADAPTER_WINDOWS_DRIVE_MOUNT_ROOT || "/mnt").replace(/\/+$/, "");
+  const mountRoot = (
+    process.env.ADAPTER_WINDOWS_DRIVE_MOUNT_ROOT || "/mnt"
+  ).replace(/\/+$/, "");
   return `${mountRoot}/${match[1].toLowerCase()}/${match[2].replace(/\\/g, "/")}`;
 }
 
@@ -77,13 +82,15 @@ type LocalPdfOutputReplacement = Readonly<{
 function buildLocalPdfOutputReplacements(
   resources: readonly LocalPdfResource[],
 ): LocalPdfOutputReplacement[] {
-  return resources.flatMap((resource) => {
-    const escaped = stringifyJson(resource.absolutePath).slice(1, -1);
-    const replacement = `[local-pdf-path:${resource.sourceKey}]`;
-    return Array.from(new Set([resource.absolutePath, escaped]))
-      .filter(Boolean)
-      .map((pattern) => ({ pattern, replacement }));
-  }).sort((left, right) => right.pattern.length - left.pattern.length);
+  return resources
+    .flatMap((resource) => {
+      const escaped = stringifyJson(resource.absolutePath).slice(1, -1);
+      const replacement = `[local-pdf-path:${resource.sourceKey}]`;
+      return Array.from(new Set([resource.absolutePath, escaped]))
+        .filter(Boolean)
+        .map((pattern) => ({ pattern, replacement }));
+    })
+    .sort((left, right) => right.pattern.length - left.pattern.length);
 }
 
 function replaceLocalPdfOutputPatterns(
@@ -91,12 +98,15 @@ function replaceLocalPdfOutputPatterns(
   replacements: readonly LocalPdfOutputReplacement[],
 ): string {
   return replacements.reduce(
-    (text, replacement) => text.split(replacement.pattern).join(replacement.replacement),
+    (text, replacement) =>
+      text.split(replacement.pattern).join(replacement.replacement),
     value,
   );
 }
 
-export function collectLocalPdfs(runtimeRequest: unknown): readonly LocalPdfResource[] {
+export function collectLocalPdfs(
+  runtimeRequest: unknown,
+): readonly LocalPdfResource[] {
   const request = asRecord(runtimeRequest);
   if (!request || request.localDocuments === undefined) return [];
   if (!Array.isArray(request.localDocuments)) {
@@ -109,7 +119,8 @@ export function collectLocalPdfs(runtimeRequest: unknown): readonly LocalPdfReso
     const record = asRecord(candidate);
     const itemId = asPositiveInteger(record?.itemId);
     const contextItemId = asPositiveInteger(record?.contextItemId);
-    const sourceKey = typeof record?.sourceKey === "string" ? record.sourceKey : "";
+    const sourceKey =
+      typeof record?.sourceKey === "string" ? record.sourceKey : "";
     const absolutePath = translateWindowsPathForPosix(
       typeof record?.absolutePath === "string" ? record.absolutePath : "",
     );
@@ -131,41 +142,53 @@ export function collectLocalPdfs(runtimeRequest: unknown): readonly LocalPdfReso
     }
 
     sourceKeys.add(sourceKey);
-    resources.push(Object.freeze({
-      kind: "local_pdf",
-      sourceKey,
-      itemId,
-      contextItemId,
-      title,
-      name,
-      mimeType: "application/pdf",
-      absolutePath,
-    }));
+    resources.push(
+      Object.freeze({
+        kind: "local_pdf",
+        sourceKey,
+        itemId,
+        contextItemId,
+        title,
+        name,
+        mimeType: "application/pdf",
+        absolutePath,
+      }),
+    );
   }
   return Object.freeze(resources);
 }
 
-export async function validateLocalPdfs(resources: readonly LocalPdfResource[]): Promise<void> {
+export async function validateLocalPdfs(
+  resources: readonly LocalPdfResource[],
+): Promise<void> {
   for (const resource of resources) {
     let file;
     try {
       file = await open(resource.absolutePath, "r");
       const stat = await file.stat();
-      if (!stat.isFile() || stat.size < 5) throw new Error("not a non-empty regular file");
+      if (!stat.isFile() || stat.size < 5)
+        throw new Error("not a non-empty regular file");
       const signature = Buffer.alloc(5);
       const { bytesRead } = await file.read(signature, 0, signature.length, 0);
-      if (bytesRead !== signature.length || signature.toString("ascii") !== "%PDF-") {
+      if (
+        bytesRead !== signature.length ||
+        signature.toString("ascii") !== "%PDF-"
+      ) {
         throw new Error("invalid PDF signature");
       }
     } catch {
-      throw new Error(`Selected raw PDF is missing, unreadable, or invalid (${resource.sourceKey}).`);
+      throw new Error(
+        `Selected raw PDF is missing, unreadable, or invalid (${resource.sourceKey}).`,
+      );
     } finally {
       await file?.close().catch(() => undefined);
     }
   }
 }
 
-export function localPdfDirectories(resources: readonly LocalPdfResource[]): string[] {
+export function localPdfDirectories(
+  resources: readonly LocalPdfResource[],
+): string[] {
   const directories = resources.map((resource) =>
     process.platform === "win32"
       ? win32.dirname(resource.absolutePath)
@@ -174,19 +197,22 @@ export function localPdfDirectories(resources: readonly LocalPdfResource[]): str
   return Array.from(new Set(directories));
 }
 
-export function renderLocalPdfPrompt(resources: readonly LocalPdfResource[]): string {
+export function renderLocalPdfPrompt(
+  resources: readonly LocalPdfResource[],
+): string {
   if (!resources.length) return "";
   return [
     "Raw PDFs explicitly selected for this turn:",
-    ...resources.map((resource, index) =>
-      `${index + 1}. ${stringifyJson({
-        sourceKey: resource.sourceKey,
-        itemId: resource.itemId,
-        contextItemId: resource.contextItemId,
-        title: resource.title,
-        name: resource.name,
-        absolutePath: resource.absolutePath,
-      })}`,
+    ...resources.map(
+      (resource, index) =>
+        `${index + 1}. ${stringifyJson({
+          sourceKey: resource.sourceKey,
+          itemId: resource.itemId,
+          contextItemId: resource.contextItemId,
+          title: resource.title,
+          name: resource.name,
+          absolutePath: resource.absolutePath,
+        })}`,
     ),
     "The ordered list above is authoritative.",
     LOCAL_PDF_POLICY,
@@ -216,9 +242,7 @@ export class LocalPdfOutputStreamSanitizer {
       `${previous?.text || ""}${chunk}`,
       this.replacements,
     );
-    let pending:
-      | { length: number; replacement: string }
-      | undefined;
+    let pending: { length: number; replacement: string } | undefined;
     for (const replacement of this.replacements) {
       const maximumLength = Math.min(
         redacted.length,
@@ -247,7 +271,10 @@ export class LocalPdfOutputStreamSanitizer {
 
   sanitizeChunk<T>(channel: string, value: T): T {
     if (!this.replacements.length) return value;
-    const visit = (entry: unknown, path: readonly (string | number)[]): unknown => {
+    const visit = (
+      entry: unknown,
+      path: readonly (string | number)[],
+    ): unknown => {
       if (typeof entry === "string") {
         return this.pushText(`${channel}:${stringifyJson(path)}`, entry);
       }
@@ -276,7 +303,10 @@ export class LocalPdfOutputStreamSanitizer {
   }
 }
 
-export function sanitizeLocalPdfOutput<T>(value: T, resources: readonly LocalPdfResource[]): T {
+export function sanitizeLocalPdfOutput<T>(
+  value: T,
+  resources: readonly LocalPdfResource[],
+): T {
   if (!resources.length) return value;
   const replacements = buildLocalPdfOutputReplacements(resources);
 
