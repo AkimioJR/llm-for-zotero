@@ -4531,6 +4531,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       void applyClaudeCodeModePreferenceChange(enabled, applyAgentBackendUi);
       // The bridge only starts once the mode is on, so load its lists now.
       if (enabled) refreshClaudeBridgeConsumers();
+      refreshClaudeBridgeLegacyNotice();
     });
   }
 
@@ -4643,18 +4644,28 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     },
     { once: true },
   );
-  void detectLegacyClaudeBridge().then((found) => {
-    if (!found || claudeBridgeWindowClosed || !claudeBridgeLegacyNotice) return;
-    const isMac = getRuntimePlatformInfo().platform === "macos";
-    claudeBridgeLegacyNotice.textContent = "";
-    for (const line of describeLegacyClaudeBridgeRemoval(isMac)) {
-      const row = doc.createElement("div");
-      row.textContent = line || "\u00a0";
-      if (line.startsWith("    ")) row.style.fontFamily = "monospace";
-      claudeBridgeLegacyNotice.appendChild(row);
+  function refreshClaudeBridgeLegacyNotice(): void {
+    if (!claudeBridgeLegacyNotice) return;
+    if (!isClaudeCodeModeEnabled()) {
+      claudeBridgeLegacyNotice.style.display = "none";
+      return;
     }
-    claudeBridgeLegacyNotice.style.display = "block";
-  });
+    void detectLegacyClaudeBridge().then((found) => {
+      if (!found || claudeBridgeWindowClosed || !isClaudeCodeModeEnabled()) {
+        return;
+      }
+      const isMac = getRuntimePlatformInfo().platform === "macos";
+      claudeBridgeLegacyNotice.textContent = "";
+      for (const line of describeLegacyClaudeBridgeRemoval(isMac)) {
+        const row = doc.createElement("div");
+        row.textContent = line || "\u00a0";
+        if (line.startsWith("    ")) row.style.fontFamily = "monospace";
+        claudeBridgeLegacyNotice.appendChild(row);
+      }
+      claudeBridgeLegacyNotice.style.display = "block";
+    });
+  }
+  refreshClaudeBridgeLegacyNotice();
   const unsubscribeClaudeBridgeStatus = onClaudeBridgeStatusChange(
     refreshClaudeBridgeStatusUi,
   );
