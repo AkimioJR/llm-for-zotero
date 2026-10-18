@@ -4531,6 +4531,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       void applyClaudeCodeModePreferenceChange(enabled, applyAgentBackendUi);
       // The bridge only starts once the mode is on, so load its lists now.
       if (enabled) refreshClaudeBridgeConsumers();
+      refreshClaudeBridgeStatusUi();
       refreshClaudeBridgeLegacyNotice();
     });
   }
@@ -4627,7 +4628,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     }
     if (claudeBridgeRestartButton) {
       claudeBridgeRestartButton.disabled =
-        !managed || bridgeStatus.state === "starting";
+        !isClaudeCodeModeEnabled() ||
+        !managed ||
+        bridgeStatus.state === "starting";
     }
     if (claudeBridgeOpenLogButton) {
       claudeBridgeOpenLogButton.disabled = !managed || !bridgeStatus.logFile;
