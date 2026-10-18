@@ -1502,6 +1502,8 @@ const zhCN: Record<string, string> = {
   Add: "添加",
   "Question attached to the selected text": "问题已附加到选中文字",
   "Quote selected text": "引用选中文字",
+  "Quote in side chat": "在侧边对话中引用",
+  "Quote selected text in a side chat": "在侧边对话中引用选中文字",
   "Show all of the selected text": "显示全部选中文字",
   "Show less of the selected text": "收起选中文字",
 };

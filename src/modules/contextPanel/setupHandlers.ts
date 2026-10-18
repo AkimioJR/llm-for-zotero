@@ -247,6 +247,7 @@ import {
   setNoteContextExpanded,
   setSelectedTextContextEntries,
   setSelectedTextExpandedIndex,
+  updateSelectedTextContextQueryForItem,
 } from "./contextResolution";
 import {
   isTextLikeAttachmentSourceMode,
@@ -6564,9 +6565,20 @@ export function setupHandlers(
           focusInput: options.focusInput,
         });
       });
-      if (outcome !== "added") return false;
+      const question = String(options.question || "").trim();
+      const questionSet =
+        Boolean(question) &&
+        (outcome === "added" || outcome === "duplicate") &&
+        updateSelectedTextContextQueryForItem(
+          textContextKey,
+          text,
+          options.source,
+          null,
+          question,
+        );
+      if (outcome !== "added" && !questionSet) return false;
       updateSelectedTextPreviewPreservingScroll();
-      return true;
+      return outcome === "added";
     },
     refreshContextSourceForCurrentItem: () => {
       withScrollGuard(chatBox, conversationKey, () => {

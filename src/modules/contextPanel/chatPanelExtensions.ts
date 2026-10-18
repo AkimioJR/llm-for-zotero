@@ -3,8 +3,8 @@
  *
  * A panel body can register optional behavior that refreshChat and the "/"
  * menu read on every render: a read-only flag, extra footer actions on
- * finished assistant messages, a post-render decorator, and the provider for
- * the "Add side chat" slash item. A body with nothing registered renders
+ * finished assistant messages, a post-render decorator, the provider for
+ * the "Add side chat" slash item, and the target of "Quote in side chat". A body with nothing registered renders
  * exactly as before; the lookup is one WeakMap read.
  */
 
@@ -28,6 +28,14 @@ export type ChatPanelSideChatSlashItem = {
   attach(): void;
 };
 
+export type ChatPanelSideChatQuote = {
+  /**
+   * Quotes `text` into the shown side chat, or a new one when none is shown;
+   * `question` becomes the chip's question.
+   */
+  quote(text: string, question?: string): void;
+};
+
 export type ChatPanelExtensions = {
   /**
    * Render without any control that writes to the conversation or starts an
@@ -47,6 +55,8 @@ export type ChatPanelExtensions = {
   afterRender?: (chatBox: HTMLElement) => void;
   /** Provider for the "Add side chat" item in this body's "/" menu. */
   sideChatSlashItem?: ChatPanelSideChatSlashItem;
+  /** Target of "Quote in side chat" in this body's selection popup. */
+  sideChatQuote?: ChatPanelSideChatQuote;
 };
 
 const chatPanelExtensions = new WeakMap<Element, ChatPanelExtensions>();

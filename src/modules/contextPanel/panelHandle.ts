@@ -15,10 +15,15 @@ export type PanelHandle = {
    * Add text as a removable selected-text chip, sent with the panel's next
    * message. Returns whether a chip was added (false for empty text, a
    * duplicate, a full chip list, or a panel with no conversation).
+   * `question` is set as the chip's question, also on a duplicate chip.
    */
   addTextContext(
     text: string,
-    opts: { source: "model" | "sidechat"; focusInput?: boolean },
+    opts: {
+      source: "model" | "sidechat";
+      focusInput?: boolean;
+      question?: string;
+    },
   ): boolean;
   /** Show the reasoning effort that the Claude runtime resolved. */
   applyResolvedClaudeEffort(effort: unknown): void;

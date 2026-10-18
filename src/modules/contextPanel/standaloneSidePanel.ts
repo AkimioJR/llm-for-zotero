@@ -1585,7 +1585,7 @@ export function createStandaloneSidePanel(
     return view;
   };
 
-  const askInSideChat = (text: string) => {
+  const askInSideChat = (text: string, question?: string) => {
     const opened = openSidePanel(tabsState);
     const targetId = resolveAskInSideChatTab(opened);
     let view = sideChatView(targetId);
@@ -1598,6 +1598,7 @@ export function createStandaloneSidePanel(
     getPanelHandle(view.body)?.addTextContext(text, {
       source: "model",
       focusInput: true,
+      question,
     });
   };
 
@@ -1967,6 +1968,9 @@ export function createStandaloneSidePanel(
           run: (info) => askInSideChat(info.contentText),
         },
       ],
+      sideChatQuote: {
+        quote: (text, question) => askInSideChat(text, question),
+      },
       sideChatSlashItem: {
         getState: () => {
           const view = slashSideChat();
@@ -2028,6 +2032,7 @@ export function createStandaloneSidePanel(
       updateChatPanelExtensions(mainBody, {
         extraAssistantActions: undefined,
         sideChatSlashItem: undefined,
+        sideChatQuote: undefined,
       });
       resetSideSurfaceChoices();
     },

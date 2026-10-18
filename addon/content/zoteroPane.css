@@ -5046,7 +5046,7 @@
   cursor: not-allowed;
 }
 
-/* Assistant-text selection popup: Quote button, then the inline prompt box. */
+/* Assistant-text selection popup: Quote buttons, then the inline prompt box. */
 .llm-assistant-selection-popup {
   position: absolute;
   z-index: 8;
@@ -5101,7 +5101,7 @@
   display: flex;
 }
 
-.llm-assistant-selection-popup.is-expanded .llm-assistant-selection-action {
+.llm-assistant-selection-popup.is-expanded .llm-assistant-selection-actions {
   display: none;
 }
 
@@ -5152,6 +5152,36 @@
   background: var(--material-background);
   border-color: var(--stroke-secondary);
   color: var(--fill-primary);
+}
+
+/* One pill; with "Quote in side chat" shown (.is-split) it has two halves. */
+.llm-assistant-selection-actions {
+  display: flex;
+  align-self: flex-start;
+  overflow: hidden;
+  border: 1px solid var(--stroke-secondary);
+  border-radius: 999px;
+  background: var(--material-background);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+.llm-assistant-selection-actions .llm-assistant-selection-action {
+  min-height: 28px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.llm-assistant-selection-actions .llm-assistant-selection-side-action {
+  border-left: 1px solid var(--stroke-secondary);
+}
+
+.llm-assistant-selection-actions.is-split
+  .llm-assistant-selection-action:hover:not(:disabled),
+.llm-assistant-selection-actions.is-split
+  .llm-assistant-selection-action:focus-visible {
+  background: var(--fill-quinary);
 }
 
 /* Welcome Message */
