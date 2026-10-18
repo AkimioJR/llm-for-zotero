@@ -25,6 +25,7 @@ import {
 import {
   getClaudeBridgeMode,
   getClaudeBridgeUrl,
+  setClaudeBridgeUrl,
 } from "../src/claudeCode/prefs";
 
 type SpawnRecord = {
@@ -245,6 +246,23 @@ describe("Claude Code bridge process", function () {
     prefs.agentBackendBridgeUrl = "";
     prefs.claudeCodeBridgeMode = "custom";
     assert.equal(getClaudeBridgeUrl(), "http://127.0.0.1:19787");
+  });
+
+  it("keeps the bridge mode when the user types a Bridge URL", function () {
+    prefs.agentBackendBridgeUrl = "http://192.168.1.4:19787";
+    assert.equal(getClaudeBridgeMode(), "custom");
+    setClaudeBridgeUrl("http://127.0.0.1:19787");
+    assert.equal(prefs.claudeCodeBridgeMode, "custom");
+    assert.equal(getClaudeBridgeMode(), "custom");
+    // An explicit choice is not overwritten.
+    prefs.claudeCodeBridgeMode = "managed";
+    setClaudeBridgeUrl("http://192.168.1.9:19787");
+    assert.equal(getClaudeBridgeMode(), "managed");
+    // A managed user stays managed after typing a remote URL.
+    prefs.claudeCodeBridgeMode = "";
+    prefs.agentBackendBridgeUrl = "";
+    setClaudeBridgeUrl("http://192.168.1.4:19787");
+    assert.equal(getClaudeBridgeMode(), "managed");
   });
 
   it("starts the bridge on the first request and points the request at it", async function () {

@@ -258,6 +258,11 @@ export function markClaudeLegacyDaemonNoticeShown(): void {
 }
 
 export function setClaudeBridgeUrl(url: string): void {
+  // While no mode is saved, the mode comes from the URL. Save the current
+  // mode first so that typing a URL never changes it.
+  if (!getStringPref("claudeCodeBridgeMode").trim()) {
+    setClaudeBridgeMode(getClaudeBridgeMode());
+  }
   setPref("agentBackendBridgeUrl", url.trim());
 }
 
