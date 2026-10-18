@@ -4527,6 +4527,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     claudeCodeEnableToggle.addEventListener("change", () => {
       const enabled = claudeCodeEnableToggle.checked;
       void applyClaudeCodeModePreferenceChange(enabled, applyAgentBackendUi);
+      // The bridge only starts once the mode is on, so load its lists now.
+      if (enabled) refreshClaudeBridgeConsumers();
     });
   }
 

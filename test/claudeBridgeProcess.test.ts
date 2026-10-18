@@ -139,7 +139,7 @@ describe("Claude Code bridge process", function () {
     ]) {
       saved[key] = globalScope[key];
     }
-    prefs = {};
+    prefs = { enableClaudeCodeMode: true };
     files = new Map();
     existing = new Set(["/usr/bin/node", "/home/u/.local/bin/claude"]);
     spawns = [];
@@ -345,6 +345,25 @@ describe("Claude Code bridge process", function () {
       String(error),
       "Claude Code was not found at /opt/missing/claude",
     );
+  });
+
+  it("does not start the bridge while Claude Code mode is off", async function () {
+    prefs.enableClaudeCodeMode = false;
+    let error: unknown;
+    try {
+      await claudeBridgeFetch(
+        `${MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL}/models`,
+      );
+    } catch (caught) {
+      error = caught;
+    }
+    assert.include(String(error), "Claude Code mode is off");
+    await restartClaudeBridge().catch(() => undefined);
+    assert.lengthOf(spawns, 0);
+    assert.equal(getClaudeBridgeStatus().state, "stopped");
+    prefs.enableClaudeCodeMode = true;
+    await claudeBridgeFetch(`${MANAGED_CLAUDE_BRIDGE_PLACEHOLDER_URL}/models`);
+    assert.lengthOf(spawns, 1);
   });
 
   it("leaves requests to the user's own bridge alone", async function () {

@@ -35,6 +35,7 @@ import {
   getClaudeBridgeNodePathPref,
   getClaudeCliPathPref,
   hasShownClaudeLegacyDaemonNotice,
+  isClaudeCodeModeEnabled,
   markClaudeLegacyDaemonNoticeShown,
 } from "./prefs";
 import { getClaudeUserHomeDir } from "./projectSkills";
@@ -501,13 +502,21 @@ async function launchBridge(): Promise<string> {
 }
 
 /**
- * Starts the bridge if it is not running, and returns its base URL. Concurrent
- * callers share one start. After repeated crashes it stops trying until the
- * user presses Restart, so a broken setup does not loop.
+ * Starts the bridge if it is not running, and returns its base URL. Refuses
+ * while Claude Code mode is off. Concurrent callers share one start. After
+ * repeated crashes it stops trying until the user presses Restart, so a
+ * broken setup does not loop.
  */
 export async function ensureClaudeBridgeRunning(): Promise<string> {
   if (running) return running.baseUrl;
   if (startPromise) return startPromise;
+  // People who do not use Claude Code mode never get a bridge, even when the
+  // settings page asks for the model list.
+  if (!isClaudeCodeModeEnabled()) {
+    throw new Error(
+      "Claude Code mode is off, so the Claude Code bridge was not started. Turn on Claude Code mode in the settings to use it.",
+    );
+  }
   const now = Date.now();
   crashTimes = crashTimes.filter((time) => now - time < CRASH_WINDOW_MS);
   if (crashTimes.length >= MAX_CRASHES_IN_WINDOW) {
