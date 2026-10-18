@@ -10,6 +10,7 @@ import {
   parseClaudeBridgeReadyLine,
   resetClaudeBridgeProcessForTests,
   restartClaudeBridge,
+  shutdownClaudeBridge,
   stopClaudeBridge,
   detectLegacyClaudeBridge,
   describeLegacyClaudeBridgeRemoval,
@@ -398,6 +399,29 @@ describe("Claude Code bridge process", function () {
     await stopping;
     assert.equal(getClaudeBridgeStatus().state, "running");
     assert.equal(getClaudeBridgeStatus().port, 43211);
+  });
+
+  it("stops a bridge that finishes starting during shutdown and registers no quit blocker", async function () {
+    const blockers: string[] = [];
+    globalScope.ChromeUtils = {
+      importESModule: (url: string) =>
+        url.includes("Subprocess")
+          ? { Subprocess: fakeSubprocess }
+          : {
+              AsyncShutdown: {
+                profileBeforeChange: {
+                  addBlocker: (name: string) => blockers.push(name),
+                  removeBlocker: () => undefined,
+                },
+              },
+            },
+    };
+    const starting = ensureClaudeBridgeRunning().catch(() => undefined);
+    const shutdown = shutdownClaudeBridge();
+    await Promise.all([starting, shutdown]);
+    assert.isTrue(bridges.every((bridge) => bridge.stdinClosed));
+    assert.equal(getClaudeBridgeStatus().state, "stopped");
+    assert.lengthOf(blockers, 0);
   });
 
   it("reports an unexpected exit and gives up after repeated crashes", async function () {

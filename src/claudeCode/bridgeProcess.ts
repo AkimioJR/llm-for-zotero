@@ -99,6 +99,7 @@ let startPromise: Promise<string> | null = null;
 let crashTimes: number[] = [];
 let unregisterQuitBlocker: (() => void) | null = null;
 let authToken = "";
+let shuttingDown = false;
 
 function setStatus(next: ClaudeBridgeStatus): void {
   status = next;
@@ -475,6 +476,15 @@ async function launchBridge(): Promise<string> {
     );
   }
 
+  if (shuttingDown) {
+    // Zotero is closing: do not keep a bridge nothing will stop, and do not
+    // register a quit blocker after shutdown removed it.
+    await proc.stdin?.close?.().catch(() => undefined);
+    await proc.kill?.(500).catch(() => undefined);
+    throw new Error(
+      "Zotero is closing, so the Claude Code bridge was stopped.",
+    );
+  }
   const { readyInfo } = outcome;
   const baseUrl = `http://127.0.0.1:${readyInfo.port}/${token}`;
   const bridge: RunningBridge = {
@@ -553,7 +563,7 @@ export async function ensureClaudeBridgeRunning(): Promise<string> {
   startPromise = launchBridge()
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      setStatus({ ...status, state: "failed", message });
+      if (!shuttingDown) setStatus({ ...status, state: "failed", message });
       throw error;
     })
     .finally(() => {
@@ -715,6 +725,7 @@ async function maybeShowLegacyDaemonNotice(): Promise<void> {
 
 /** For shutdown: stops the bridge and drops the quit blocker. */
 export async function shutdownClaudeBridge(): Promise<void> {
+  shuttingDown = true;
   unregisterQuitBlocker?.();
   unregisterQuitBlocker = null;
   await stopClaudeBridge();
@@ -732,6 +743,7 @@ export function installClaudeBridgeLifecycle(params: {
   prefsPrefix: string;
   isClaudeCodeModeEnabled: () => boolean;
 }): void {
+  shuttingDown = false;
   const prefs = (Zotero as any)?.Prefs;
   const stopUnlessWanted = () => {
     if (!params.isClaudeCodeModeEnabled() || !isManagedClaudeBridgeActive()) {
@@ -779,5 +791,6 @@ export function resetClaudeBridgeProcessForTests(): void {
   crashTimes = [];
   unregisterQuitBlocker = null;
   authToken = "";
+  shuttingDown = false;
   lifecycleObserverIds = [];
 }
