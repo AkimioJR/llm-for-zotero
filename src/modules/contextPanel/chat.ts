@@ -219,6 +219,7 @@ import type {
   CollectionContextRef,
   NoteContextRef,
   TagContextRef,
+  AttachedConversationRef,
   SelectedTextContext,
   ResolvedSelectedTextAnchor,
   SelectedTextSource,
@@ -322,6 +323,7 @@ import {
   normalizePaperContextRefs,
   normalizeCollectionContextRefs,
   normalizeTagContextRefs,
+  normalizeAttachedConversationRefs,
   normalizeAttachmentContentHash,
 } from "../../services/context/normalizers";
 import { positionMenuAtPointer } from "./menuPositioning";
@@ -973,6 +975,14 @@ function normalizeCollectionContexts(
 
 function normalizeTagContexts(tagContexts: unknown): TagContextRef[] {
   return normalizeTagContextRefs(tagContexts, { sanitizeText });
+}
+
+function normalizeAttachedConversations(
+  attachedConversations: unknown,
+): AttachedConversationRef[] {
+  return normalizeAttachedConversationRefs(attachedConversations, {
+    sanitizeText,
+  });
 }
 
 function resolveAutoLoadedPaperContextForItem(
@@ -2594,6 +2604,9 @@ function toPanelMessage(message: StoredChatMessage): Message {
     message.selectedCollectionContexts,
   );
   const selectedTagContexts = normalizeTagContexts(message.selectedTagContexts);
+  const attachedConversations = normalizeAttachedConversations(
+    message.attachedConversations,
+  );
   return {
     // Preserve the immutable database row identity through the runtime
     // history model. Turn-deletion intents use this ID as the primary fence;
@@ -2635,6 +2648,9 @@ function toPanelMessage(message: StoredChatMessage): Message {
       : undefined,
     selectedTagContexts: selectedTagContexts.length
       ? selectedTagContexts
+      : undefined,
+    attachedConversations: attachedConversations.length
+      ? attachedConversations
       : undefined,
     paperContextsExpanded: false,
     screenshotImages,
@@ -5633,6 +5649,7 @@ export async function editLatestUserMessageAndRetry(
     fullTextPaperContexts,
     selectedCollectionContexts,
     selectedTagContexts,
+    attachedConversations,
     attachments,
     modelAttachments,
     localDocuments: _localDocuments,
@@ -5885,6 +5902,15 @@ export async function editLatestUserMessageAndRetry(
     selectedTagContextsForMessage.length
       ? selectedTagContextsForMessage
       : undefined;
+  if (attachedConversations !== undefined) {
+    const attachedConversationsForMessage = normalizeAttachedConversations(
+      attachedConversations,
+    );
+    retryPair.userMessage.attachedConversations =
+      attachedConversationsForMessage.length
+        ? attachedConversationsForMessage
+        : undefined;
+  }
   retryPair.userMessage.paperContextsExpanded = false;
   retryPair.userMessage.attachments = attachmentsForMessage.length
     ? attachmentsForMessage
@@ -5930,6 +5956,7 @@ export async function editLatestUserMessageAndRetry(
         selectedCollectionContexts:
           retryPair.userMessage.selectedCollectionContexts,
         selectedTagContexts: retryPair.userMessage.selectedTagContexts,
+        attachedConversations: retryPair.userMessage.attachedConversations,
         attachments: retryPair.userMessage.attachments,
         modelAttachments: retryPair.userMessage.modelAttachments,
         modelName: retryPair.userMessage.modelName,
@@ -7015,6 +7042,7 @@ export async function editUserTurnAndRetry(opts: {
   fullTextPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
+  attachedConversations?: AttachedConversationRef[];
   attachments?: ChatAttachment[];
   modelAttachments?: ChatAttachment[];
   localDocuments?: readonly import("../../shared/types").LocalDocumentResource[];
@@ -7055,6 +7083,7 @@ export async function editUserTurnAndRetry(opts: {
     fullTextPaperContexts,
     selectedCollectionContexts,
     selectedTagContexts,
+    attachedConversations,
     attachments,
     modelAttachments,
     localDocuments: _localDocuments,
@@ -7380,6 +7409,14 @@ export async function editUserTurnAndRetry(opts: {
   userMsg.selectedTagContexts = selectedTagContextsForMessage.length
     ? selectedTagContextsForMessage
     : undefined;
+  if (attachedConversations !== undefined) {
+    const attachedConversationsForMessage = normalizeAttachedConversations(
+      attachedConversations,
+    );
+    userMsg.attachedConversations = attachedConversationsForMessage.length
+      ? attachedConversationsForMessage
+      : undefined;
+  }
   userMsg.paperContextsExpanded = false;
   userMsg.attachments = attachmentsForMessage.length
     ? attachmentsForMessage
@@ -7419,6 +7456,7 @@ export async function editUserTurnAndRetry(opts: {
         citationPaperContexts: getMessageCitationPaperContexts(userMsg),
         selectedCollectionContexts: userMsg.selectedCollectionContexts,
         selectedTagContexts: userMsg.selectedTagContexts,
+        attachedConversations: userMsg.attachedConversations,
         attachments: userMsg.attachments,
         modelAttachments: userMsg.modelAttachments,
         modelName: userMsg.modelName,
@@ -8317,6 +8355,7 @@ async function sendAgentQuestion(opts: {
   fullTextPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
+  attachedConversations?: AttachedConversationRef[];
   attachments?: ChatAttachment[];
   modelAttachments?: ChatAttachment[];
   localDocuments?: readonly import("../../shared/types").LocalDocumentResource[];
@@ -8397,6 +8436,7 @@ export async function sendQuestion(
     fullTextPaperContexts,
     selectedCollectionContexts,
     selectedTagContexts,
+    attachedConversations,
     attachments,
     modelAttachments,
     localDocuments,
@@ -8535,6 +8575,7 @@ export async function sendQuestion(
         fullTextPaperContexts,
         selectedCollectionContexts,
         selectedTagContexts,
+        attachedConversations,
         attachments,
         modelAttachments,
         localDocuments,
@@ -8900,6 +8941,9 @@ export async function sendQuestion(
   );
   const selectedTagContextsForMessage =
     normalizeTagContexts(selectedTagContexts);
+  const attachedConversationsForMessage = normalizeAttachedConversations(
+    attachedConversations,
+  );
   let {
     paperContexts: paperContextsForMessage,
     fullTextPaperContexts: fullTextPaperContextsForMessage,
@@ -8988,6 +9032,9 @@ export async function sendQuestion(
     selectedTagContexts: selectedTagContextsForMessage.length
       ? selectedTagContextsForMessage
       : undefined,
+    attachedConversations: attachedConversationsForMessage.length
+      ? attachedConversationsForMessage
+      : undefined,
     forcedSkillIds: opts.forcedSkillIds?.length
       ? opts.forcedSkillIds.slice()
       : undefined,
@@ -9033,6 +9080,7 @@ export async function sendQuestion(
         citationPaperContexts: userMessage.citationPaperContexts,
         selectedCollectionContexts: userMessage.selectedCollectionContexts,
         selectedTagContexts: userMessage.selectedTagContexts,
+        attachedConversations: userMessage.attachedConversations,
         screenshotImages: userMessage.screenshotImages,
         attachments: userMessage.attachments,
         modelAttachments: userMessage.modelAttachments,

@@ -120,6 +120,7 @@ import type {
   SelectedTextContext,
   SelectedTextSource,
   TagContextRef,
+  AttachedConversationRef,
 } from "../../../shared/types";
 import type { ResolvedContextSource } from "../types";
 import {
@@ -1518,6 +1519,7 @@ export async function sendAgentTurn(
     fullTextPaperContexts?: PaperContextRef[];
     selectedCollectionContexts?: CollectionContextRef[];
     selectedTagContexts?: TagContextRef[];
+    attachedConversations?: AttachedConversationRef[];
     attachments?: ChatAttachment[];
     modelAttachments?: ChatAttachment[];
     localDocuments?: readonly LocalDocumentResource[];
@@ -1552,6 +1554,7 @@ export async function sendAgentTurn(
     fullTextPaperContexts,
     selectedCollectionContexts,
     selectedTagContexts,
+    attachedConversations,
     attachments,
     modelAttachments,
     localDocuments,
@@ -1669,6 +1672,9 @@ export async function sendAgentTurn(
     selectedTagContexts: selectedTagContexts?.length
       ? selectedTagContexts
       : undefined,
+    attachedConversations: attachedConversations?.length
+      ? attachedConversations
+      : undefined,
     forcedSkillIds: forcedSkillIds?.length ? forcedSkillIds.slice() : undefined,
   };
   if (modelAttachments !== undefined) {
@@ -1692,6 +1698,7 @@ export async function sendAgentTurn(
       pdfPaperContexts: userMessage.pdfPaperContexts,
       selectedCollectionContexts: userMessage.selectedCollectionContexts,
       selectedTagContexts: userMessage.selectedTagContexts,
+      attachedConversations: userMessage.attachedConversations,
       screenshotImages: userMessage.screenshotImages,
       attachments: userMessage.attachments,
       modelAttachments: userMessage.modelAttachments,
@@ -1841,6 +1848,7 @@ export async function sendAgentTurn(
       citationPaperContexts: userMessage.citationPaperContexts,
       selectedCollectionContexts: userMessage.selectedCollectionContexts,
       selectedTagContexts: userMessage.selectedTagContexts,
+      attachedConversations: userMessage.attachedConversations,
       screenshotImages: userMessage.screenshotImages,
       attachments: userMessage.attachments,
       modelAttachments: userMessage.modelAttachments,

@@ -417,6 +417,16 @@ function richUserMessage(
     selectedTagContexts: [
       { name: "salience", normalizedName: "salience", libraryID: 1 },
     ],
+    attachedConversations: [
+      {
+        system: "upstream" as const,
+        conversationKey: 31,
+        conversationID: "conv-31",
+        title: "Earlier chat",
+        libraryID: 1,
+        kind: "global" as const,
+      },
+    ],
     screenshotImages: ["data:image/png;base64,AAA", " "],
     attachments: [
       {
