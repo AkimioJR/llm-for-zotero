@@ -3009,16 +3009,17 @@
   display: none !important;
 }
 
-/* Browser-style tabs. The bar is a strip a step darker than the panel, as
- * tall as the main tab row, so its middle line is the row's: the tabs'
- * icons and titles, the "+" and the close button sit on it, level with the
- * →| toggle and Paper chat | Library chat. A tab starts a small gap below
- * the strip's top and runs to its bottom, where the panel surface starts,
- * so the active tab (in the surface colour) runs straight into the
- * content; its content keeps the same gap at the bottom, which puts it on
- * the strip's middle line. */
+/* Browser-style tabs. The bar is a strip a step darker than the panel. It
+ * ends where the main row's 32px buttons (the ⇤ toggle) end, so it is no
+ * deeper than they are. A tab starts a small gap below the strip's top and
+ * runs to its bottom, where the panel surface starts, so the active tab (in
+ * the surface colour) runs straight into the content. The tabs' icons and
+ * titles, the "+" and the close button are centred in that band. */
 .llm-standalone-side-panel {
   --llm-side-tab-height: 28px;
+  --llm-side-strip-height: calc(
+    (var(--llm-standalone-toolbar-row-height) + 32px) / 2
+  );
   /* Tabs start where the Paper chat | Library chat toggle starts: the
    * toggle is the line height plus 4px (its padding and border), centred in
    * the row. */
@@ -3053,9 +3054,9 @@
   display: flex;
   column-gap: var(--llm-standalone-chrome-gap);
   align-items: center;
-  height: var(--llm-standalone-toolbar-row-height);
-  min-height: var(--llm-standalone-toolbar-row-height);
-  padding: 0 12px 0 0;
+  height: var(--llm-side-strip-height);
+  min-height: var(--llm-side-strip-height);
+  padding: var(--llm-side-tab-top) 12px 0 0;
   box-sizing: border-box;
   flex-shrink: 0;
   background: var(--llm-side-strip-bg);
@@ -3080,7 +3081,7 @@
   gap: 2px;
   flex: 0 1 auto;
   min-width: 0;
-  padding: var(--llm-side-tab-top) var(--llm-side-tab-radius) 0;
+  padding: 0 var(--llm-side-tab-radius);
   box-sizing: border-box;
   overflow-x: auto;
   overflow-y: hidden;
@@ -3097,10 +3098,8 @@
   flex: 0 1 180px;
   gap: 6px;
   min-width: 84px;
-  height: calc(
-    var(--llm-standalone-toolbar-row-height) - var(--llm-side-tab-top)
-  );
-  padding: 0 4px var(--llm-side-tab-top) 10px;
+  height: calc(var(--llm-side-strip-height) - var(--llm-side-tab-top));
+  padding: 0 4px 0 10px;
   box-sizing: border-box;
   border-radius: var(--llm-side-tab-radius);
   color: var(--fill-secondary);
@@ -3114,12 +3113,11 @@
     color 0.15s;
 }
 
-/* An inactive tab's hover fill is a pill on the strip's middle line, the
- * same gap from the strip's top and bottom. */
+/* An inactive tab's hover fill is a pill the tab's own size. */
 .llm-standalone-side-panel-tab:not(.active)::before {
   content: "";
   position: absolute;
-  inset: 0 0 var(--llm-side-tab-top);
+  inset: 0;
   z-index: -1;
   border-radius: var(--llm-side-tab-radius);
   background: transparent;
@@ -15757,14 +15755,16 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   -moz-window-dragging: no-drag;
 }
 
-/* The side panel's bar drags the window like the tab row beside it; its
- * buttons and the toggle stay clickable. */
-:root[customtitlebar] .llm-standalone-side-panel-bar {
+/* The side panel's bar drags the window like the tab row beside it, the
+ * gaps around the tabs included; the tabs, its buttons and the toggle stay
+ * clickable. */
+:root[customtitlebar] .llm-standalone-side-panel-bar,
+:root[customtitlebar] .llm-standalone-side-panel-tabs {
   -moz-window-dragging: drag;
 }
 
 :root[customtitlebar] .llm-standalone-side-panel-toggle,
-:root[customtitlebar] .llm-standalone-side-panel-tabs,
+:root[customtitlebar] .llm-standalone-side-panel-tab,
 :root[customtitlebar] .llm-standalone-side-panel-bar button {
   -moz-window-dragging: no-drag;
 }
