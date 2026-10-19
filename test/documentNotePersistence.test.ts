@@ -8,6 +8,8 @@ import {
   exportPlanDocumentMarkdown,
   savePlanDocumentAsNote,
 } from "../src/agent/documents/actions";
+import { sha256Text } from "../src/agent/store/journalRecoveryBlobStore";
+import { canonicalNoteHtml } from "../src/utils/noteHtml";
 
 /** Exercises the actual document decoder, save action and native note persistence boundary. */
 describe("durable document note association", function () {
@@ -670,6 +672,75 @@ describe("durable document note association", function () {
       gateway,
     );
     assert.deepEqual(receipt.targets, [`item:${saved.itemId}`]);
+  });
+
+  /** What Zotero's note editor writes back after refreshing a work's CSL data. */
+  function editorRefresh(html: string, title: string): string {
+    return html
+      .replace(/data-citation-items="([^"]*)"/, (_match, value: string) => {
+        const entries = JSON.parse(decodeURIComponent(value));
+        for (const entry of entries) entry.itemData.title = title;
+        return `data-citation-items="${encodeURIComponent(JSON.stringify(entries))}"`;
+      })
+      .replace(/(<\/(?:h1|p)>)/g, "$1\n");
+  }
+
+  it("recognizes a saved citation note after Zotero's editor refreshed the retitled work", async function () {
+    citedMetadata("Smith");
+    document.visibleHtml =
+      "<h1>Summary</h1><p>Turnover drives drift {{cite item=42 page=7}}.</p>";
+    const target = { parentItemId: 42, libraryID: 1 };
+    const saved = await savePlanDocumentAsNote(document.documentId, target);
+    const note = notes.get(saved.itemId);
+    const refreshed = editorRefresh(note.getNote(), "Paper, retitled");
+    assert.notEqual(refreshed, note.getNote());
+    note.stored = refreshed;
+    const retried = await savePlanDocumentAsNote(document.documentId, target);
+    assert.isFalse(retried.created);
+    assert.equal(retried.itemId, saved.itemId);
+    assert.equal(notes.size, 1);
+    assert.equal(note.getNote(), refreshed, "the retry leaves the note alone");
+    assert.isTrue(retried.noteVerification?.matches);
+  });
+
+  it("still refuses a refreshed citation note whose chip was edited", async function () {
+    citedMetadata("Smith");
+    document.visibleHtml =
+      "<h1>Summary</h1><p>Turnover drives drift {{cite item=42 page=7}}.</p>";
+    const saved = await savePlanDocumentAsNote(document.documentId);
+    const note = notes.get(saved.itemId);
+    note.stored = editorRefresh(note.getNote(), "Paper, retitled").replace(
+      "Smith, 2020, p. 7",
+      "Smith, 2020, p. 8",
+    );
+    await rejects(
+      savePlanDocumentAsNote(document.documentId),
+      /no longer matches this exact document/,
+    );
+  });
+
+  it("keeps judging a version 1 binding by the full root registry", async function () {
+    citedMetadata("Smith");
+    document.visibleHtml =
+      "<h1>Summary</h1><p>Turnover drives drift {{cite item=42 page=7}}.</p>";
+    const saved = await savePlanDocumentAsNote(document.documentId);
+    const note = notes.get(saved.itemId);
+    state = {
+      ...state,
+      savedNote: {
+        ...state.savedNote,
+        nativeContentHash: await sha256Text(canonicalNoteHtml(note.getNote())),
+        nativeContentHashVersion: 1,
+      },
+    };
+    const retried = await savePlanDocumentAsNote(document.documentId);
+    assert.isFalse(retried.created);
+    assert.equal(retried.itemId, saved.itemId);
+    note.stored = editorRefresh(note.getNote(), "Paper, retitled");
+    await rejects(
+      savePlanDocumentAsNote(document.documentId),
+      /no longer matches this exact document/,
+    );
   });
 
   it("recognizes a saved citation note after the cited paper was deleted", async function () {

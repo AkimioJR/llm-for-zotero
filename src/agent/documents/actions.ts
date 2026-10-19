@@ -19,7 +19,11 @@ import {
   loadPlanDocument,
   updateDocumentActionState,
 } from "./store";
-import type { DocumentActionState, PlanDocument } from "./types";
+import type {
+  DocumentActionState,
+  DocumentNoteBinding,
+  PlanDocument,
+} from "./types";
 import { expandNewCitationTokens } from "../../services/notes/noteCitations";
 import {
   hasNewCitationTokens,
@@ -130,9 +134,21 @@ export async function savePlanDocumentAsNote(
   }
 }
 
-async function noteContentHash(html: string, canonical = true) {
+/**
+ * Version 2 counts the root citation registry only by the works it registers:
+ * Zotero's note editor refreshes their cached CSL data on its own. Version 1
+ * counts the registry in full; bindings without a version hashed the raw body.
+ */
+const NOTE_HASH_VERSION = 2;
+
+async function noteContentHash(
+  html: string,
+  version: DocumentNoteBinding["nativeContentHashVersion"],
+) {
   return sha256Text(
-    canonical ? canonicalNoteHtml(html) : stripZoteroNoteWrapper(html),
+    version
+      ? canonicalNoteHtml(html, { registryWorksOnly: version === 2 })
+      : stripZoteroNoteWrapper(html),
   );
 }
 
@@ -207,7 +223,7 @@ async function saveDocumentNote(
       // note holds the document's HTML as written.
       const expectedHash =
         binding.nativeContentHash ||
-        (await noteContentHash(document.visibleHtml));
+        (await noteContentHash(document.visibleHtml, 1));
       const readBack = existing.getNote();
       if (
         (target &&
@@ -219,10 +235,8 @@ async function saveDocumentNote(
         (binding.contentHash && binding.contentHash !== document.contentHash) ||
         (binding.documentVersion &&
           binding.documentVersion !== document.documentVersion) ||
-        (await noteContentHash(
-          readBack,
-          binding.nativeContentHashVersion === 1,
-        )) !== expectedHash ||
+        (await noteContentHash(readBack, binding.nativeContentHashVersion)) !==
+          expectedHash ||
         binding.finalized === false
       ) {
         throw new Error(
@@ -305,8 +319,8 @@ async function saveDocumentNote(
     parentItemId: note.parentID || undefined,
     documentVersion: document.documentVersion,
     contentHash: document.contentHash,
-    nativeContentHash: await noteContentHash(initialHtml),
-    nativeContentHashVersion: 1,
+    nativeContentHash: await noteContentHash(initialHtml, NOTE_HASH_VERSION),
+    nativeContentHashVersion: NOTE_HASH_VERSION,
     finalized: document.assets.length === 0,
   };
   const persistPending = (
@@ -335,7 +349,7 @@ async function saveDocumentNote(
           const { warnings } = finalized;
           const candidate = {
             ...pendingNote,
-            nativeContentHash: await noteContentHash(html),
+            nativeContentHash: await noteContentHash(html, NOTE_HASH_VERSION),
             finalized: warnings.length === 0,
           };
           await persistPending(candidate, pendingNote);
@@ -349,8 +363,10 @@ async function saveDocumentNote(
   if (!created.key) throw new Error("Created note has no stable Zotero key");
   if (
     !pendingNote.finalized ||
-    (await noteContentHash(created.getNote())) !==
-      pendingNote.nativeContentHash ||
+    (await noteContentHash(
+      created.getNote(),
+      pendingNote.nativeContentHashVersion,
+    )) !== pendingNote.nativeContentHash ||
     created.key !== pendingNote.itemKey ||
     created.libraryID !== pendingNote.libraryID ||
     (created.parentID || undefined) !== pendingNote.parentItemId

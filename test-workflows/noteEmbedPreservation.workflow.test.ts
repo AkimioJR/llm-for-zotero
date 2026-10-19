@@ -607,7 +607,7 @@ describe("workflow: note embeds survive AI note edits", function () {
       assert.notMatch(result.noteChange.description, /delet/i);
     });
 
-  it("a finalized document with a citation request saves a chip, and re-saves after an editor round trip and a retitled work", async function () {
+  it("a finalized document with a citation request saves a chip, and re-saves after an editor round trip, a retitled work, and the editor's refresh of it", async function () {
     const now = Date.now();
     const documentId = `note-embeds-document:${parent.key}:${now}`;
     const visibleHtml = `<h1>Document embed save</h1><p>The drift claim holds {{cite item=${parent.id} page=4}}.</p>`;
@@ -678,27 +678,35 @@ describe("workflow: note embeds survive AI note edits", function () {
       [[Zotero.URI.getItemURI(parent)]],
     );
 
-    // (a) Open the saved note in Zotero's note editor, let it load, close it.
-    const win = Zotero.getMainWindow() as any;
-    const editor = await (Zotero.Notes as any).open(note.id);
-    assert.isOk(editor, "the note editor opened");
-    await editor._initPromise;
-    // The editor rendered this note, citation chip included.
-    await waitFor(() => {
-      const body = editor._iframeWindow?.document?.body;
-      return (
-        body?.textContent?.includes("The drift claim holds") &&
-        body.querySelector(".citation")
+    /** Open the saved note in Zotero's note editor, let it load, close it. */
+    async function editorRoundTrip(settled: () => Promise<boolean>) {
+      const win = Zotero.getMainWindow() as any;
+      const editor = await (Zotero.Notes as any).open(note.id);
+      assert.isOk(editor, "the note editor opened");
+      await editor._initPromise;
+      // The editor rendered this note, citation chip included.
+      await waitFor(() => {
+        const body = editor._iframeWindow?.document?.body;
+        return (
+          body?.textContent?.includes("The drift claim holds") &&
+          body.querySelector(".citation")
+        );
+      }, "the note editor to render the note");
+      const deadline = Date.now() + 15000;
+      while (!(await settled()) && Date.now() < deadline)
+        await Zotero.Promise.delay(100);
+      await Zotero.Promise.delay(2000);
+      win.Zotero_Tabs.close(editor.tabID);
+      await waitFor(
+        () => !(Zotero.Notes as any)._editorInstances.includes(editor),
+        "the note editor to close",
       );
-    }, "the note editor to render the note");
-    await Zotero.Promise.delay(2000);
-    win.Zotero_Tabs.close(editor.tabID);
-    await waitFor(
-      () => !(Zotero.Notes as any)._editorInstances.includes(editor),
-      "the note editor to close",
-    );
-    await Zotero.Promise.delay(500);
-    const afterEditor = await nativeHtml(note);
+      await Zotero.Promise.delay(500);
+      return nativeHtml(note);
+    }
+
+    // (a) An editor round trip of the note as saved.
+    const afterEditor = await editorRoundTrip(async () => true);
     let resaved: Awaited<ReturnType<typeof savePlanDocumentAsNote>> | undefined;
     let failure: unknown;
     try {
@@ -719,6 +727,67 @@ describe("workflow: note embeds survive AI note edits", function () {
     const retitled = await savePlanDocumentAsNote(documentId, target);
     assert.isFalse(retitled.created);
     assert.equal(retitled.itemId, note.id);
+
+    // (c) The editor opens the note of the retitled work: Zotero refreshes
+    // that work's CSL data in the root registry and saves. The chip and the
+    // registered work are unchanged, so the re-save returns the same note.
+    const beforeRefresh = await nativeHtml(note);
+    const registeredTitle = async () =>
+      registeredItems(await nativeHtml(note))[0] as {
+        itemData?: { title?: string };
+      };
+    const refreshed = await editorRoundTrip(
+      async () =>
+        (await registeredTitle()).itemData?.title ===
+        "Embed preservation paper, retitled",
+    );
+    assert.equal(
+      (await registeredTitle()).itemData?.title,
+      "Embed preservation paper, retitled",
+      `the editor refreshed the root registry:\n${refreshed}`,
+    );
+    assert.notEqual(refreshed, beforeRefresh, "the editor saved the note");
+    assert.deepEqual(
+      chipCitations(refreshed).map((chip) => chip.html),
+      chipCitations(beforeRefresh).map((chip) => chip.html),
+      "the chip is byte-identical",
+    );
+    assert.deepEqual(
+      registeredItems(refreshed).map((entry) => entry.uris),
+      [[Zotero.URI.getItemURI(parent)]],
+    );
+    let refreshedSave:
+      | Awaited<ReturnType<typeof savePlanDocumentAsNote>>
+      | undefined;
+    try {
+      refreshedSave = await savePlanDocumentAsNote(documentId, target);
+    } catch (error) {
+      failure = error;
+    }
+    assert.isUndefined(
+      failure,
+      `re-save after the editor refreshed the retitled work threw: ${String(failure)}\nbefore:\n${beforeRefresh}\nafter:\n${refreshed}`,
+    );
+    assert.isFalse(refreshedSave!.created);
+    assert.equal(refreshedSave!.itemId, note.id);
+    assert.equal(
+      await nativeHtml(note),
+      refreshed,
+      "the re-save wrote nothing",
+    );
+
+    // A note whose visible text really changed is still refused.
+    note.setNote(
+      refreshed.replace("The drift claim holds", "The drift claim fails"),
+    );
+    await note.saveTx();
+    let refused: unknown;
+    try {
+      await savePlanDocumentAsNote(documentId, target);
+    } catch (error) {
+      refused = error;
+    }
+    assert.match(String(refused), /no longer matches this exact document/);
     await parent.reload(["childItems"], true);
     assert.lengthOf(
       parent
