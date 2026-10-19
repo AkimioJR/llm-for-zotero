@@ -2589,7 +2589,7 @@ export function renderMarkdown(
  * and its raw-HTML tag stack lives in a renderer created per call. Calls that
  * break one of those conditions skip the cache.
  */
-export const RENDERED_MARKDOWN_CACHE_MAX_ENTRIES = 300;
+export const RENDERED_MARKDOWN_CACHE_MAX_ENTRIES = 2000;
 const RENDERED_MARKDOWN_CACHE_MAX_CHARS = 8 * 1024 * 1024;
 const renderedMarkdownCache = new Map<string, string>();
 let renderedMarkdownCacheChars = 0;
