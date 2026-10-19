@@ -438,7 +438,10 @@ import {
 } from "../../agent/store/traceStore";
 import { deliverPendingPlanDocumentMessage } from "../../agent/documents/publication";
 import { materialRefFromDocument } from "../../agent/documents/workflowMaterial";
-import { loadDocumentIdForMessageOwner } from "../../agent/documents/store";
+import {
+  listPlanDocumentOutboxForConversation,
+  loadDocumentIdsForMessageOwners,
+} from "../../agent/documents/store";
 import type { PlanDocument } from "../../agent/documents/types";
 import {
   applyHistoryCompression,
@@ -3005,35 +3008,54 @@ export async function ensureConversationLoaded(
         PERSISTED_HISTORY_LIMIT,
         conversationSystem,
       );
-      for (const storedMessage of storedMessages) {
-        if (
-          storedMessage.role !== "assistant" ||
-          storedMessage.documentId ||
-          !Number.isFinite(storedMessage.timestamp)
-        ) {
-          continue;
+      const ownerlessAssistantMessages = storedMessages.filter(
+        (storedMessage) =>
+          storedMessage.role === "assistant" &&
+          !storedMessage.documentId &&
+          Number.isFinite(storedMessage.timestamp),
+      );
+      if (ownerlessAssistantMessages.length) {
+        // One query for the conversation instead of one per message.
+        const documentIdsByTimestamp = await loadDocumentIdsForMessageOwners({
+          conversationKey,
+          sourceMessageTimestamps: ownerlessAssistantMessages.map(
+            (storedMessage) => Math.floor(storedMessage.timestamp),
+          ),
+        });
+        for (const storedMessage of ownerlessAssistantMessages) {
+          storedMessage.documentId =
+            documentIdsByTimestamp.get(Math.floor(storedMessage.timestamp)) ||
+            undefined;
         }
-        storedMessage.documentId =
-          (await loadDocumentIdForMessageOwner({
-            conversationKey,
-            sourceMessageTimestamp: Math.floor(storedMessage.timestamp),
-          })) || undefined;
       }
       // A saved quote location holds only while its PDF is the file it was
       // found in; drop the others in memory so the gate checks them again.
       await reconcilePersistedQuoteLocations(storedMessages);
       // Recover the application-level document outbox after a crash between
       // durable message insertion and publication evidence/event delivery.
-      for (const storedMessage of storedMessages) {
-        if (storedMessage.role !== "assistant" || !storedMessage.text) continue;
-        await publishPersistedPlanDocumentIfPresent({
-          conversationKey,
-          text: storedMessage.text,
-          timestamp: storedMessage.timestamp,
-          agentRunId: storedMessage.agentRunId,
-          documentId: storedMessage.documentId,
-          planDocumentId: storedMessage.planDocumentId,
-        });
+      // Only a pending outbox entry needs recovery. Delivering an already
+      // delivered document again opened a transaction and refreshed every
+      // panel showing this chat, an extra full render on each first load.
+      const publishableMessages = storedMessages.filter(
+        (storedMessage) =>
+          storedMessage.role === "assistant" && Boolean(storedMessage.text),
+      );
+      const hasPendingDocumentDelivery =
+        publishableMessages.length > 0 &&
+        (await listPlanDocumentOutboxForConversation(conversationKey)).some(
+          (entry) => entry.status === "pending",
+        );
+      if (hasPendingDocumentDelivery) {
+        for (const storedMessage of publishableMessages) {
+          await publishPersistedPlanDocumentIfPresent({
+            conversationKey,
+            text: storedMessage.text,
+            timestamp: storedMessage.timestamp,
+            agentRunId: storedMessage.agentRunId,
+            documentId: storedMessage.documentId,
+            planDocumentId: storedMessage.planDocumentId,
+          });
+        }
       }
       // Render reads the existence result from a cache; fill it before the
       // freshness check so no await sits between that check and the write.
