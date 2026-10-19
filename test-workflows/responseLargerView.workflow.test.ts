@@ -75,8 +75,13 @@ function assertResponseOnlyDocument(
 
 describe("workflow: per-response larger document view", function () {
   this.timeout(60_000);
-  const api = getWorkflowTestApi();
+  let api: WorkflowTestApi;
   const fixtures: WorkflowTestFixture[] = [];
+
+  before(function () {
+    // Resolved at run time: an earlier suite may have restarted the plugin.
+    api = getWorkflowTestApi();
+  });
 
   afterEach(async function () {
     getResponseDocumentWindow()?.close();

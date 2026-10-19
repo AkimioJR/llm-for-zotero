@@ -193,6 +193,7 @@ import {
 } from "./standaloneSidebarView";
 import { installStandaloneSidebarFlyout } from "./standaloneSidebarFlyout";
 import { releaseInlineEdit } from "./inlineEditState";
+import { pluginStylesheetHref } from "../../utils/pluginReload";
 import {
   createStandaloneSidePanel,
   type StandaloneSidePanelController,
@@ -300,6 +301,21 @@ export function isStandaloneWindowActive(): boolean {
 // Callback registered by initWindow for item-change notifications.
 let standaloneItemChangeHandler: ((item: Zotero.Item | null) => void) | null =
   null;
+
+// Reads the open window's paper chat; set by initWindow, cleared on close.
+let standaloneActivePaperIDReader: (() => number | null) | null = null;
+
+/**
+ * The paper the open standalone window is chatting about, or null for the
+ * library chat or when no window is open.
+ */
+export function getStandaloneActivePaperItemID(): number | null {
+  try {
+    return standaloneActivePaperIDReader?.() ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /** Called by index.ts onItemChange when the user switches paper tabs. */
 export function notifyStandaloneItemChanged(item: Zotero.Item | null): void {
@@ -756,13 +772,13 @@ export function openStandaloneChat(options?: {
       const mainCSS = doc.createElementNS(HTML_NS, "link") as HTMLLinkElement;
       mainCSS.rel = "stylesheet";
       mainCSS.type = "text/css";
-      mainCSS.href = `chrome://${config.addonRef}/content/zoteroPane.css`;
+      mainCSS.href = pluginStylesheetHref("zoteroPane.css");
       doc.documentElement?.appendChild(mainCSS);
 
       const katexCSS = doc.createElementNS(HTML_NS, "link") as HTMLLinkElement;
       katexCSS.rel = "stylesheet";
       katexCSS.type = "text/css";
-      katexCSS.href = `chrome://${config.addonRef}/content/vendor/katex/katex.min.css`;
+      katexCSS.href = pluginStylesheetHref("vendor/katex/katex.min.css");
       doc.documentElement?.appendChild(katexCSS);
 
       const rerenderStandaloneShellAfterStylesReady = () => {
@@ -4067,6 +4083,10 @@ export function openStandaloneChat(options?: {
 
       // Listen for paper tab changes in the main Zotero window.
       // When the user switches to a different paper, update the standalone chat.
+      standaloneActivePaperIDReader = () =>
+        standaloneMode === "paper"
+          ? Number(currentPaperItem?.id || 0) || null
+          : null;
       standaloneItemChangeHandler = (rawItem: Zotero.Item | null) => {
         if (cancelled || standaloneMode !== "paper") return;
         const target = resolvePaperSwitchTarget(rawItem);
@@ -4177,6 +4197,7 @@ export function openStandaloneChat(options?: {
     }
     disposeStandaloneSidePanel = null;
     standaloneItemChangeHandler = null;
+    standaloneActivePaperIDReader = null;
     themeObserver?.disconnect();
     themeObserver = null;
     if (enforceStandaloneMinimumSize) {

@@ -6,13 +6,16 @@ import { registerPrefsScripts } from "./modules/preferenceScript";
 import { config, PREFERENCES_PANE_ID } from "./modules/contextPanel/constants";
 import {
   registerReaderContextPanel,
+  unregisterReaderContextPanel,
   registerLLMStyles,
+  unregisterLLMStyles,
   registerNoteEditingSelectionTracking,
   registerReaderSelectionTracking,
   unregisterAllNoteEditingSelectionTracking,
   unregisterNoteEditingSelectionTracking,
   unregisterReaderSelectionTracking,
   openStandaloneChat,
+  getStandaloneActivePaperItemID,
 } from "./modules/contextPanel";
 import { composeHostSurfaces } from "./modules/contextPanel/hostSurfaces";
 import { composePanelSurfaces } from "./modules/contextPanel/panelSurfaces";
@@ -33,7 +36,7 @@ import {
   runDeferredLegacyMigrations,
   runStartupPreferenceMigrations,
 } from "./utils/migrations";
-import { createZToolkit, disposeAppLogging } from "./utils/ztoolkit";
+import { disposeAppLogging } from "./utils/ztoolkit";
 import {
   activeContextPanels,
   unregisterContextPanel,
@@ -58,6 +61,14 @@ type ConversationStoreReadiness = {
   codexStoreReady: boolean;
   pendingDeletionReady: boolean;
 };
+
+/** Passed by addon/bootstrap.js; isUpgrade is true for an in-place update. */
+type PluginLifecycleReason = { isUpgrade?: boolean };
+
+const STANDALONE_SHORTCUT_KEY_ID = "llmforzotero-key-standalone";
+// Zotero waits for shutdown before it loads an update, so a Codex child that
+// never exits must not hold the update back. Matches the bridge's stop bound.
+const CODEX_SHUTDOWN_TIMEOUT_MS = 4_000;
 
 let startupUserSkillsLoadTask: Promise<void> | null = null;
 let disposeHostSurfaces: (() => void) | null = null;
@@ -386,7 +397,77 @@ function scheduleDeferredStartupWork(
   scheduleModelCapabilityRefresh();
 }
 
-async function onStartup() {
+/**
+ * Removes every element the plugin adds to a main window's document. Zotero
+ * applies an update in the running window, so whatever is left here would
+ * keep the old version's CSS and listeners alive next to the new version.
+ */
+function removePluginWindowDom(win: Window): void {
+  const doc = win.document;
+  unregisterLLMStyles(doc);
+  removeMainWindowFtlLinks(doc);
+  // Old versions added this element; nothing creates it any more.
+  doc.getElementById("llmforzotero-open-standalone")?.remove();
+  doc
+    .querySelectorAll(`[id="${STANDALONE_SHORTCUT_KEY_ID}"]`)
+    .forEach((el: Element) => el.remove());
+}
+
+function removeMainWindowFtlLinks(doc: Document): void {
+  const href = `${addon.data.config.addonRef}-mainWindow.ftl`;
+  doc
+    .querySelectorAll(`link[rel="localization"][href="${href}"]`)
+    .forEach((el: Element) => el.remove());
+}
+
+async function waitWithTimeout(
+  task: Promise<unknown>,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeoutId = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * An update closes the standalone window with the old version. The old
+ * shutdown leaves a marker on the Zotero object, which survives the plugin
+ * scope swap but not a Zotero restart, so a failed install cannot reopen the
+ * window on a later launch. The marker is deleted before the window opens.
+ */
+const REOPEN_STANDALONE_MARKER = "__llmForZoteroReopenStandalone";
+type ReopenStandaloneMarker = { initialItemID: number | null };
+
+function reopenStandaloneAfterUpdate(): void {
+  const host = Zotero as unknown as Record<
+    string,
+    ReopenStandaloneMarker | undefined
+  >;
+  const marker = host[REOPEN_STANDALONE_MARKER];
+  delete host[REOPEN_STANDALONE_MARKER];
+  if (!marker) return;
+  try {
+    const item = marker.initialItemID
+      ? Zotero.Items.get(marker.initialItemID) || null
+      : null;
+    openStandaloneChat(item ? { initialItem: item } : undefined);
+  } catch (err) {
+    appLogger.warn(
+      "LLM: Failed to reopen the standalone window after update",
+      err,
+    );
+  }
+}
+
+async function onStartup(_reason: PluginLifecycleReason = {}) {
   // Host surface composition comes first. Services and agent code reach
   // panel-owned capabilities through bridges that throw when nothing is
   // configured, so every later startup step - stores, the MCP server, any
@@ -457,6 +538,8 @@ async function onStartup() {
       await import("./modules/contextPanel/workflowTestHarness");
     installWorkflowTestHarness(addon);
   }
+  // After the windows: the standalone window mounts against a main window.
+  reopenStandaloneAfterUpdate();
   addon.data.initialized = true;
 
   // Compiled out of normal builds. Only the explicit manual behavior runner
@@ -475,9 +558,9 @@ async function onStartup() {
 const dedicatedChatPaneDisposers = new Map<Window, () => void>();
 
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
-  // Create ztoolkit for every window
-  addon.data.ztoolkit = createZToolkit();
-
+  // insertFTLIfNeeded keeps an existing link, and after an in-place update
+  // that link belongs to the previous version.
+  removeMainWindowFtlLinks(win.document);
   win.MozXULElement.insertFTLIfNeeded(
     `${addon.data.config.addonRef}-mainWindow.ftl`,
   );
@@ -524,8 +607,12 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   const doc = win.document;
   const keyset = doc.getElementById("mainKeyset");
   if (keyset) {
+    // A key left by the previous version would still run its old listener.
+    doc
+      .querySelectorAll(`[id="${STANDALONE_SHORTCUT_KEY_ID}"]`)
+      .forEach((el: Element) => el.remove());
     const key = doc.createXULElement("key");
-    key.id = "llmforzotero-key-standalone";
+    key.id = STANDALONE_SHORTCUT_KEY_ID;
     key.setAttribute("modifiers", "accel,shift");
     key.setAttribute("key", "L");
     key.setAttribute("oncommand", "void(0)");
@@ -568,22 +655,62 @@ async function onMainWindowUnload(win: Window): Promise<void> {
   dedicatedChatPaneDisposers.get(win)?.();
   dedicatedChatPaneDisposers.delete(win);
   unregisterNoteEditingSelectionTracking(win);
-  ztoolkit.unregisterAll();
   closeAllAddonDialogs();
   addon.data.standaloneWindow?.close();
-  win.document.getElementById("llmforzotero-open-standalone")?.remove();
-  win.document.getElementById("llmforzotero-key-standalone")?.remove();
+  removePluginWindowDom(win);
 }
 
-async function onShutdown(): Promise<void> {
+async function runShutdownStep(
+  label: string,
+  step: () => unknown,
+): Promise<void> {
+  try {
+    await step();
+  } catch (error) {
+    appLogger.warn(`LLM: shutdown step failed: ${label}`, error);
+  }
+}
+
+async function onShutdown(reason: PluginLifecycleReason = {}): Promise<void> {
+  try {
+    await shutdownPlugin(reason);
+  } finally {
+    // Always retire this object, even after a failed step. src/index.ts
+    // reuses an object it finds alive, so the next load would run these old
+    // hooks. Delete the global only while it is still this object.
+    addon.data.alive = false;
+    const instanceKey = addon.data.config.addonInstance;
+    // @ts-expect-error - Plugin instance is not typed
+    if (Zotero[instanceKey] === addon) delete Zotero[instanceKey];
+  }
+}
+
+async function shutdownPlugin(reason: PluginLifecycleReason): Promise<void> {
+  // Each step is isolated: one failure must not leave the rest running into
+  // the next plugin instance.
+  await runShutdownStep("standalone reopen marker", () => {
+    const standaloneWindow = addon.data.standaloneWindow;
+    if (!reason.isUpgrade || !standaloneWindow || standaloneWindow.closed) {
+      return;
+    }
+    (Zotero as unknown as Record<string, ReopenStandaloneMarker>)[
+      REOPEN_STANDALONE_MARKER
+    ] = { initialItemID: getStandaloneActivePaperItemID() };
+  });
   // Dispose while hosts are still registered, before unregisterAll removes
   // their DOM and clearAllState forgets them. Detached callbacks must not run
   // against the next plugin instance during a hot reload.
-  for (const [body] of activeContextPanels) disposeSetupHandlers(body);
-  for (const dispose of dedicatedChatPaneDisposers.values()) dispose();
-  dedicatedChatPaneDisposers.clear();
-  zoteroChangeDispatcher.unregisterNativeObserver();
-  await zoteroChangeDispatcher.flush();
+  await runShutdownStep("panel handlers", () => {
+    for (const [body] of activeContextPanels) disposeSetupHandlers(body);
+  });
+  await runShutdownStep("dedicated chat panes", () => {
+    for (const dispose of dedicatedChatPaneDisposers.values()) dispose();
+    dedicatedChatPaneDisposers.clear();
+  });
+  await runShutdownStep("Zotero change dispatcher", async () => {
+    zoteroChangeDispatcher.unregisterNativeObserver();
+    await zoteroChangeDispatcher.flush();
+  });
   try {
     const { stopLibraryTextIndex } =
       await import("./services/libraryTextIndex");
@@ -591,15 +718,35 @@ async function onShutdown(): Promise<void> {
   } catch (error) {
     appLogger.debug("LLM index: shutdown skipped", error);
   }
-  unregisterPaperConversationRestoreNotifications();
-  await shutdownPaperRestoreSelections();
-  disposePendingDeletionSubsystem();
-  disposeAppLogging();
-  ztoolkit.unregisterAll();
-  unregisterReaderSelectionTracking();
-  unregisterAllNoteEditingSelectionTracking();
-  closeAllAddonDialogs();
-  addon.data.standaloneWindow?.close();
+  await runShutdownStep("paper conversation restore", async () => {
+    unregisterPaperConversationRestoreNotifications();
+    await shutdownPaperRestoreSelections();
+  });
+  await runShutdownStep("pending deletion", disposePendingDeletionSubsystem);
+  await runShutdownStep("app logging", disposeAppLogging);
+  await runShutdownStep("toolkit registrations", () =>
+    ztoolkit.unregisterAll(),
+  );
+  await runShutdownStep(
+    "reader selection tracking",
+    unregisterReaderSelectionTracking,
+  );
+  await runShutdownStep(
+    "note editing selection tracking",
+    unregisterAllNoteEditingSelectionTracking,
+  );
+  await runShutdownStep("dialogs", closeAllAddonDialogs);
+  await runShutdownStep("standalone window", () =>
+    addon.data.standaloneWindow?.close(),
+  );
+  // Zotero would keep this section's element, and so these hooks, if the
+  // next version registers it again before the item pane renders.
+  await runShutdownStep("item pane section", unregisterReaderContextPanel);
+  // Zotero does not unload the main windows for a disable or an update, so
+  // their plugin DOM is removed here.
+  await runShutdownStep("main window DOM", () => {
+    for (const win of Zotero.getMainWindows()) removePluginWindowDom(win);
+  });
   try {
     const { unregisterWebChatRelay } = require("./webchat/relayServer");
     unregisterWebChatRelay();
@@ -628,7 +775,15 @@ async function onShutdown(): Promise<void> {
   try {
     const { destroyAllCachedCodexAppServerProcesses } =
       await import("./utils/codexAppServerProcess");
-    await destroyAllCachedCodexAppServerProcesses();
+    const finished = await waitWithTimeout(
+      destroyAllCachedCodexAppServerProcesses(),
+      CODEX_SHUTDOWN_TIMEOUT_MS,
+    );
+    if (!finished) {
+      appLogger.warn(
+        `LLM: codex app-server shutdown did not finish in ${CODEX_SHUTDOWN_TIMEOUT_MS}ms; continuing`,
+      );
+    }
   } catch (error) {
     appLogger.debug("LLM: codex app-server shutdown skipped", error);
   }
@@ -638,16 +793,16 @@ async function onShutdown(): Promise<void> {
   } catch {
     /* ignore if module not loaded */
   }
-  clearQueuedFollowUpState();
-  clearAllState();
-  disposePanelSurfaces?.();
-  disposePanelSurfaces = null;
-  disposeHostSurfaces?.();
-  disposeHostSurfaces = null;
-  // Remove addon object
-  addon.data.alive = false;
-  // @ts-expect-error - Plugin instance is not typed
-  delete Zotero[addon.data.config.addonInstance];
+  await runShutdownStep("queued follow-ups", clearQueuedFollowUpState);
+  await runShutdownStep("panel state", clearAllState);
+  await runShutdownStep("panel surfaces", () => {
+    disposePanelSurfaces?.();
+    disposePanelSurfaces = null;
+  });
+  await runShutdownStep("host surfaces", () => {
+    disposeHostSurfaces?.();
+    disposeHostSurfaces = null;
+  });
 }
 
 /**

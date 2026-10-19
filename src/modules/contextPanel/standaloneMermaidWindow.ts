@@ -1,6 +1,7 @@
 import { config } from "../../../package.json";
 import { installStandaloneWindowTitlebar } from "./standaloneWindowTitlebar";
 import { HTML_NS } from "../../utils/domHelpers";
+import { pluginStylesheetHref } from "../../utils/pluginReload";
 import { createInlineSvgElement } from "./mermaidSvg";
 
 type MermaidThemeKey = "light" | "dark";
@@ -136,7 +137,7 @@ function initializeStandaloneSvgWindow(
   const css = doc.createElementNS(HTML_NS, "link") as HTMLLinkElement;
   css.rel = "stylesheet";
   css.type = "text/css";
-  css.href = `chrome://${config.addonRef}/content/zoteroPane.css`;
+  css.href = pluginStylesheetHref("zoteroPane.css");
   doc.documentElement?.appendChild(css);
 
   root.className = [

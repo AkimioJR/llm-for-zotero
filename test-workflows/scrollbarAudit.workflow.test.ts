@@ -198,8 +198,13 @@ const LONG_ASSISTANT_MARKDOWN = [
 
 describe("workflow: conversation view has a single scrollbar", function () {
   this.timeout(60000);
-  const api = getWorkflowTestApi();
+  let api: WorkflowTestApi;
   const fixtures: WorkflowTestFixture[] = [];
+
+  before(function () {
+    // Resolved at run time: an earlier suite may have restarted the plugin.
+    api = getWorkflowTestApi();
+  });
 
   after(async function () {
     await api.closeStandalone();
