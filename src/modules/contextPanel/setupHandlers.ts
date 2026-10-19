@@ -525,6 +525,7 @@ import {
 import { resolveRuntimeBadgeState } from "./runtimeBadge";
 import { attachFooterQuotaControl } from "./footerQuotaControl";
 import { readFooterQuota } from "./footerQuotaReader";
+import { shouldRevalidateCatalogOnMenuOpen } from "./setupHandlers/controllers/modelMenuRefreshPolicy";
 import { resolveQuotaTarget } from "../../providers/quota";
 import { createWebChatHistoryController } from "./setupHandlers/controllers/webChatHistoryController";
 import {
@@ -1084,6 +1085,7 @@ export function setupHandlers(
   let codexModelCatalogInFlight: Promise<void> | null = null;
   let codexModelCatalogPath = "";
   let codexModelCatalogRequestId = 0;
+  let codexModelCatalogLoadedAt = 0;
   const resolveClaudeModelCatalogContext = ():
     | ClaudeModelCatalogRequestContext
     | undefined => {
@@ -1268,7 +1270,10 @@ export function setupHandlers(
     }
     if (codexModelCatalogInFlight && !pathChanged)
       return codexModelCatalogInFlight;
-    if (pathChanged) codexModelCatalogModels = [];
+    if (pathChanged) {
+      codexModelCatalogModels = [];
+      codexModelCatalogLoadedAt = 0;
+    }
     const requestId = ++codexModelCatalogRequestId;
     const isCurrentRequest = () =>
       !setupHandlersCleaned &&
@@ -1284,6 +1289,7 @@ export function setupHandlers(
         codexModelCatalogModels = catalog.models;
         codexModelCatalogStatus = "ready";
         codexModelCatalogError = "";
+        codexModelCatalogLoadedAt = Date.now();
         reconcileSelectedCodexReasoningMode();
       })
       .catch((error: unknown) => {
@@ -5440,20 +5446,23 @@ export function setupHandlers(
       (screenshotBtn.disabled !==
         (screenshotUnsupported || imageCount >= MAX_SELECTED_IMAGES) ||
         (screenshotUnsupported && imageCount > 0));
-    if (
-      onlyIfChanged &&
-      !screenshotStateChanged &&
-      modelBtn.dataset.modelLabel === modelLabel &&
-      modelBtn.dataset.modelHint === modelHint &&
-      modelBtn.disabled === !item
-    )
-      return;
+    const buttonChanged =
+      modelBtn.dataset.modelLabel !== modelLabel ||
+      modelBtn.dataset.modelHint !== modelHint ||
+      modelBtn.disabled !== !item;
+    if (onlyIfChanged && !screenshotStateChanged && !buttonChanged) return;
     withScrollGuard(chatBox, conversationKey, () => {
       modelBtn.dataset.modelLabel = modelLabel;
       modelBtn.dataset.modelHint = modelHint;
       modelBtn.disabled = !item;
       scheduleResponsiveLayoutSync();
-      updateImagePreviewPreservingScroll();
+      // The image preview shows the model's screenshot support and names the
+      // model in its disabled hint. Rebuilding every preview (paper chips,
+      // files, task progress) when neither changed made each model-menu open
+      // pay for a full panel-state refresh.
+      if (buttonChanged || screenshotStateChanged) {
+        updateImagePreviewPreservingScroll();
+      }
     });
   };
 
@@ -5641,10 +5650,8 @@ export function setupHandlers(
 
   const rebuildModelMenu = () => {
     if (!item || !modelMenu) return;
-    // Refresh cached provider catalogs when the picker is opened.  The current
-    // snapshot renders synchronously; a subsequent open reflects new models.
-    void refreshModelCapabilityRegistry();
-    void refreshConfiguredProviderModelCatalogs();
+    // No catalog refresh here: a refresh notifies capability listeners, which
+    // rebuild an open menu. openModelMenu starts the refresh once per open.
     const { groupedChoices, selectedEntryId } = getSelectedModelInfo();
 
     modelMenu.innerHTML = "";
@@ -8526,10 +8533,21 @@ export function setupHandlers(
     if (!modelMenu || !modelBtn) return;
     if ((modelBtn as HTMLButtonElement).disabled) return;
     menus.closeMany(MENUS_CLOSED_BY_MODEL_MENU);
+    // Refresh cached provider catalogs when the picker is opened.  The current
+    // snapshot renders synchronously; the menu updates when a changed list
+    // lands (failed refreshes back off inside the capability service).
+    void refreshModelCapabilityRegistry();
+    void refreshConfiguredProviderModelCatalogs();
     if (isCodexConversationSystem()) {
       // A loaded catalog can change while this chat stays mounted. Revalidate
-      // on each user opening and update the menu when model/list returns.
-      void ensureCodexModelCatalogLoaded(true);
+      // on a user opening once the list is a minute old, and update the menu
+      // when model/list returns.
+      void ensureCodexModelCatalogLoaded(
+        shouldRevalidateCatalogOnMenuOpen(
+          codexModelCatalogLoadedAt,
+          Date.now(),
+        ),
+      );
     } else if (isClaudeConversationSystem()) {
       // Force: the catalog cache identity (bridge URL, prefs, profile-dir
       // hash, scope) cannot see in-place ~/.claude/settings.json profile
