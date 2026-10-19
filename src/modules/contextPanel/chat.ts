@@ -10995,7 +10995,9 @@ function renderChatForPanel(
         previewWrap.appendChild(previewImg);
 
         const thumbButtons: HTMLButtonElement[] = [];
-        screenshotImages.forEach((imageUrl, index) => {
+        const thumbImages: HTMLImageElement[] = [];
+        let thumbSourcesSet = false;
+        screenshotImages.forEach((_imageUrl, index) => {
           const thumbBtn = doc.createElementNS(
             HTML_NS,
             "button",
@@ -11006,8 +11008,10 @@ function renderChatForPanel(
 
           const thumbImg = doc.createElement("img") as HTMLImageElement;
           thumbImg.className = "llm-user-screenshot-thumb-img";
-          thumbImg.src = imageUrl;
+          // The source is set on first expand (see applyScreenshotState):
+          // decoding base64 images for a collapsed strip slowed every render.
           thumbImg.alt = `Screenshot ${index + 1}`;
+          thumbImages.push(thumbImg);
           thumbBtn.appendChild(thumbImg);
 
           const activateScreenshotThumb = (e: Event) => {
@@ -11055,7 +11059,15 @@ function renderChatForPanel(
           );
           screenshotExpandedEl.hidden = !expanded;
           screenshotExpandedEl.style.display = expanded ? "flex" : "none";
-          previewImg.src = screenshotImages[activeIndex];
+          if (expanded) {
+            if (!thumbSourcesSet) {
+              thumbSourcesSet = true;
+              thumbImages.forEach((thumbImg, index) => {
+                thumbImg.src = screenshotImages[index];
+              });
+            }
+            previewImg.src = screenshotImages[activeIndex];
+          }
           thumbButtons.forEach((btn, index) => {
             btn.classList.toggle("active", index === activeIndex);
           });
