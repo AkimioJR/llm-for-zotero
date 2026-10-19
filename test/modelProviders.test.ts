@@ -11,6 +11,7 @@ import {
   getRuntimeModelEntries,
   migrateApiBaseForAuthModeChange,
   normalizeModelProviderGroups,
+  notifyModelProviderGroupsChanged,
   refreshConfiguredProviderModelCatalogs,
   setModelProviderGroups,
   subscribeModelProviderGroups,
@@ -363,6 +364,34 @@ describe("modelProviders", function () {
     setModelProviderGroups([]);
 
     assert.equal(notifications, 1);
+  });
+
+  it("saves without notifying when asked, and notifies on request", function () {
+    let notifications = 0;
+    const unsubscribe = subscribeModelProviderGroups(() => {
+      notifications += 1;
+    });
+    try {
+      setModelProviderGroups(
+        [
+          {
+            id: "provider-a",
+            apiBase: "https://api.openai.com/v1",
+            apiKey: "sk-a",
+            authMode: "api_key",
+            providerProtocol: "openai_chat_compat",
+            models: [{ ...createProviderModelEntry("gpt-5"), id: "m" }],
+          },
+        ],
+        { notify: false },
+      );
+      assert.equal(notifications, 0);
+      assert.equal(getRuntimeModelEntries()[0]?.model, "gpt-5");
+      notifyModelProviderGroupsChanged();
+      assert.equal(notifications, 1);
+    } finally {
+      unsubscribe();
+    }
   });
 
   describe("cached reads of the stored provider groups", function () {

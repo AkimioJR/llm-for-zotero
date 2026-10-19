@@ -123,6 +123,7 @@ import {
   type ModelInputTokenLimitSource,
 } from "../../utils/modelInputCap";
 import { subscribeModelProviderGroups } from "../../utils/modelProviders";
+import { createModelProviderGroupsPanelSync } from "./modelProviderPanelSync";
 import { formatDisplayModelName } from "../../utils/modelDisplayLabel";
 import type { ProviderProtocol } from "../../utils/providerProtocol";
 import { inferLegacyProviderProtocol } from "../../utils/providerProtocol";
@@ -1973,7 +1974,22 @@ export function refreshActiveConversationPanels(
   }
 }
 
-subscribeModelProviderGroups(refreshActiveConversationPanels);
+// Saved model providers changed (Settings). Each open panel syncs its model
+// controls; chats rebuild only when the runtime model entries they render
+// with changed. See modelProviderPanelSync.ts.
+const modelProviderGroupsPanelSync = createModelProviderGroupsPanelSync({
+  listPanels: () => activeContextPanels.keys(),
+  readModelEntriesSignature: () => JSON.stringify(getAvailableModelEntries()),
+  refreshAllPanels: () => refreshActiveConversationPanels(),
+});
+
+/** Register a panel's light model-control sync for provider changes. */
+export const registerContextPanelModelSync =
+  modelProviderGroupsPanelSync.register;
+
+subscribeModelProviderGroups(
+  modelProviderGroupsPanelSync.onModelProviderGroupsChanged,
+);
 
 // The one writer of a past chat the agent attached (past_chat_attach): the
 // in-memory user message gets the chip, then its row is saved.

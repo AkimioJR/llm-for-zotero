@@ -200,6 +200,7 @@ import {
   editLatestUserMessageAndRetry,
   editUserTurnAndRetry,
   findLatestRetryPair,
+  registerContextPanelModelSync,
   type EditLatestTurnMarker,
 } from "./chat";
 import { scheduleConversationQuoteRevalidation } from "./quoteValidation/scheduling";
@@ -2103,6 +2104,7 @@ export function setupHandlers(
   let cleanupPrefObservers: (() => void) | null = null;
   let cleanupMineruPaperSourceObservers: (() => void) | null = null;
   let cleanupModelCapabilitySubscription: (() => void) | null = null;
+  let cleanupModelProviderSync: (() => void) | null = null;
   let codexDirectController: CodexDirectModelReasoningController | null = null;
   {
     const agentPrefKey = `${config.prefsPrefix}.enableAgentMode`;
@@ -6759,6 +6761,12 @@ export function setupHandlers(
     if (setupHandlersCleaned) return;
     syncModelFromPrefs();
   });
+  // Settings edits to the saved providers: update the model and reasoning
+  // controls in place (chat.ts rebuilds the chat only when needed).
+  cleanupModelProviderSync = registerContextPanelModelSync(body, () => {
+    if (setupHandlersCleaned) return;
+    syncModelFromPrefs(true);
+  });
   codexDirectController = createCodexDirectModelReasoningController({
     getSelectedEntry: () =>
       item ? panelChoices.getSelectedModelEntry() : null,
@@ -8884,6 +8892,8 @@ export function setupHandlers(
     cleanupMineruPaperSourceObservers?.();
     cleanupModelCapabilitySubscription?.();
     cleanupModelCapabilitySubscription = null;
+    cleanupModelProviderSync?.();
+    cleanupModelProviderSync = null;
     disposeHistoryActivity?.();
     // Before the panel's teardown, which would repaint the button.
     unbindTaskProgressToggle?.();

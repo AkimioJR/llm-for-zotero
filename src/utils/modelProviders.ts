@@ -946,8 +946,22 @@ export function consumeOutputTokenAutoMigrationNotice(): boolean {
   return pending;
 }
 
-export function setModelProviderGroups(groups: ModelProviderGroup[]): void {
+export function setModelProviderGroups(
+  groups: ModelProviderGroup[],
+  options: {
+    /**
+     * False saves now and leaves the notification to a later
+     * notifyModelProviderGroupsChanged() (settings text fields coalesce
+     * keystrokes this way).
+     */
+    notify?: boolean;
+  } = {},
+): void {
   storeModelProviderGroups(normalizeModelProviderGroups(groups));
+  if (options.notify !== false) notifyModelProviderGroupsChanged();
+}
+
+export function notifyModelProviderGroupsChanged(): void {
   for (const listener of modelProviderGroupListeners) listener();
 }
 
