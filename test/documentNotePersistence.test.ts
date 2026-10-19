@@ -3,6 +3,7 @@ import { composeRetrievalCandidateInvalidation } from "./helpers/hostSurfaces";
 import { assert } from "chai";
 import { createHash } from "node:crypto";
 import { innermostToolResult } from "../src/agent/contracts/toolResultEnvelope";
+import { verifyNoteWriteTarget } from "../src/agent/contracts/actionOperationEvidence";
 import {
   exportPlanDocumentMarkdown,
   savePlanDocumentAsNote,
@@ -606,6 +607,137 @@ describe("durable document note association", function () {
     assert.isFalse(retried.created);
     assert.equal(retried.itemId, saved.itemId);
     assert.isTrue(retried.noteVerification?.matches);
+  });
+
+  /** The cited paper's metadata as Zotero reports it right now. */
+  function citedMetadata(family: string) {
+    globals.Zotero.URI = {
+      getItemURI: (item: { key: string }) =>
+        `http://zotero.org/users/local/abc/items/${item.key}`,
+    };
+    globals.Zotero.Utilities.Item = {
+      itemToCSLJSON: () => ({
+        title: "Paper",
+        author: [{ family }],
+        issued: { "date-parts": [[2020]] },
+      }),
+    };
+  }
+
+  it("recognizes a saved citation note after the cited paper's metadata changed", async function () {
+    citedMetadata("Smith");
+    document.visibleHtml =
+      "<h1>Summary</h1><p>Turnover drives drift {{cite item=42 page=7}}.</p>";
+    const target = { parentItemId: 42, libraryID: 1 };
+    const saved = await savePlanDocumentAsNote(document.documentId, target);
+    const stored = notes.get(saved.itemId).getNote();
+
+    // The user corrects the author after the note was saved. The note keeps
+    // the label it was written with; the retry must still recognize it.
+    citedMetadata("Jones");
+    const retried = await savePlanDocumentAsNote(document.documentId, target);
+    assert.isFalse(retried.created);
+    assert.equal(retried.itemId, saved.itemId);
+    assert.equal(notes.size, 1);
+    assert.equal(notes.get(saved.itemId).getNote(), stored);
+    // The proof is the forced read-back whose hash the save recorded.
+    assert.isTrue(retried.noteVerification?.matches);
+    assert.equal(retried.noteVerification?.expectedHtml, stored);
+
+    // The receipt accepts that proof for the same note_write proposal.
+    const gateway = {
+      getItem: (id: number) => globals.Zotero.Items.get(id),
+    } as any;
+    const tool = createNoteWriteTool(gateway);
+    const input = tool.validate({
+      mode: "create",
+      documentId: document.documentId,
+      targetItemId: 42,
+    });
+    assert.isTrue(input.ok);
+    if (!input.ok) return;
+    const context = directContext("summary-run");
+    await tool.planInvocation(input.value, context);
+    const [proposal] = await tool.describeAction!(input.value, context);
+    const receipt = await verifyNoteWriteTarget(
+      proposal,
+      {
+        result: {
+          noteId: retried.itemId,
+          noteVerification: retried.noteVerification,
+        },
+      },
+      gateway,
+    );
+    assert.deepEqual(receipt.targets, [`item:${saved.itemId}`]);
+  });
+
+  it("recognizes a saved citation note after the cited paper was deleted", async function () {
+    citedMetadata("Smith");
+    document.visibleHtml =
+      "<h1>Summary</h1><p>Turnover drives drift {{cite item=42 page=7}}.</p>";
+    const saved = await savePlanDocumentAsNote(document.documentId);
+    const items = globals.Zotero.Items;
+    globals.Zotero.Items = {
+      ...items,
+      get: (id: number) => (id === 42 ? false : items.get(id)),
+      getByLibraryAndKey: (lib: number, key: string) =>
+        key === "PAPER42" ? false : items.getByLibraryAndKey(lib, key),
+    };
+    const retried = await savePlanDocumentAsNote(document.documentId);
+    assert.isFalse(retried.created);
+    assert.equal(retried.itemId, saved.itemId);
+    assert.isTrue(retried.noteVerification?.matches);
+  });
+
+  it("still refuses a changed citation note even though its hash cannot be rebuilt", async function () {
+    citedMetadata("Smith");
+    document.visibleHtml =
+      "<h1>Summary</h1><p>Turnover drives drift {{cite item=42 page=7}}.</p>";
+    const saved = await savePlanDocumentAsNote(document.documentId);
+    notes.get(saved.itemId).stored = "<p>Rewritten by the user</p>";
+    await rejects(
+      savePlanDocumentAsNote(document.documentId),
+      /no longer matches this exact document/,
+    );
+  });
+
+  it("proves a citation-free document on retry against its own body", async function () {
+    const saved = await savePlanDocumentAsNote(document.documentId);
+    const retried = await savePlanDocumentAsNote(document.documentId);
+    assert.isFalse(retried.created);
+    assert.equal(retried.itemId, saved.itemId);
+    assert.isTrue(retried.noteVerification?.matches);
+    assert.equal(retried.noteVerification?.expectedHtml, document.visibleHtml);
+  });
+
+  it("judges a binding older than stored hashes without making citations", async function () {
+    // Bindings without a stored hash predate citation requests: their note
+    // holds the document's HTML as written, and the cited item may be gone.
+    // The retry compares against that HTML as it did before citations
+    // existed, so a missing cited item can never turn it into a citation
+    // error.
+    document.visibleHtml = "<p>Text {{cite item=999 page=7}}.</p>";
+    const legacy = new globals.Zotero.Item("note");
+    legacy.key = "LEGACY01";
+    legacy.primaryLoaded = true;
+    legacy.setNote(document.visibleHtml);
+    await legacy.saveTx();
+    state = {
+      version: 1,
+      documentId: document.documentId,
+      savedNote: { libraryID: 1, itemKey: "LEGACY01" },
+      updatedAt: 1,
+    };
+    let failure: unknown;
+    try {
+      await savePlanDocumentAsNote(document.documentId);
+    } catch (error) {
+      failure = error;
+    }
+    assert.notMatch(String(failure), /cite|citation|Zotero paper/i);
+    assert.equal(notes.size, 1, "a retry never creates a replacement");
+    assert.equal(state.savedNote.itemKey, "LEGACY01");
   });
 
   it("refuses a document citation of an item that cannot be cited, reserving nothing", async function () {

@@ -31,8 +31,10 @@ import { restoreNoteEmbedTokensInHtml } from "../../utils/noteEmbeds";
  * A document's HTML as a new note stores it: each `{{cite item=… page=…}}`
  * becomes a Zotero citation chip, and the cited works are registered in the
  * note root. Every place that builds or proves the note uses this one form.
+ * A request that cannot become a citation, or a misspelled one, throws
+ * before anything is written.
  */
-function documentNoteHtml(html: string, libraryID: number): string {
+export function documentNoteHtml(html: string, libraryID: number): string {
   if (!hasNewCitationTokens(html)) return html;
   const expanded = expandNewCitationTokens(html, (itemRef) =>
     /^\d+$/.test(itemRef)
@@ -201,11 +203,12 @@ async function saveDocumentNote(
     const existing = resolveItemByKey(binding.libraryID, binding.itemKey);
     if (existing && existing.isNote() && !existing.deleted) {
       await existing.reload(["primaryData", "note"], true);
+      // A binding without a stored hash predates citation requests, so its
+      // note holds the document's HTML as written.
       const expectedHash =
         binding.nativeContentHash ||
-        (await noteContentHash(
-          documentNoteHtml(document.visibleHtml, binding.libraryID),
-        ));
+        (await noteContentHash(document.visibleHtml));
+      const readBack = existing.getNote();
       if (
         (target &&
           (existing.parentID !== target.parentItemId ||
@@ -217,7 +220,7 @@ async function saveDocumentNote(
         (binding.documentVersion &&
           binding.documentVersion !== document.documentVersion) ||
         (await noteContentHash(
-          existing.getNote(),
+          readBack,
           binding.nativeContentHashVersion === 1,
         )) !== expectedHash ||
         binding.finalized === false
@@ -226,14 +229,20 @@ async function saveDocumentNote(
           "The saved note no longer matches this exact document and parent, or its assets are incomplete. Resolve that note before saving again.",
         );
       }
+      // A citation chip's label and the root registry come from the cited
+      // work's metadata at save time. Rebuilding them now would refuse the
+      // note after the user edits or deletes that work, so the read-back the
+      // stored hash just identified is what the note is proved against.
+      const provedByStoredHash =
+        Boolean(binding.nativeContentHash) &&
+        hasNewCitationTokens(document.visibleHtml);
       // Embedded assets rewrite the stored HTML with native attachment keys,
       // so only an asset-free document can be proved against its own body.
-      const noteVerification = document.assets.length
-        ? undefined
-        : await verifyNativeNoteHtml(
-            existing,
-            documentNoteHtml(document.visibleHtml, existing.libraryID),
-          );
+      const noteVerification = provedByStoredHash
+        ? await verifyNativeNoteHtml(existing, readBack)
+        : document.assets.length
+          ? undefined
+          : await verifyNativeNoteHtml(existing, document.visibleHtml);
       // Prove the note before recording it as saved: a promotion the read-back
       // contradicts would lock the document out of every later save attempt.
       if (noteVerification && !noteVerification.matches)

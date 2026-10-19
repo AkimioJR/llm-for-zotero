@@ -5,6 +5,7 @@ import type { NativeNoteWriteEvidence } from "./contracts";
 import { buildSaveNoteInverse } from "./forwardExecutionSupport";
 import type { AgentBatchBinding } from "../../types";
 import { loadPlanDocument } from "../../documents/store";
+import { documentNoteHtml } from "../../documents/actions";
 import { assertMaterialRefMatches } from "../../documents/workflowMaterial";
 import { advanceBatchJob } from "../../store/batchJobStore";
 import {
@@ -20,12 +21,22 @@ import {
  * reference, so a retry after a crash cannot write text that drifted from the
  * material the user approved. Without material — the operation executed
  * outside a durable batch — the supplied body is rendered as before.
+ *
+ * Either way the HTML is the one a single finalized document would store:
+ * each `{{cite item=…}}` becomes a citation chip registered in the note
+ * root, and a request that cannot be cited throws, so it becomes this
+ * item's failure before anything is written.
  */
 async function noteHtmlForBatchItem(params: {
   bound?: AgentBatchBinding["items"][number];
   content: string;
+  libraryID: number;
 }): Promise<string> {
-  if (!params.bound) return renderRawNoteHtml(params.content);
+  if (!params.bound)
+    return documentNoteHtml(
+      renderRawNoteHtml(params.content),
+      params.libraryID,
+    );
   // A bound item whose body could not be finalized has nothing the user
   // approved, so it is recorded as this item's failure instead of falling
   // back to the unfinalized text.
@@ -37,7 +48,7 @@ async function noteHtmlForBatchItem(params: {
       `The finalized note material ${params.bound.material.documentId} is no longer stored`,
     );
   assertMaterialRefMatches(document, params.bound.material);
-  return document.visibleHtml;
+  return documentNoteHtml(document.visibleHtml, params.libraryID);
 }
 
 /**
@@ -202,6 +213,7 @@ export const noteLifecycleExecutors = {
           html: await noteHtmlForBatchItem({
             bound,
             content: entry.content,
+            libraryID: target.libraryID,
           }),
         });
         const saved = execution.content;
