@@ -78,6 +78,9 @@ const PROVIDER_CATALOG_TTL_MS = 60 * 1000;
 // Without a retry floor every caller (each model-menu rebuild, each notify)
 // starts another request to an unreachable server.
 const FAILED_REFRESH_RETRY_MS = 60 * 1000;
+// A user may start a local server right after a failed catalog fetch, so
+// the catalog retries sooner than the registry.
+const FAILED_CATALOG_RETRY_MS = 10 * 1000;
 const DEFAULT_REFRESH_TIMEOUT_MS = 10_000;
 const FIRST_USE_PREFLIGHT_TIMEOUT_MS = 5_000;
 
@@ -1228,7 +1231,7 @@ export async function refreshModelCatalog(
   if (
     cached?.stale &&
     !options.force &&
-    now() - (catalogAttemptedAt.get(key) ?? 0) < FAILED_REFRESH_RETRY_MS
+    now() - (catalogAttemptedAt.get(key) ?? 0) < FAILED_CATALOG_RETRY_MS
   ) {
     return cached.models;
   }

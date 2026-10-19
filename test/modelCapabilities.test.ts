@@ -411,7 +411,7 @@ describe("model capability service", function () {
       apiKey: "secret-for-test",
     } as const;
 
-    it("waits 60 s before retrying a failed catalog fetch unless forced", async function () {
+    it("waits 10 s before retrying a failed catalog fetch unless forced", async function () {
       let clock = 1_000_000;
       let fetches = 0;
       configureModelCapabilityRuntime({
@@ -423,12 +423,12 @@ describe("model capability service", function () {
       });
       await refreshModelCatalog(identity);
       await refreshModelCatalog(identity);
-      clock += 30_000;
+      clock += 5_000;
       await refreshModelCatalog(identity);
       assert.equal(fetches, 1);
       await refreshModelCatalog(identity, { force: true });
       assert.equal(fetches, 2);
-      clock += 61_000;
+      clock += 11_000;
       await refreshModelCatalog(identity);
       assert.equal(fetches, 3);
     });
