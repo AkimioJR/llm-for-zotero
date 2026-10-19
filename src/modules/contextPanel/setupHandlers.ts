@@ -310,7 +310,6 @@ import { composeContextStore } from "./contexts/composeContextStore";
 import {
   buildAttachedConversationRef,
   formatAttachedConversationLabel,
-  getPastConversationSystemLabel,
   isPastConversationEntry,
   listPastConversationEntries,
   searchPastConversationEntries,
@@ -459,7 +458,6 @@ import {
   groupHistoryEntriesByDay,
   normalizeConversationTitleSeed,
   normalizeHistoryTitle,
-  resolveHistoryEntryPaperDisplayMetadata,
 } from "./setupHandlers/controllers/conversationHistoryController";
 import {
   appendHistorySearchHighlightedText,
@@ -8420,6 +8418,7 @@ export function setupHandlers(
   const pastConversationPicker = createHistorySearchPopupController({
     parent: panelRoot,
     searchPlaceholder: t("Search past chats"),
+    showRuntimeLabel: true,
     loadEntries: async () =>
       await listPastConversationEntries({
         libraryID: getCurrentLibraryID(),
@@ -8452,17 +8451,13 @@ export function setupHandlers(
     },
     translate: t,
     log: (...args) => appLogger.warn("LLM: past conversation picker", args),
+    // Rows read exactly like the history search: "(Creator, year)" or
+    // "Library chat", the title, the small "Codex"/"Claude" label, and the
+    // paper title underneath.
     resolveLabel: (entry) =>
-      isPastConversationEntry(entry)
-        ? getPastConversationSystemLabel(entry.system)
-        : "",
+      historyLifecycleController.resolveHistoryScopeChipLabel(entry),
     resolveScopeLabel: (entry) =>
-      entry.kind === "paper"
-        ? resolveHistoryEntryPaperDisplayMetadata(
-            entry,
-            (id) => Zotero.Items.get(id) as Zotero.Item | null,
-          )?.title || t("Paper chat")
-        : t("Library chat"),
+      historyLifecycleController.resolveHistoryScopeLabel(entry),
   });
 
   attachComposeCaptureController({
