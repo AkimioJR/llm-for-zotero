@@ -120,6 +120,7 @@ import {
 } from "../../modelCapabilities";
 import {
   applyModelInputTokenCap,
+  resolveModelInputTokenLimit,
   type ModelInputTokenLimitSource,
 } from "../../utils/modelInputCap";
 import { subscribeModelProviderGroups } from "../../utils/modelProviders";
@@ -1922,36 +1923,106 @@ function renderContextUsageSnapshot(
   );
 }
 
+/**
+ * Last display estimate per conversation. Every full render recomputes the
+ * gauge, and the estimate walks the whole history (and, above the soft limit,
+ * drops messages one by one), so switching back to a long conversation paid
+ * for it again although nothing had changed. The cap result depends only on
+ * the history messages and the resolved limit, so the key holds both.
+ */
+const historyContextUsageEstimates = new Map<
+  number,
+  { signature: string; snapshot: ContextUsageSnapshot | undefined }
+>();
+const HISTORY_CONTEXT_USAGE_ESTIMATE_LIMIT = 64;
+
+function buildHistoryContextUsageSignature(
+  history: Message[],
+  limitTokens: number,
+  limitSource: ModelInputTokenLimitSource,
+): string {
+  let totalTextLength = 0;
+  for (const message of history) totalTextLength += message.text?.length || 0;
+  const last = history[history.length - 1];
+  return [
+    limitTokens,
+    limitSource,
+    history.length,
+    history[0]?.timestamp ?? "",
+    last?.timestamp ?? "",
+    last?.role ?? "",
+    last?.text?.length ?? 0,
+    totalTextLength,
+  ].join("\u0000");
+}
+
 function estimateHistoryContextUsageSnapshot(
   item: Zotero.Item,
   history: Message[],
   surface?: SelectionSurface,
+  conversationKey?: number,
 ): ContextUsageSnapshot | undefined {
   if (!history.length) return undefined;
   const effectiveRequestConfig = resolveEffectiveRequestConfig({
     item,
     surface,
   });
+  const modelName = effectiveRequestConfig.model || "";
+  const inputTokenCap = effectiveRequestConfig.advanced?.inputTokenCap;
+  const identity = {
+    apiBase: effectiveRequestConfig.apiBase,
+    protocol: effectiveRequestConfig.providerProtocol,
+    authMode: effectiveRequestConfig.authMode,
+    profileOverride: effectiveRequestConfig.advanced?.profileOverride,
+  };
+  let signature = "";
+  if (typeof conversationKey === "number") {
+    const resolvedLimit = resolveModelInputTokenLimit(
+      modelName,
+      inputTokenCap,
+      identity,
+    );
+    signature = buildHistoryContextUsageSignature(
+      history,
+      resolvedLimit.limitTokens,
+      resolvedLimit.source,
+    );
+    const cached = historyContextUsageEstimates.get(conversationKey);
+    if (cached && cached.signature === signature) {
+      return cached.snapshot ? { ...cached.snapshot } : undefined;
+    }
+  }
   const messages = buildLLMHistoryMessages(history);
   const inputCap = applyModelInputTokenCap(
     messages,
-    effectiveRequestConfig.model || "",
-    effectiveRequestConfig.advanced?.inputTokenCap,
-    {
-      apiBase: effectiveRequestConfig.apiBase,
-      protocol: effectiveRequestConfig.providerProtocol,
-      authMode: effectiveRequestConfig.authMode,
-      profileOverride: effectiveRequestConfig.advanced?.profileOverride,
-    },
+    modelName,
+    inputTokenCap,
+    identity,
   );
-  if (inputCap.estimatedAfterTokens <= 0) return undefined;
-  return {
-    contextTokens: inputCap.estimatedAfterTokens,
-    contextWindow: inputCap.limitTokens,
-    inputLimitSource: inputCap.limitSource,
-    estimated: true,
-    source: "estimated",
-  };
+  const snapshot: ContextUsageSnapshot | undefined =
+    inputCap.estimatedAfterTokens <= 0
+      ? undefined
+      : {
+          contextTokens: inputCap.estimatedAfterTokens,
+          contextWindow: inputCap.limitTokens,
+          inputLimitSource: inputCap.limitSource,
+          estimated: true,
+          source: "estimated",
+        };
+  if (typeof conversationKey === "number") {
+    historyContextUsageEstimates.delete(conversationKey);
+    if (
+      historyContextUsageEstimates.size >= HISTORY_CONTEXT_USAGE_ESTIMATE_LIMIT
+    ) {
+      const oldest = historyContextUsageEstimates.keys().next().value;
+      if (oldest !== undefined) historyContextUsageEstimates.delete(oldest);
+    }
+    historyContextUsageEstimates.set(conversationKey, {
+      signature,
+      snapshot: snapshot ? { ...snapshot } : undefined,
+    });
+  }
+  return snapshot;
 }
 
 export function refreshActiveConversationPanels(
@@ -10611,6 +10682,7 @@ function renderChatForPanel(
       item,
       history,
       resolveSelectionSurfaceForBody(body),
+      conversationKey,
     );
     const configuredLimitIsUserAuthoritative =
       recomputedSnapshot?.inputLimitSource === "advanced" ||
