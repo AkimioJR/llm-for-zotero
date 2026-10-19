@@ -14,6 +14,7 @@ import {
   type ExternalMutationOutcome,
 } from "../../services/externalMutationCoordinator";
 import {
+  inJournalTransaction,
   isAgentChangeJournalAvailable,
   updateJournalStep,
   registerJournalRecoveryPayloads,
@@ -198,15 +199,20 @@ async function execute(
       expected = mode === "append" ? appendNoteHtml(before, html) : html;
       const preparedAfter = await storeRecoveryText(expected);
       if (actionId) {
-        await registerJournalRecoveryPayloads({
-          actionId,
-          stepId: `${actionId}:1`,
-          value: preparedAfter,
-        });
-        await updateJournalStep({
-          stepId: `${actionId}:1`,
-          status: "applying",
-          result: { preparedAfter },
+        // Its own transaction, so another flow's rollback cannot drop it.
+        // This runs as the journaled step's write, after its transactional
+        // claim and after finalization's awaited saves.
+        await inJournalTransaction(async () => {
+          await registerJournalRecoveryPayloads({
+            actionId,
+            stepId: `${actionId}:1`,
+            value: preparedAfter,
+          });
+          await updateJournalStep({
+            stepId: `${actionId}:1`,
+            status: "applying",
+            result: { preparedAfter },
+          });
         });
       }
       finalized = true;

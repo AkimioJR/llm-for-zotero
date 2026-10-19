@@ -336,33 +336,39 @@ export function createLibraryBatchTool(deps: {
         const uncertain = journalOutcomes.some(
           (outcome) => outcome.status === "uncertain",
         );
-        await updateJournalAction({
-          actionId: journalActionId,
-          status: failed
-            ? affectedCount > 0
-              ? "partially_applied"
-              : uncertain
-                ? "uncertain"
-                : "failed"
-            : effect === "none"
-              ? "no_effect"
-              : effect === "partial"
+        const actionId = journalActionId;
+        // Its own transaction, so another flow's rollback cannot drop it.
+        // Every caller is this tool's own flow, outside the batch store's
+        // transactions, and it prepared the action in one above.
+        await inJournalTransaction(() =>
+          updateJournalAction({
+            actionId,
+            status: failed
+              ? affectedCount > 0
                 ? "partially_applied"
-                : reversibility === "none"
-                  ? "irreversible"
-                  : "applied",
-          reversibility,
-          affectedCount,
-          error:
-            failed && error !== undefined
-              ? error instanceof Error
-                ? error.message
-                : String(error)
+                : uncertain
+                  ? "uncertain"
+                  : "failed"
+              : effect === "none"
+                ? "no_effect"
+                : effect === "partial"
+                  ? "partially_applied"
+                  : reversibility === "none"
+                    ? "irreversible"
+                    : "applied",
+            reversibility,
+            affectedCount,
+            error:
+              failed && error !== undefined
+                ? error instanceof Error
+                  ? error.message
+                  : String(error)
+                : undefined,
+            recovery: failed
+              ? "Previously applied batch steps retain their durable inverses; inspect any uncertain step before retrying."
               : undefined,
-          recovery: failed
-            ? "Previously applied batch steps retain their durable inverses; inspect any uncertain step before retrying."
-            : undefined,
-        });
+          }),
+        );
         journalFinalized = true;
       };
       const checkpoint = async (value: ActionCheckpoint): Promise<void> => {
