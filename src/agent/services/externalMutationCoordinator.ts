@@ -200,19 +200,25 @@ export async function executeJournaledStep<T>(params: {
         }
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        await updateJournalStep({
-          stepId,
-          status: "failed",
-          reversibility: "full",
-          error: reason,
-        }).catch(() => undefined);
-        if (action) {
-          await updateJournalAction({
-            actionId,
+        // Its own transaction, so another flow's rollback cannot drop the
+        // failure markers. This flow just ran the prepare in its own
+        // transaction and the claims in inTransaction above, so it holds none
+        // here; if it did, the prepare would have stalled first.
+        await inJournalTransaction(async () => {
+          await updateJournalStep({
+            stepId,
             status: "failed",
+            reversibility: "full",
             error: reason,
-          }).catch(() => undefined);
-        }
+          });
+          if (action) {
+            await updateJournalAction({
+              actionId,
+              status: "failed",
+              error: reason,
+            });
+          }
+        }).catch(() => undefined);
         throw error;
       }
     }
