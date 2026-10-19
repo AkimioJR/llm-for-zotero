@@ -2127,14 +2127,22 @@ def make_contact_sheet(
         draw.text((8, 8), label[:70], fill=(0, 0, 0))
         tiles.append(tile)
     gap = 16
-    rows = math.ceil(len(tiles) / cols)
     width = cols * thumb_w + (cols + 1) * gap
-    height = rows * (thumb_h + 42) + (rows + 1) * gap
-    canvas = Image.new("RGB", (width, height), (242, 242, 242))
-    for index, tile in enumerate(tiles):
-        row, col = divmod(index, cols)
-        canvas.paste(tile, (gap + col * (thumb_w + gap), gap + row * (thumb_h + 42 + gap)))
-    canvas.save(out_path, quality=92)
+    # JPEG caps each side at 65,535 px; a large sweep is split into numbered parts.
+    rows_per_sheet = max(1, (65000 - gap) // (thumb_h + 42 + gap))
+    per_sheet = rows_per_sheet * cols
+    sheets = [tiles[start : start + per_sheet] for start in range(0, len(tiles), per_sheet)]
+    for sheet_index, sheet_tiles in enumerate(sheets):
+        rows = math.ceil(len(sheet_tiles) / cols)
+        height = rows * (thumb_h + 42) + (rows + 1) * gap
+        canvas = Image.new("RGB", (width, height), (242, 242, 242))
+        for index, tile in enumerate(sheet_tiles):
+            row, col = divmod(index, cols)
+            canvas.paste(tile, (gap + col * (thumb_w + gap), gap + row * (thumb_h + 42 + gap)))
+        path = out_path if sheet_index == 0 else out_path.with_name(
+            f"{out_path.stem}_part{sheet_index + 1}{out_path.suffix}"
+        )
+        canvas.save(path, quality=92)
 
 
 def build_case_targets(
@@ -2443,6 +2451,7 @@ def main() -> None:
                         Path(overlay_path),
                     )
                 )
+    (out_dir / "summary.json").write_text(json.dumps(results, indent=2))
     make_contact_sheet(all_items, out_dir / "all_crops_contact_sheet.jpg", cols=5)
     make_contact_sheet(
         all_overlay_items,
@@ -2450,7 +2459,6 @@ def main() -> None:
         thumb_h=430,
         cols=4,
     )
-    (out_dir / "summary.json").write_text(json.dumps(results, indent=2))
     print(json.dumps(
         {
             "pdfCount": len(results),
