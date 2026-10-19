@@ -3,6 +3,7 @@ import {
   buildSafeSvgMarkup,
   renderMathPreviewHtml,
   renderMarkdown,
+  renderMarkdownMemoized,
   renderMarkdownWithLegacyParser,
 } from "../../utils/markdown";
 import {
@@ -461,7 +462,14 @@ export function renderAssistantMarkdownHtmlForChat(
   text: string,
   options?: RenderedMarkdownOptions,
 ): string {
-  return renderMarkdown(sanitizeText(text), options);
+  const safeText = sanitizeText(text);
+  // Settled text renders through the output cache; a streaming tail
+  // (deferEnrichment) changes every frame, and an image resolver makes the
+  // output depend on more than the text.
+  if (!options?.deferEnrichment && !options?.resolveImage) {
+    return renderMarkdownMemoized(safeText);
+  }
+  return renderMarkdown(safeText, options);
 }
 
 const SAFE_RENDERED_MARKDOWN_TAGS = new Set([
