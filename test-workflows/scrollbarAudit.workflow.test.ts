@@ -321,10 +321,18 @@ describe("workflow: conversation view has a single scrollbar", function () {
       1,
       "sidepanel should mount the same shared turn navigator",
     );
-    assert.lengthOf(
+    // The navigator builds its markers in an animation frame, which Gecko
+    // delays while the main window is not painting, so wait for it.
+    const markers = () =>
       Array.from(
         host?.querySelectorAll(".llm-turn-navigator-marker") || [],
-      ) as Element[],
+      ) as Element[];
+    const markerDeadline = Date.now() + 5000;
+    while (!markers().length && Date.now() < markerDeadline) {
+      await Zotero.Promise.delay(25);
+    }
+    assert.lengthOf(
+      markers(),
       1,
       "sidepanel should project its query into the shared navigator",
     );

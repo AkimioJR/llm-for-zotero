@@ -107,10 +107,11 @@ describe("workflow: standalone side panel", function () {
   /** The panel's bar and rows use the window's own metrics. */
   function assertSameDesign(state: WorkflowTestStandaloneSidePanelDiagnostics) {
     const { design } = state;
-    // The strip is as tall as the main tab row, so they share a middle line.
+    // The strip starts at the main tab row's top and ends where the row's
+    // 32px buttons end, halfway between the row's height and theirs.
     assert.closeTo(
       design.barHeightPx,
-      design.tabRowHeightPx,
+      (design.tabRowHeightPx + 32) / 2,
       0.5,
       "bar height",
     );
@@ -133,10 +134,11 @@ describe("workflow: standalone side panel", function () {
   }
 
   /**
-   * Browser-style tabs on a darker strip: every part of the strip sits on
-   * the main tab row's middle line, the first tab sits 8px in, the active
-   * one is the panel surface with matching flares on both sides and runs
-   * straight into the content, and inactive ones have no fill.
+   * Browser-style tabs on a darker strip: the strip starts at the main tab
+   * row's top and ends with the 32px ⇤ toggle, every part of the strip is
+   * centred in the band the tabs fill, the first tab sits 8px in, the
+   * active one is the panel surface with matching flares on both sides and
+   * runs straight into the content, and inactive ones have no fill.
    */
   function assertBrowserTabs(
     state: WorkflowTestStandaloneSidePanelDiagnostics,
@@ -162,21 +164,32 @@ describe("workflow: standalone side panel", function () {
       0.5,
       "the strip's top is the main tab row's",
     );
+    assert.isNotNull(strip!.navToggleBottomPx, "the ⇤ toggle is shown");
     assert.closeTo(
       strip!.stripBottomPx,
-      strip!.tabRowBottomPx,
+      strip!.navToggleBottomPx!,
       0.5,
-      "the strip's bottom is the main tab row's",
+      "the strip's bottom is the 32px ⇤ toggle's",
     );
     const centres = strip!.centres;
-    const line = centres.tabRow;
+    assert.closeTo(
+      centres.toggle,
+      centres.tabRow,
+      0.5,
+      "the →| toggle on the main tab row's middle line",
+    );
+    assert.closeTo(
+      centres.mainSwitch,
+      centres.tabRow,
+      0.5,
+      "Paper chat | Library chat on the main tab row's middle line",
+    );
+    // The band the tabs fill: from where they start to the strip's bottom.
+    const line = (strip!.mainSwitchTopPx + strip!.stripBottomPx) / 2;
     const onLine = (value: number | null, label: string) => {
       assert.isNotNull(value, label);
-      assert.closeTo(value!, line, 0.5, `${label} on the middle line`);
+      assert.closeTo(value!, line, 0.5, `${label} centred in the tab band`);
     };
-    onLine(centres.toggle, "the →| toggle");
-    onLine(centres.mainSwitch, "Paper chat | Library chat");
-    onLine(centres.strip, "the strip");
     onLine(centres.newTabButton, "the + button");
     onLine(centres.closeButton, "the panel's ×");
     assert.lengthOf(centres.tabs, strip!.tabs.length);

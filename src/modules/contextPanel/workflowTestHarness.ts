@@ -4960,6 +4960,12 @@ function readStandaloneSidePanelDiagnostics(): WorkflowTestStandaloneSidePanelDi
           return {
             toggleTopPx: toggle.getBoundingClientRect().top,
             toggleBottomPx: toggle.getBoundingClientRect().bottom,
+            navToggleBottomPx: (() => {
+              const navToggle = query(doc, ".llm-standalone-nav-toggle");
+              return navToggle && visible(navToggle)
+                ? navToggle.getBoundingClientRect().bottom
+                : null;
+            })(),
             mainSwitchTopPx:
               query(
                 doc,

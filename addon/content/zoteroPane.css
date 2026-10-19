@@ -3521,12 +3521,19 @@
   flex-shrink: 0;
 }
 
+/* The strip is shorter than the main tab row, so the view starts with the
+ * difference: its title rows and the History search field stay on the main
+ * title's line. */
 .llm-standalone-side-panel-view {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+  padding-top: calc(
+    var(--llm-standalone-toolbar-row-height) - var(--llm-side-strip-height)
+  );
+  box-sizing: border-box;
 }
 
 .llm-standalone-side-panel-view > div {

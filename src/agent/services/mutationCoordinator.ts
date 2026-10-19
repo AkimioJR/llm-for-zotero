@@ -21,6 +21,7 @@ import {
   claimJournalAction,
   claimJournalStep,
   createJournalId,
+  inJournalTransaction,
   isAgentChangeJournalAvailable,
   listJournalActions,
   listJournalSteps,
@@ -261,11 +262,11 @@ async function executeComposite(params: {
   const run = async () => {
     const plan = await stepPlanFor(service, operation, context);
     if (actionId && params.prepareAction) {
-      await prepareJournalAction({
-        actionId,
-        ...params.prepareAction(plan),
-        effect: "write",
-      });
+      const action = params.prepareAction(plan);
+      // Its own transaction, so another flow's rollback cannot drop the row.
+      await inJournalTransaction(() =>
+        prepareJournalAction({ actionId, ...action, effect: "write" }),
+      );
     }
     const stepOutcomes: AgentJournalStepOutcome[] = [];
     const scope: AgentJournalActionScope | undefined = actionId
@@ -539,24 +540,27 @@ export async function executeLibraryMutationAction(params: {
       // holds altogether. A reused action is therefore summarized from every
       // step it owns, so a resume can neither shrink it nor rewrite an action
       // that still carries a failed step as fully applied.
-      await updateJournalAction({
-        actionId,
-        ...(resumed
-          ? await resumedActionSummary({
-              actionId,
-              affectedCount:
-                (priorOutcome?.affectedCount || 0) + summary.affectedCount,
-              unfinishedWork: Boolean(
-                context.resumeJournalAction?.unfinishedWork,
-              ),
-              fallbackReversibility: summary.reversibility,
-            })
-          : {
-              status,
-              reversibility: summary.reversibility,
-              affectedCount: summary.affectedCount,
-            }),
-      });
+      const final: Awaited<ReturnType<typeof resumedActionSummary>> = resumed
+        ? await resumedActionSummary({
+            actionId,
+            affectedCount:
+              (priorOutcome?.affectedCount || 0) + summary.affectedCount,
+            unfinishedWork: Boolean(
+              context.resumeJournalAction?.unfinishedWork,
+            ),
+            fallbackReversibility: summary.reversibility,
+          })
+        : {
+            status,
+            reversibility: summary.reversibility,
+            affectedCount: summary.affectedCount,
+          };
+      // Its own transaction, so another flow's rollback cannot drop it. This
+      // runs from a tool call, never inside a Zotero transaction, and the
+      // steps above already journalled in transactions of this same flow.
+      await inJournalTransaction(() =>
+        updateJournalAction({ actionId, ...final }),
+      );
     }
     return {
       actionId: actionId || undefined,
@@ -589,18 +593,20 @@ export async function executeLibraryMutationAction(params: {
             error.reversibility,
           ]
         : changedOutcomes.map((outcome) => outcome.reversibility);
-      await updateJournalAction({
-        actionId,
-        status: changedOutcomes.length
-          ? "partially_applied"
-          : uncertain
-            ? "uncertain"
-            : "failed",
-        reversibility: combineReversibility(failureReversibilities),
-        affectedCount,
-        error: error instanceof Error ? error.message : String(error),
-        recovery,
-      }).catch(() => undefined);
+      await inJournalTransaction(() =>
+        updateJournalAction({
+          actionId,
+          status: changedOutcomes.length
+            ? "partially_applied"
+            : uncertain
+              ? "uncertain"
+              : "failed",
+          reversibility: combineReversibility(failureReversibilities),
+          affectedCount,
+          error: error instanceof Error ? error.message : String(error),
+          recovery,
+        }),
+      ).catch(() => undefined);
     }
     const message = error instanceof Error ? error.message : String(error);
     if (changedOutcomes.length) throw new Error(`${message} (${recovery})`);

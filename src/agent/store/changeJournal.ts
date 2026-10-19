@@ -113,6 +113,25 @@ async function inTransaction(task: () => Promise<void>): Promise<void> {
   }
 }
 
+/**
+ * Runs journal writes in a transaction of their own.
+ *
+ * Zotero.DB.queryAsync does not wait for a transaction another flow holds: a
+ * plain statement issued meanwhile runs inside it and is lost if that flow
+ * rolls back. A prepared action or step lost that way can no longer be
+ * claimed, and a lost outcome leaves a finished step "applying" without its
+ * inverse, so callers wrap prepare, outcome, final and audit writes in this.
+ * Never call it while the same flow holds a Zotero transaction: Zotero waits
+ * for that one to end, which stalls the flow until the 30 s wait times out.
+ */
+export async function inJournalTransaction(
+  task: () => Promise<unknown>,
+): Promise<void> {
+  await inTransaction(async () => {
+    await task();
+  });
+}
+
 function stringify(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
