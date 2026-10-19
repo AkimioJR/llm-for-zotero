@@ -2722,6 +2722,264 @@
   margin: 2px 12px;
 }
 
+/* Preferences row with the plugin update control at its right end. */
+.llm-standalone-footer-row {
+  container-type: inline-size;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 8px;
+  min-width: 0;
+}
+
+.llm-standalone-footer-row .llm-standalone-nav-row {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.llm-standalone-update-slot {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+}
+
+.llm-standalone-update-btn {
+  appearance: none;
+  -moz-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 24px;
+  min-width: 24px;
+  max-width: 100%;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--fill-tertiary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--llm-fs-11, 11px);
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.llm-standalone-update-btn:hover:not(:disabled) {
+  background: var(--fill-quinary);
+  color: var(--fill-primary);
+}
+
+.llm-standalone-update-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.llm-standalone-update-btn:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.llm-standalone-update-version {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.llm-standalone-update-btn[data-state="available"] {
+  width: 24px;
+  padding: 0;
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.llm-standalone-update-btn[data-state="available"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 85%, black 15%);
+  color: #fff;
+}
+
+.llm-standalone-update-btn[data-state="updating"] {
+  width: 24px;
+  padding: 0;
+  cursor: default;
+}
+
+.llm-standalone-update-spinner {
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, var(--color-accent) 25%, transparent);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: llm-standalone-update-spin 800ms linear infinite;
+}
+
+@keyframes llm-standalone-update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .llm-standalone-update-spinner {
+    animation-duration: 3s;
+  }
+}
+
+.llm-standalone-update-btn[data-state="updated"] {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
+  font-weight: 500;
+}
+
+.llm-standalone-update-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.llm-standalone-update-long,
+.llm-standalone-update-short {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.llm-standalone-update-long {
+  display: none;
+}
+
+@container (min-width: 230px) {
+  .llm-standalone-update-long {
+    display: inline;
+  }
+
+  .llm-standalone-update-short {
+    display: none;
+  }
+}
+
+.llm-standalone-update-popover {
+  position: fixed;
+  z-index: 10001;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  max-height: 260px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--material-background) 94%, black 6%);
+  border: 1px solid var(--stroke-secondary);
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+  color: var(--fill-primary);
+  font-size: var(--llm-fs-12);
+  line-height: 1.4;
+  user-select: text;
+  -moz-user-select: text;
+}
+
+.llm-standalone-update-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.llm-standalone-update-card-title {
+  font-weight: 600;
+  color: var(--fill-primary);
+}
+
+.llm-standalone-update-card-date,
+.llm-standalone-update-muted {
+  color: var(--fill-tertiary);
+}
+
+.llm-standalone-update-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: clip;
+}
+
+.llm-standalone-update-notes.llm-rendered-markdown h1,
+.llm-standalone-update-notes.llm-rendered-markdown h2,
+.llm-standalone-update-notes.llm-rendered-markdown h3,
+.llm-standalone-update-notes.llm-rendered-markdown h4 {
+  margin: 8px 0 4px;
+  font-size: var(--llm-fs-11, 11px);
+  font-weight: 600;
+  color: var(--fill-secondary);
+}
+
+.llm-standalone-update-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--stroke-secondary);
+}
+
+.llm-standalone-update-link {
+  appearance: none;
+  -moz-appearance: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+}
+
+.llm-standalone-update-link:hover {
+  text-decoration: underline;
+}
+
+.llm-standalone-update-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.llm-standalone-update-secondary,
+.llm-standalone-update-primary {
+  appearance: none;
+  -moz-appearance: none;
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--stroke-secondary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fill-primary);
+  cursor: pointer;
+  font: inherit;
+}
+
+.llm-standalone-update-secondary:hover {
+  background: var(--fill-quinary);
+}
+
+.llm-standalone-update-primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #fff;
+  font-weight: 500;
+}
+
+.llm-standalone-update-primary:hover {
+  background: color-mix(in srgb, var(--color-accent) 85%, black 15%);
+}
+
 .llm-standalone-sidebar-refresh {
   font-size: 15px;
   line-height: 1;

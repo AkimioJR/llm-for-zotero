@@ -195,6 +195,7 @@ import {
   renderQuoteCitationPlaceholders,
 } from "./assistantCitationLinks";
 import { renderRenderedMarkdownInto } from "./renderedMarkdown";
+import { setPluginUpdateDepsForTest } from "../pluginUpdateAdapters";
 import { openStandalonePlanDocumentWindow } from "./standalonePlanDocumentWindow";
 import { renderPlanDocumentContent } from "./planDocumentPresentation";
 import {
@@ -8826,6 +8827,7 @@ export function installWorkflowTestHarness(targetAddon: {
     getConversationHistoryTexts,
     getStandaloneDiagnostics,
     closeStandalone,
+    setPluginUpdateDeps: setPluginUpdateDepsForTest,
     getStandaloneSidePanelDiagnostics,
     clickStandaloneSidePanelControl,
     setStandaloneSidePanelSlideDuration,

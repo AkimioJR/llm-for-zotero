@@ -102,6 +102,7 @@ declare namespace _ZoteroTypes {
       "libraryTextIndexEnabled": boolean;
       "libraryTextIndexVectors": boolean;
       "libraryTextIndexBudgetMB": number;
+      "lastSeenVersion": string;
     };
   }
 }

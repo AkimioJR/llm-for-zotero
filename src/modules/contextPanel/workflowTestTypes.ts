@@ -1390,6 +1390,10 @@ export type WorkflowTestApi = {
   ) => Promise<WorkflowTestStandaloneDiagnostics>;
   getStandaloneDiagnostics: () => Promise<WorkflowTestStandaloneDiagnostics>;
   closeStandalone: () => Promise<void>;
+  /** Replaces the update checker, installer and release-notes fetcher; null restores them. */
+  setPluginUpdateDeps: (
+    deps: import("../pluginUpdate").PluginUpdateDeps | null,
+  ) => void;
   /** The window's side panel: open state, view, and each view's contents. */
   getStandaloneSidePanelDiagnostics: () => Promise<WorkflowTestStandaloneSidePanelDiagnostics>;
   /** Clicks one side panel control (toggle, tabs, launch rows, confirm). */

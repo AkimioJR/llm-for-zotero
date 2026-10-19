@@ -98,3 +98,4 @@ pref("mineruExcludePatterns", "");
 pref("libraryTextIndexEnabled", true);
 pref("libraryTextIndexVectors", false);
 pref("libraryTextIndexBudgetMB", 500);
+pref("lastSeenVersion", "");

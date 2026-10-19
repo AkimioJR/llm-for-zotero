@@ -31,6 +31,10 @@ export type StandaloneSidebarView = {
   list: HTMLDivElement;
   preferencesRegion: HTMLDivElement;
   footerDivider: HTMLDivElement;
+  /** Preferences row plus the plugin update control at its right end. */
+  footerRow: HTMLDivElement;
+  /** Empty box at the right end of the footer row; the update control fills it. */
+  updateSlot: HTMLDivElement;
   preferencesButton: HTMLButtonElement;
   preferencesLabel: HTMLSpanElement;
   resizeHandle: HTMLDivElement;
@@ -190,7 +194,14 @@ export function createStandaloneSidebarView(
     translate("Preferences"),
     "llm-standalone-nav-icon-preferences",
   );
-  preferencesRegion.append(footerDivider, preferences.button);
+  const footerRow = createHtmlElement(doc, "div", "llm-standalone-footer-row");
+  const updateSlot = createHtmlElement(
+    doc,
+    "div",
+    "llm-standalone-update-slot",
+  );
+  footerRow.append(preferences.button, updateSlot);
+  preferencesRegion.append(footerDivider, footerRow);
 
   panel.append(header, primaryNavigation, historyRegion, preferencesRegion);
 
@@ -227,6 +238,8 @@ export function createStandaloneSidebarView(
     list,
     preferencesRegion,
     footerDivider,
+    footerRow,
+    updateSlot,
     preferencesButton: preferences.button,
     preferencesLabel: preferences.label,
     resizeHandle,

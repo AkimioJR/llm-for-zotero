@@ -126,7 +126,11 @@ describe("standalone sidebar view", function () {
       view.preferencesRegion,
     ]);
     assert.equal(view.preferencesRegion.children[0], view.footerDivider);
-    assert.equal(view.preferencesRegion.children[1], view.preferencesButton);
+    assert.equal(view.preferencesRegion.children[1], view.footerRow);
+    assert.deepEqual(view.footerRow.children, [
+      view.preferencesButton,
+      view.updateSlot,
+    ]);
   });
 
   it("does not render a Chats label or an independently collapsible section", function () {

@@ -86,6 +86,7 @@ import {
 } from "../../utils/attachmentRefStore";
 import {
   chatHistory,
+  isAnyRequestPending,
   isRequestPending,
   loadedConversationKeys,
   webChatIsolatedConversationKeys,
@@ -194,6 +195,9 @@ import {
 import { installStandaloneSidebarFlyout } from "./standaloneSidebarFlyout";
 import { releaseInlineEdit } from "./inlineEditState";
 import { pluginStylesheetHref } from "../../utils/pluginReload";
+import { createPluginUpdateController } from "../pluginUpdate";
+import { getPluginUpdateDeps } from "../pluginUpdateAdapters";
+import { createStandaloneUpdateControl } from "./standaloneUpdateControl";
 import {
   createStandaloneSidePanel,
   type StandaloneSidePanelController,
@@ -569,6 +573,7 @@ export function openStandaloneChat(options?: {
   let standaloneAttachmentGcTimer: number | null = null;
   let unsubscribeStandalonePendingDeletions: (() => void) | null = null;
   let disposeHistoryActivity: (() => void) | null = null;
+  let disposePluginUpdate: (() => void) | null = null;
   let themeObserver: {
     observe(target: Node, options: MutationObserverInit): void;
     disconnect(): void;
@@ -888,6 +893,34 @@ export function openStandaloneChat(options?: {
 
       const sidebarView = createStandaloneSidebarView(doc, t);
       disposeHistoryActivity = observeHistoryActivity(sidebarView.list);
+      {
+        const lastSeenKey = `${config.prefsPrefix}.lastSeenVersion`;
+        const updateController = createPluginUpdateController({
+          getDeps: getPluginUpdateDeps,
+          readLastSeen: () => {
+            const value = Zotero.Prefs.get(lastSeenKey, true);
+            return typeof value === "string" ? value : "";
+          },
+          writeLastSeen: (value) => Zotero.Prefs.set(lastSeenKey, value, true),
+          isReplyInFlight: isAnyRequestPending,
+          setInterval: (fn, ms) => newWin.setInterval(fn, ms),
+          clearInterval: (handle) => newWin.clearInterval(handle as number),
+        });
+        const updateControl = createStandaloneUpdateControl({
+          doc,
+          win: newWin,
+          slot: sidebarView.updateSlot,
+          anchorRow: sidebarView.footerRow,
+          controller: updateController,
+          translate: t,
+          openUrl: (url) => Zotero.launchURL(url),
+        });
+        updateController.start();
+        disposePluginUpdate = () => {
+          updateControl.dispose();
+          updateController.dispose();
+        };
+      }
       const sidebar = sidebarView.root;
       const sidebarPanel = sidebarView.panel;
       const iconSidebarToggle = sidebarView.toggleButton;
@@ -4180,6 +4213,8 @@ export function openStandaloneChat(options?: {
     unbindStandaloneTaskProgressToggle = null;
     disposeHistoryActivity?.();
     disposeHistoryActivity = null;
+    disposePluginUpdate?.();
+    disposePluginUpdate = null;
     unsubscribeStandalonePendingDeletions?.();
     unsubscribeStandalonePendingDeletions = null;
     cleanupStandalonePrefObserver?.();
