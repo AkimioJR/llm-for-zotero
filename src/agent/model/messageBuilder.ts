@@ -34,6 +34,11 @@ import { resolveProviderCapabilities } from "../../providers";
 import type { ProviderCapabilities } from "../../providers";
 import { buildNotesDirectoryConfigSection } from "../../utils/notesDirectoryConfig";
 import { NOTE_EDITING_QUOTE_BLOCK_GUIDANCE } from "../../shared/quoteGuidance";
+import {
+  findNoteEmbedTokensInSelection,
+  hasNoteEmbedTokens,
+  NOTE_EMBED_PLACEHOLDER_GUIDANCE,
+} from "../../utils/noteEmbeds";
 import { buildRuntimePlatformGuidanceText } from "../../utils/runtimePlatform";
 import { formatPaperSourceLabel } from "../../services/paperContent/paperAttribution";
 import {
@@ -215,6 +220,8 @@ function buildFullUserMessage(
       `Current note content for this turn:\n"""\n${note.noteText}\n"""`,
     );
     contextLines.push(NOTE_EDITING_QUOTE_BLOCK_GUIDANCE);
+    if (hasNoteEmbedTokens(note.noteText))
+      contextLines.push(NOTE_EMBED_PLACEHOLDER_GUIDANCE);
     if (note.noteHtml) {
       contextLines.push(`Original note HTML:\n"""\n${note.noteHtml}\n"""`);
     }
@@ -289,7 +296,17 @@ function buildFullUserMessage(
         const question = formatSelectedTextQuestionSuffix(
           selectedTextContexts[index]?.userQuery,
         );
-        return `Selected text ${index + 1} [source=${sourceLabel}${sourceMeta}]${locator ? ` ${locator}` : ""}:\n"""\n${entry}\n"""${question}`;
+        const embedTokens =
+          source === "note-edit" && request.activeNoteContext
+            ? findNoteEmbedTokensInSelection(
+                request.activeNoteContext.noteText,
+                entry,
+              )
+            : [];
+        const embedHint = embedTokens.length
+          ? `\nThis selection contains embedded note items. Keep each placeholder in your replacement where its item belongs: ${embedTokens.join(" ")}`
+          : "";
+        return `Selected text ${index + 1} [source=${sourceLabel}${sourceMeta}]${locator ? ` ${locator}` : ""}:\n"""\n${entry}\n"""${question}${embedHint}`;
       })
       .join("\n\n");
     contextLines.push(

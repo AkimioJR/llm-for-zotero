@@ -42,12 +42,13 @@ import {
  * sentence of description: 133, 99 and 133 characters, 2026-10-18). Raised
  * again by past_chat_search and past_chat_attach, the always-listed tools
  * that find an earlier chat and add it to the user's message (733
- * characters each, 2026-10-19).
+ * characters each, 2026-10-19). Raised again by note_write's removeEmbeds field
+ * (58 characters, 2026-10-19).
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 37_389,
-  paper: 36_106,
-  collection: 37_487,
+  global: 37_447,
+  paper: 36_164,
+  collection: 37_545,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

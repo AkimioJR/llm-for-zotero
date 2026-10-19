@@ -4,6 +4,8 @@ import { importLocalImagesIntoNote } from "../../../services/notes/noteImages";
 import {
   isLikelyHtmlNoteContent,
   normalizeNoteSourceText,
+  noteHtmlToModelText,
+  renderNoteMarkdownWithEmbeds,
   renderRawNoteHtml,
 } from "../../../services/notes/noteRendering";
 import {
@@ -15,9 +17,34 @@ import { resolveParentItemForNoteTarget } from "../../../services/notes/noteTarg
 import {
   replaceTextContentInHtml,
   replaceNoteSelectionHtml,
+  type NoteRangeReplacement,
 } from "../../../utils/noteEdit";
 import { synthesizeSelectedTextContexts } from "../../../services/context/normalizers";
 import { noteHtmlMatches } from "../../../utils/noteHtml";
+import {
+  adoptRetypedNoteEmbedLabels,
+  collectNoteEmbeds,
+  createNoteEmbedCarrier,
+  findMissingNoteEmbeds,
+  formatNoteEmbedToken,
+  NOTE_EMBED_TOKEN_PATTERN,
+  noteEmbedRegistry,
+  noteEmbedsByVisibleText,
+  noteEmbedVisibleText,
+  preserveNoteRoot,
+  replaceNoteEmbedTokensWithLabels,
+  restoreNoteEmbedTokensInHtml,
+  type NoteEmbed,
+} from "../../../utils/noteEmbeds";
+import { escapeNoteHtml } from "../../../utils/textSanitization";
+import {
+  mergeNoteCitationItems,
+  type NoteCitationItem,
+} from "../../../utils/noteCitations";
+import {
+  expandNewCitationTokens,
+  type CitationItemLookup,
+} from "../../../services/notes/noteCitations";
 import { stateChangeInvocationPlan } from "../../authorization/invocationPlan";
 import {
   savePlanDocumentAsNote,
@@ -68,7 +95,7 @@ export const NOTE_WRITE_GUIDANCE: NonNullable<AgentToolDefinition["guidance"]> =
         request.forcedSkillIds?.includes(WRITE_NOTE_SKILL_ID),
       ),
     instruction:
-      "Use note_write mode:'edit' against the exact note target. For a bound Selected text passage, pass selection:{index:<1-based Selected text number>,replacement:<final Markdown>}. The host binds its owning note, replaces the selected structure, preserves surrounding content and embedded assets, and saves and verifies in one action. Preserve headings and list structure unless the user requests changing them. For precise edits without a bound selection, use patches with plain replacement text; findFormat:'markdown' interprets Markdown copied from library_read. Use mode:'append' to append and mode:'create' for a new note. Resolve a named parent or collection before proposing the write. Pass finalized material by documentId so retries reuse exact content. Safe reviews every note write, including creation; Auto may apply routine same-library note changes directly. After verified success, do not claim that a diff is still awaiting review. " +
+      "Use note_write mode:'edit' against the exact note target. For a bound Selected text passage, pass selection:{index:<1-based Selected text number>,replacement:<final Markdown>}. The host binds its owning note, replaces the selected structure, preserves surrounding content and embedded assets, and saves and verifies in one action. Preserve headings and list structure unless the user requests changing them. For precise edits without a bound selection, use patches with plain replacement text; findFormat:'markdown' interprets Markdown copied from library_read. Use mode:'append' to append and mode:'create' for a new note. Keep every {{kind:id}} placeholder of an embedded citation, highlight or image where its item belongs; to delete one the user names, list its id in removeEmbeds and omit its placeholder. To add a clickable Zotero citation, write {{cite item=<regular item's itemId> page=<pageLabel from paper_read>}}, or {{cite item=1 page=4; item=2 page=9}} for several works; omit page to cite a whole work. Resolve a named parent or collection before proposing the write. Pass finalized material by documentId so retries reuse exact content. Safe reviews every note write, including creation; Auto may apply routine same-library note changes directly. After verified success, do not claim that a diff is still awaiting review. " +
       SOURCE_NOTE_COPY_GUIDANCE,
   };
 
@@ -96,6 +123,198 @@ function sanitizeNoteHtml(html: string): string {
   return s;
 }
 
+/** Placeholders of the given item copies, each item once with its count. */
+function describeEmbeds(embeds: NoteEmbed[]): string {
+  const copies = new Map<string, { embed: NoteEmbed; count: number }>();
+  for (const embed of embeds) {
+    const entry = copies.get(embed.id);
+    if (entry) entry.count++;
+    else copies.set(embed.id, { embed, count: 1 });
+  }
+  return Array.from(
+    copies.values(),
+    ({ embed, count }) =>
+      formatNoteEmbedToken({
+        ...embed,
+        label:
+          embed.label.length > 80
+            ? `${embed.label.slice(0, 80).trimEnd()}…`
+            : embed.label,
+      }) + (count > 1 ? ` (${count} copies)` : ""),
+  ).join(", ");
+}
+
+/** A review-card sentence naming the citations this write adds. */
+function describeNewCitations(input: NoteWriteInput): string {
+  const labels = (input._newCitations?.embeds || []).map(
+    (embed) => embed.label,
+  );
+  return labels.length
+    ? ` Adds ${labels.length} Zotero citation${labels.length === 1 ? "" : "s"}: ${labels.join(", ")}.`
+    : "";
+}
+
+function assertKnownEmbedTokens(unknown: string[]): void {
+  if (!unknown.length) return;
+  throw new Error(
+    `The note has no embedded item ${Array.from(new Set(unknown)).join(", ")}. Use only {{kind:id}} placeholders that appear in the current note text, never invent or alter one. No content was changed.`,
+  );
+}
+
+/** Resolve `{{cite item=… page=…}}` to a Zotero item id or item key. */
+function citationLookup(
+  zoteroGateway: ZoteroGateway,
+  libraryID: number | undefined,
+): CitationItemLookup {
+  return (itemRef) =>
+    /^\d+$/.test(itemRef)
+      ? zoteroGateway.getItem(Number(itemRef))
+      : libraryID
+        ? Zotero.Items.getByLibraryAndKey(libraryID, itemRef.toUpperCase()) ||
+          null
+        : null;
+}
+
+/**
+ * Turn new citation requests into placeholders of new chips. The chips are
+ * kept on the input, so every later render (the user's own review text
+ * included) can place them again without looking the items up twice.
+ */
+function expandCitations(
+  text: string,
+  input: NoteWriteInput,
+  lookup: CitationItemLookup,
+): string {
+  const expanded = expandNewCitationTokens(text, lookup);
+  if (!expanded.registry.size) return text;
+  const state = (input._newCitations ||= { embeds: [], items: [] });
+  for (const embed of expanded.registry.values())
+    if (!state.embeds.some((entry) => entry.id === embed.id))
+      state.embeds.push(embed);
+  for (const item of expanded.citationItems)
+    if (
+      !state.items.some((entry) =>
+        entry.uris.some((uri) => item.uris.includes(uri)),
+      )
+    )
+      state.items.push(item);
+  return expanded.text;
+}
+
+/** The original note's items, plus the chips this write adds. */
+function embedRegistryFor(originalHtml: string, input: NoteWriteInput) {
+  const registry = noteEmbedRegistry(originalHtml);
+  for (const embed of input._newCitations?.embeds || [])
+    if (!registry.has(embed.id)) registry.set(embed.id, embed);
+  return registry;
+}
+
+/** Register the works that new chips in the final HTML cite. */
+function withCitationRegistry(html: string, input: NoteWriteInput): string {
+  return mergeNoteCitationItems(html, usedCitationItems(html, input));
+}
+
+function usedCitationItems(
+  html: string,
+  input: NoteWriteInput,
+): NoteCitationItem[] {
+  return (input._newCitations?.items || []).filter((item) =>
+    item.uris.some((uri) => html.includes(encodeURIComponent(uri))),
+  );
+}
+
+/** Render edit, append or create content: new citation requests become
+ * chips, and placeholders turn back into the items of the original note. */
+function renderContentWithEmbeds(
+  content: string,
+  isHtml: boolean | undefined,
+  originalHtml: string,
+  input: NoteWriteInput,
+  lookup: CitationItemLookup,
+): string {
+  const text = expandCitations(content, input, lookup);
+  const registry = embedRegistryFor(originalHtml, input);
+  const rendered = isHtml
+    ? restoreNoteEmbedTokensInHtml(sanitizeNoteHtml(text), registry)
+    : renderNoteMarkdownWithEmbeds(text, registry);
+  assertKnownEmbedTokens(rendered.unknown);
+  return rendered.html;
+}
+
+/** The final HTML of an edit: the note's root container (which holds its
+ * citation registry) kept. An item is deleted only by leaving out its
+ * placeholder, never by its id alone. */
+function finishEditHtml(html: string, originalHtml: string): string {
+  return preserveNoteRoot(originalHtml, html);
+}
+
+/**
+ * Refuse an edit that would lose a copy of an embedded item nobody asked to
+ * remove. An id in removeEmbeds lets that item lose copies; the copies whose
+ * placeholders the edit left out are deleted, and the rest are kept.
+ */
+function assertEmbedsKept(
+  originalHtml: string,
+  nextHtml: string,
+  removeEmbeds: string[] | undefined,
+): void {
+  const registry = noteEmbedRegistry(originalHtml);
+  const strangers = (removeEmbeds || []).filter((id) => !registry.has(id));
+  if (strangers.length)
+    throw new Error(
+      `removeEmbeds names ${strangers.join(", ")}, which is not an embedded item of this note. Use ids from the note's {{kind:id}} placeholders. No content was changed.`,
+    );
+  const missing = findMissingNoteEmbeds(originalHtml, nextHtml).filter(
+    (embed) => !removeEmbeds?.includes(embed.id),
+  );
+  if (!missing.length) return;
+  // Retyped text that several different items show cannot name one of them.
+  const shown = noteEmbedsByVisibleText(collectNoteEmbeds(originalHtml));
+  const ambiguous = Array.from(shown.entries())
+    .filter(
+      ([visible, owners]) =>
+        visible.length >= 3 &&
+        owners.length > 1 &&
+        missing.some((embed) => owners.some((owner) => owner.id === embed.id)),
+    )
+    .map(
+      ([visible, owners]) =>
+        ` "${visible}" is shown by several items: ${owners
+          .map((owner) => formatNoteEmbedToken(owner, { label: false }))
+          .join(
+            ", ",
+          )}; write the placeholder of the one you mean, not its text.`,
+    )
+    .join("");
+  throw new Error(
+    `This edit would delete ${missing.length} embedded item${missing.length === 1 ? "" : "s"} from the note: ${describeEmbeds(missing)}. Put each placeholder back where its item belongs in the new text (moving it is fine, and {{kind:id}} without the label is enough).${ambiguous} Only if the user asked to delete an item, list its id in removeEmbeds and omit its placeholder. No content was changed.`,
+  );
+}
+
+/**
+ * The replacement for an edited range: a label retyped as plain text means
+ * an item inside that range, never an item elsewhere in the note that shows
+ * the same text. Placeholders become their items, which the range carries.
+ */
+function rangeReplacement(
+  text: string,
+  render: (adopted: string) => string,
+  removeEmbeds?: readonly string[],
+): NoteRangeReplacement {
+  const listed = (embed: NoteEmbed) =>
+    Boolean(removeEmbeds?.includes(embed.id));
+  return (touched) => {
+    // A listed item is being deleted, so its retyped label stays plain text.
+    const html = render(
+      adoptRetypedNoteEmbedLabels(
+        text,
+        touched.filter((embed) => !listed(embed)),
+      ),
+    );
+    return { html, carried: createNoteEmbedCarrier(html), removed: listed };
+  };
+}
+
 type NoteWriteInput = {
   documentId?: string;
   sourceMessageId?: string;
@@ -109,6 +328,11 @@ type NoteWriteInput = {
   expectedOriginalHtml?: string;
   _patches?: NotePatch[];
   _selection?: { index: number; replacement: string };
+  /** Ids of embedded items (citations, highlights, images) the edit deletes
+   *  on purpose. Every other item of the original note must survive. */
+  removeEmbeds?: string[];
+  /** Citation chips this write adds, and the works they cite. */
+  _newCitations?: { embeds: NoteEmbed[]; items: NoteCitationItem[] };
   /** Pre-patched HTML computed by applying patches directly to the original
    *  note HTML.  When set, `execute()` uses this instead of round-tripping
    *  through `renderRawNoteHtml` to preserve images, list numbering, etc. */
@@ -136,6 +360,17 @@ function resolveCreateOrAppendContent(input: NoteWriteInput): void {
   input.content = input._isHtml
     ? sanitizeNoteHtml(input.content)
     : normalizeNoteSourceText(input.content);
+  // A new note has no items for a placeholder to name; keep what it showed.
+  // A finalized document is saved exactly as stored, so it is left alone.
+  // A chip this write adds is the one exception.
+  if (input.mode === "create" && !input.documentId)
+    input.content = input.content.replace(
+      NOTE_EMBED_TOKEN_PATTERN,
+      (token, _kind, id) =>
+        input._newCitations?.embeds.some((embed) => embed.id === id)
+          ? token
+          : replaceNoteEmbedTokensWithLabels(token),
+    );
 }
 
 function resolveEditSnapshot(
@@ -181,20 +416,47 @@ function resolveEditSnapshot(
 function applyPatchesToNoteHtml(
   html: string,
   patches: NotePatch[],
-): string | null {
-  if (!patches.length || !html) return html || null;
+  input: NoteWriteInput,
+  lookup: CitationItemLookup,
+): string | { failedPatch: number } {
+  if (!patches.length || !html) return html || { failedPatch: 0 };
 
   let result = html;
-  for (const patch of patches) {
-    const asShown = stripNoteHtml(renderRawNoteHtml(patch.find));
+  for (const [index, patch] of patches.entries()) {
+    // A placeholder in find stands for the text its item displays; one in
+    // replace puts the item itself back.
+    // New citations join the registry before anything is looked up in it.
+    const requested = expandCitations(patch.replace, input, lookup);
+    const registry = embedRegistryFor(result, input);
+    const find = patch.find.replace(
+      NOTE_EMBED_TOKEN_PATTERN,
+      (token, _kind, id) => {
+        const embed = registry.get(id);
+        return embed ? stripNoteHtml(embed.html) : token;
+      },
+    );
+    // A label of a replaced item retyped as plain text means the item itself.
+    const replace = rangeReplacement(
+      requested,
+      (adopted) => {
+        const restored = restoreNoteEmbedTokensInHtml(
+          escapeNoteHtml(adopted),
+          registry,
+        );
+        assertKnownEmbedTokens(restored.unknown);
+        return restored.html;
+      },
+      input.removeEmbeds,
+    );
+    const asShown = stripNoteHtml(renderRawNoteHtml(find));
     const applied =
       patch.findFormat === "markdown"
-        ? replaceTextContentInHtml(result, asShown, patch.replace)
-        : (replaceTextContentInHtml(result, patch.find, patch.replace) ??
-          (asShown !== patch.find
-            ? replaceTextContentInHtml(result, asShown, patch.replace)
+        ? replaceTextContentInHtml(result, asShown, replace)
+        : (replaceTextContentInHtml(result, find, replace) ??
+          (asShown !== find
+            ? replaceTextContentInHtml(result, asShown, replace)
             : null));
-    if (applied === null) return null;
+    if (applied === null) return { failedPatch: index };
     result = applied;
   }
   return result;
@@ -339,6 +601,26 @@ function prepareNoteWriteInput(
     input.content = sanitizeNoteHtml(html);
   }
   resolveCreateOrAppendContent(input);
+  const lookup = citationLookup(zoteroGateway, context.request.libraryID);
+  // A finalized document is saved exactly as stored; its citation requests
+  // are turned into chips where its note HTML is built.
+  if (!input.documentId && input.content) {
+    // Show the chips' own labels in review, and bind the cited items now so
+    // an item that cannot be cited is refused before anything is written.
+    input.content = expandCitations(input.content, input, lookup).replace(
+      NOTE_EMBED_TOKEN_PATTERN,
+      (token, _kind, id) => {
+        const chip = input._newCitations?.embeds.find(
+          (embed) => embed.id === id,
+        );
+        return chip && token === `{{citation:${id}}}`
+          ? input._isHtml
+            ? escapeNoteHtml(formatNoteEmbedToken(chip))
+            : formatNoteEmbedToken(chip)
+          : token;
+      },
+    );
+  }
   if (input.mode === "create" || input.expectedOriginalHtml !== undefined)
     return;
   if (input._selection) {
@@ -385,31 +667,46 @@ function prepareNoteWriteInput(
       const selected = synthesizeSelectedTextContexts(context.request)[
         input._selection.index - 1
       ];
-      const replacementHtml = sanitizeNoteHtml(
-        renderRawNoteHtml(input._selection.replacement),
-      );
       const patched = replaceNoteSelectionHtml(
         snapshot.html,
         selected.text,
-        replacementHtml,
+        rangeReplacement(
+          input._selection.replacement,
+          (adopted) =>
+            renderContentWithEmbeds(
+              adopted,
+              false,
+              snapshot.html,
+              input,
+              lookup,
+            ),
+          input.removeEmbeds,
+        ),
       );
       if (patched === null)
         throw new Error(
           "The selected text is missing or occurs more than once in the current note. Select a unique passage before retrying; no content was changed.",
         );
       input._patchedHtml = patched;
-      input.content = normalizeNoteSourceText(patched);
+      input.content = noteHtmlToModelText(patched);
       delete input._selection;
     }
     if (input._patches) {
-      const patchedHtml = applyPatchesToNoteHtml(snapshot.html, input._patches);
-      if (patchedHtml === null) {
+      const patchedHtml = applyPatchesToNoteHtml(
+        snapshot.html,
+        input._patches,
+        input,
+        lookup,
+      );
+      if (typeof patchedHtml !== "string") {
+        const count = input._patches.length;
+        const find = input._patches[patchedHtml.failedPatch]?.find || "";
         throw new Error(
-          "Note patch text was not found. No content was changed; read the current note before retrying.",
+          `Note patch text was not found${count > 1 ? ` (patch ${patchedHtml.failedPatch + 1} of ${count})` : ""}: "${find.length > 120 ? `${find.slice(0, 120)}…` : find}". No content was changed; read the current note before retrying.`,
         );
       }
       input._patchedHtml = patchedHtml;
-      input.content = normalizeNoteSourceText(patchedHtml);
+      input.content = noteHtmlToModelText(patchedHtml);
       delete input._patches;
     }
     if (input._rawHtmlContent) {
@@ -420,6 +717,46 @@ function prepareNoteWriteInput(
     input.content = input._isHtml
       ? input.content
       : normalizeNoteSourceText(input.content);
+    // A retyped label of an item stands for the item, when no other item
+    // of the note shows the same text. A finalized document is saved exactly
+    // as stored, so it is left to the check below.
+    if (input._patchedHtml === undefined && !input.documentId) {
+      const embeds = collectNoteEmbeds(snapshot.html);
+      const shown = noteEmbedsByVisibleText(embeds);
+      input.content = adoptRetypedNoteEmbedLabels(
+        input.content,
+        embeds.filter(
+          (embed) =>
+            !input.removeEmbeds?.includes(embed.id) &&
+            shown.get(noteEmbedVisibleText(embed))?.length === 1,
+        ),
+      );
+    }
+    // Bind the exact final HTML now, so the check below and the write agree.
+    const finalHtml = withCitationRegistry(
+      finishEditHtml(
+        input._patchedHtml ??
+          renderContentWithEmbeds(
+            input.content,
+            input._isHtml,
+            snapshot.html,
+            input,
+            lookup,
+          ),
+        snapshot.html,
+      ),
+      input,
+    );
+    assertEmbedsKept(snapshot.html, finalHtml, input.removeEmbeds);
+    input._patchedHtml = finalHtml;
+  } else if (input.mode === "append") {
+    renderContentWithEmbeds(
+      input.content,
+      input._isHtml,
+      snapshot.html,
+      input,
+      lookup,
+    );
   }
   input.expectedOriginalHtml = snapshot.html;
   input.noteId = snapshot.noteId;
@@ -472,9 +809,14 @@ export function createNoteWriteTool(
           targetNoteId: input.targetNoteId || input.noteId,
           expectedText: input.content
             ? stripNoteHtml(
-                input._isHtml
-                  ? sanitizeNoteHtml(input.content)
-                  : input._patchedHtml || renderRawNoteHtml(input.content),
+                input._patchedHtml ??
+                  (input._isHtml
+                    ? sanitizeNoteHtml(
+                        replaceNoteEmbedTokensWithLabels(input.content),
+                      )
+                    : renderRawNoteHtml(
+                        replaceNoteEmbedTokensWithLabels(input.content),
+                      )),
               )
             : undefined,
         },
@@ -562,7 +904,7 @@ export function createNoteWriteTool(
                 replace: {
                   type: "string",
                   description:
-                    "The replacement visible text (plain text, without Markdown formatting markers).",
+                    "The replacement visible text (plain text, without Markdown formatting markers). A {{kind:id}} placeholder puts that item there.",
                 },
               },
               required: ["find", "replace"],
@@ -570,6 +912,12 @@ export function createNoteWriteTool(
             },
             description:
               "For mode 'edit': find-and-replace patches applied to the current note. Much faster than rewriting the full content. Each patch replaces the first occurrence of 'find' with 'replace'.",
+          },
+          removeEmbeds: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Mode 'edit': ids of {{kind:id}} note placeholders (citations, highlights, images) the user asked to delete; omit those placeholders. Keep all others; an edit dropping one is refused.",
           },
           target: {
             type: "string",
@@ -732,6 +1080,29 @@ export function createNoteWriteTool(
         );
       }
 
+      let removeEmbeds: string[] | undefined;
+      if (args.removeEmbeds !== undefined) {
+        const entries = Array.isArray(args.removeEmbeds)
+          ? args.removeEmbeds
+          : [];
+        const ids = entries.map((entry) =>
+          typeof entry === "string"
+            ? /^\s*(?:\{\{\s*(?:citation|highlight|image|embed):)?([0-9a-f]{6,8})\b/i
+                .exec(entry)?.[1]
+                ?.toLowerCase()
+            : undefined,
+        );
+        if (
+          mode !== "edit" ||
+          !Array.isArray(args.removeEmbeds) ||
+          ids.some((id) => !id)
+        )
+          return fail(
+            "removeEmbeds is only for mode 'edit': a list of embedded item ids from the note's {{kind:id}} placeholders, e.g. ['3fa9c1']",
+          );
+        removeEmbeds = Array.from(new Set(ids as string[]));
+      }
+
       // Validate patches structure
       let patches: NotePatch[] | undefined;
       if (hasPatches) {
@@ -785,6 +1156,7 @@ export function createNoteWriteTool(
         sourceNoteId,
         _rawHtmlContent: contentHasHtml ? rawContent.trim() : undefined,
         _patches: patches,
+        removeEmbeds: removeEmbeds?.length ? removeEmbeds : undefined,
         _selection: selection as
           | { index: number; replacement: string }
           | undefined,
@@ -844,7 +1216,7 @@ export function createNoteWriteTool(
           toolName: "note_write",
           mode: "review",
           title: "Review new note",
-          description,
+          description: `${description}${describeNewCitations(input)}`,
           confirmLabel: "Create note",
           cancelLabel: "Cancel",
           fields: [
@@ -878,7 +1250,7 @@ export function createNoteWriteTool(
           toolName: "note_write",
           mode: "review",
           title: "Review note append",
-          description: `Review the proposed content before appending it to "${input.noteTitle}".`,
+          description: `Review the proposed content before appending it to "${input.noteTitle}".${describeNewCitations(input)}`,
           confirmLabel: "Append",
           cancelLabel: "Cancel",
           fields: [
@@ -916,14 +1288,27 @@ export function createNoteWriteTool(
 
       // Diff preview always uses readable text, even for styled HTML notes
       const diffAfter = input._isHtml
-        ? normalizeNoteSourceText(input.content)
+        ? noteHtmlToModelText(input.content)
         : normalizedContent;
+      // Count the copies the prepared edit actually deletes, not the ids it
+      // names: an id may lose one copy of several, or none.
+      const removed =
+        input._patchedHtml === undefined
+          ? []
+          : findMissingNoteEmbeds(
+              input.expectedOriginalHtml ?? snapshot.html,
+              input._patchedHtml,
+            );
 
       return {
         toolName: "note_write",
         mode: "review",
         title: `Review note update`,
-        description: `Review the proposed note changes for "${input.noteTitle}" before applying them.`,
+        description: `Review the proposed note changes for "${input.noteTitle}" before applying them.${describeNewCitations(input)}${
+          removed.length
+            ? ` This edit deletes ${removed.length} embedded item${removed.length === 1 ? "" : "s"}: ${describeEmbeds(removed)}.`
+            : ""
+        }`,
         confirmLabel: "Apply edit",
         cancelLabel: "Cancel",
         fields: [
@@ -939,7 +1324,7 @@ export function createNoteWriteTool(
             id: "noteDiff",
             label: "Note changes",
             sourceFieldId: "content",
-            before: normalizeNoteSourceText(snapshot.html),
+            before: noteHtmlToModelText(snapshot.html),
             after: diffAfter,
             contextLines: 0,
             emptyMessage: "No note changes yet.",
@@ -1047,6 +1432,12 @@ export function createNoteWriteTool(
           },
         });
       }
+      const lookup = citationLookup(zoteroGateway, context.request.libraryID);
+      const renderNewNoteHtml = (content: string) =>
+        withCitationRegistry(
+          renderContentWithEmbeds(content, input._isHtml, "", input, lookup),
+          input,
+        );
       const copyHasImages = Boolean(
         input.sourceNoteId && /\bdata-attachment-key\s*=/i.test(input.content),
       );
@@ -1122,9 +1513,7 @@ export function createNoteWriteTool(
           parentItemId: parent?.id,
           collections:
             input.target === "standalone" ? input.collections : undefined,
-          html: input._isHtml
-            ? sanitizeNoteHtml(input.content)
-            : renderRawNoteHtml(input.content),
+          html: renderNewNoteHtml(input.content),
           finalize: copyHasImages
             ? async ({ noteId }) => {
                 const source = getNoteItemById(
@@ -1149,9 +1538,7 @@ export function createNoteWriteTool(
                     /(?:src\s*=\s*["']file:|!\[[^\]]*\]\(file:)/i.test(content)
                   )
                     throw new Error("A requested image could not be embedded");
-                  return input._isHtml
-                    ? sanitizeNoteHtml(content)
-                    : renderRawNoteHtml(content);
+                  return renderNewNoteHtml(content);
                 }
               : undefined,
         });
@@ -1167,16 +1554,35 @@ export function createNoteWriteTool(
             );
       if (!targetNote)
         throw new Error("The exact destination note is unavailable");
+      const originalHtml = input.expectedOriginalHtml || "";
+      // The prepared edit HTML is exact; content the user changed in review,
+      // or content with imported images, is rendered again the same way.
+      const finishHtml = (html: string) =>
+        input.mode === "edit"
+          ? withCitationRegistry(finishEditHtml(html, originalHtml), input)
+          : html;
       const render = (content: string) =>
-        input._isHtml
-          ? sanitizeNoteHtml(content)
-          : input._patchedHtml || renderRawNoteHtml(content);
+        input.mode === "edit" && content === input.content && input._patchedHtml
+          ? input._patchedHtml
+          : finishHtml(
+              renderContentWithEmbeds(
+                content,
+                input._isHtml,
+                originalHtml,
+                input,
+                lookup,
+              ),
+            );
+      const html = render(input.content);
       return executePreparedNoteChange({
         context,
         note: targetNote,
         mode: input.mode,
-        html: render(input.content),
+        html,
         expectedOriginalHtml: input.expectedOriginalHtml,
+        // An append's new chips are registered in the combined note's root.
+        citationItems:
+          input.mode === "append" ? input._newCitations?.items : undefined,
         finalizeHtml:
           input.documentId && input._documentHasAssets
             ? async () => {
@@ -1190,7 +1596,12 @@ export function createNoteWriteTool(
                 });
                 if (finalized.warnings.length)
                   throw new Error(finalized.warnings.join("; "));
-                return finalized.html;
+                const restored = restoreNoteEmbedTokensInHtml(
+                  expandCitations(finalized.html, input, lookup),
+                  embedRegistryFor(originalHtml, input),
+                );
+                assertKnownEmbedTokens(restored.unknown);
+                return finishHtml(restored.html);
               }
             : hasLocalImages
               ? async () => {

@@ -21,11 +21,15 @@ import {
   getBatchJob,
   initAgentBatchJobStore,
 } from "../src/agent/store/batchJobStore";
-import { describeLibraryMutationActions } from "../src/agent/contracts/actionOperationEvidence";
+import {
+  describeLibraryMutationActions,
+  nativeNoteWriteFacts,
+} from "../src/agent/contracts/actionOperationEvidence";
 import { renderRawNoteHtml } from "../src/services/notes/noteRendering";
 import { canonicalJsonEqual } from "../src/agent/services/libraryMutation/canonicalJson";
 import type { AgentToolContext } from "../src/agent/types";
 import { installNativeNoteStore } from "./helpers/nativeNoteStore";
+import { innermostToolResult } from "../src/agent/contracts/toolResultEnvelope";
 
 const globalScope = globalThis as typeof globalThis & { Zotero?: unknown };
 
@@ -614,6 +618,117 @@ describe("note batch material", function () {
     );
     assert.isNull(seeded[1].materialDocumentId);
     assert.include(seeded[1].error || "", "2 MiB");
+  });
+
+  /** Let the batch's papers be cited the way Zotero resolves them. */
+  function citablePapers() {
+    const zotero = globalScope.Zotero as any;
+    const notesOnly = zotero.Items;
+    zotero.Items = {
+      ...notesOnly,
+      get: (id: number) =>
+        targets.has(id)
+          ? { ...targets.get(id), key: `PAPER${id}` }
+          : notesOnly.get(id),
+    };
+    zotero.URI = {
+      getItemURI: (item: { key: string }) =>
+        `http://zotero.org/users/local/abc/items/${item.key}`,
+    };
+    zotero.Utilities = {
+      ...zotero.Utilities,
+      Item: {
+        itemToCSLJSON: () => ({
+          title: "Paper",
+          author: [{ family: "Smith" }],
+          issued: { "date-parts": [[2020]] },
+        }),
+      },
+    };
+  }
+
+  function citationNotes() {
+    return [
+      { targetItemId: 1, content: "Drift is fast {{cite item=1 page=4}}." },
+      { targetItemId: 2, content: "Drift is slow {{cite:item=2}}." },
+      { targetItemId: 3, content: "Drift is absent." },
+    ];
+  }
+
+  it("writes a batch item's citation request as a Zotero citation chip", async function () {
+    citablePapers();
+    const tool = createNoteWriteBatchTool(gateway);
+    const input = tool.validate({ notes: citationNotes() });
+    assert.isTrue(input.ok);
+    if (!input.ok) return;
+    const output = await tool.execute(
+      await prepare(tool, input.value),
+      context(),
+    );
+    const rows = await listBatchItems(output.batchItems![0].batchId);
+    const html = native.notes.get(rows[0].noteId!)?.stored || "";
+    assert.match(
+      html,
+      /^<div data-citation-items="[^"]+" data-schema-version="9">/,
+    );
+    assert.include(html, 'class="citation-item">Smith, 2020, p. 4</span>');
+    assert.notInclude(html, "{{cite");
+
+    // The receipt proves each written note against the expanded HTML.
+    const noteWrites = (output.actionEvidence?.[0] as any)?.noteWrites;
+    assert.lengthOf(noteWrites || [], 2);
+    assert.equal(noteWrites[0].verification.expectedHtml, html);
+    const receipt = await nativeNoteWriteFacts(
+      describeLibraryMutationActions(input.value)[0],
+      noteWrites,
+      gateway,
+    );
+    assert.isEmpty(receipt.reasons);
+    assert.include(receipt.facts, `created_note:item:${rows[0].noteId}`);
+  });
+
+  it("fails only the batch item whose citation request is malformed", async function () {
+    citablePapers();
+    const tool = createNoteWriteBatchTool(gateway);
+    const input = tool.validate({ notes: citationNotes() });
+    assert.isTrue(input.ok);
+    if (!input.ok) return;
+    const output = await tool.execute(
+      await prepare(tool, input.value),
+      context(),
+    );
+    const rows = await listBatchItems(output.batchItems![0].batchId);
+    assert.deepEqual(
+      rows.map((row) => row.status),
+      ["saved", "failed", "saved"],
+    );
+    assert.include(rows[1].error || "", "is not a citation request");
+    assert.equal(native.notes.size, 2, "the malformed item writes no note");
+    for (const note of native.notes.values())
+      assert.notInclude(note.stored, "{{cite");
+  });
+
+  it("expands citation requests in a batch written outside a durable batch", async function () {
+    citablePapers();
+    const service = new LibraryMutationService(gateway);
+    const executed = (await service.executeOperation(
+      { type: "save_notes_batch", notes: citationNotes() },
+      context() as never,
+    )) as any;
+    const result = innermostToolResult(executed);
+    const rows = result.notes as Array<{ status: string; reason?: string }>;
+    assert.deepEqual(
+      rows.map((row) => row.status),
+      ["created", "error", "created"],
+    );
+    assert.include(rows[1].reason || "", "is not a citation request");
+    const written = [...native.notes.values()].map((note) => note.stored);
+    assert.lengthOf(written, 2);
+    assert.include(
+      written[0],
+      'class="citation-item">Smith, 2020, p. 4</span>',
+    );
+    assert.notInclude(written[0], "{{cite");
   });
 
   it("never announces a batch item as the turn's finalized material", async function () {

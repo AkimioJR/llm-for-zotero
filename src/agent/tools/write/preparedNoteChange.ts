@@ -1,11 +1,15 @@
 import { noteHtmlMatches, canonicalNoteHtml } from "../../../utils/noteHtml";
 import {
+  mergeNoteCitationItems,
+  type NoteCitationItem,
+} from "../../../utils/noteCitations";
+import {
   persistVerifiedNoteHtml,
   verifyNativeNoteHtml,
 } from "../../../services/notePersistence";
 import {
   appendNoteHtml,
-  normalizeNoteSourceText,
+  noteHtmlToModelText,
 } from "../../../services/notes/noteRendering";
 import { invalidateCachedContextText } from "../../../services/paperContent/pdfContext";
 import {
@@ -52,6 +56,9 @@ export async function executePreparedNoteChange(params: {
   html: string;
   expectedOriginalHtml?: string;
   finalizeHtml?: () => Promise<string>;
+  /** Works cited by new chips in an appended part, registered in the note's
+   *  root so Zotero can display them. */
+  citationItems?: NoteCitationItem[];
 }) {
   const previous = pending.get(params.note.id) || Promise.resolve();
   const operation = previous.catch(() => undefined).then(() => execute(params));
@@ -68,6 +75,15 @@ async function execute(
   params: Parameters<typeof executePreparedNoteChange>[0],
 ) {
   const { note, context, mode, html } = params;
+  const compose = (base: string, next: string) =>
+    mode === "append"
+      ? mergeNoteCitationItems(
+          appendNoteHtml(base, next),
+          (params.citationItems || []).filter((item) =>
+            item.uris.some((uri) => next.includes(encodeURIComponent(uri))),
+          ),
+        )
+      : next;
   if (
     !note.id ||
     !note.key ||
@@ -135,9 +151,7 @@ async function execute(
       key: note.key,
       mode,
       before: await storeRecoveryText(current.html),
-      after: await storeRecoveryText(
-        mode === "append" ? appendNoteHtml(current.html, html) : html,
-      ),
+      after: await storeRecoveryText(compose(current.html, html)),
     };
   }
   const before = await readRecoveryText(prepared.before);
@@ -162,7 +176,7 @@ async function execute(
         status: mode === "append" ? "appended" : "updated",
         noteId: note.id,
         title: note.getNoteTitle?.() || "Note",
-        noteText: normalizeNoteSourceText(verification.html),
+        noteText: noteHtmlToModelText(verification.html),
         preparedAfter: await storeRecoveryText(expected),
         noteVerification: verification,
         noteChange: await captureNoteChange(
@@ -196,7 +210,7 @@ async function execute(
         );
       finalizationStarted = true;
       const html = await params.finalizeHtml!();
-      expected = mode === "append" ? appendNoteHtml(before, html) : html;
+      expected = compose(before, html);
       const preparedAfter = await storeRecoveryText(expected);
       if (actionId) {
         // Its own transaction, so another flow's rollback cannot drop it.
