@@ -11,6 +11,7 @@ import {
   refreshModelCatalog,
   resetModelCapabilityStateForTests,
   setModelCapabilityRegistryForTests,
+  subscribeModelCapabilities,
   type ModelCapabilityRegistry,
 } from "../src/modelCapabilities";
 import {
@@ -399,6 +400,82 @@ describe("model capability service", function () {
       capabilities.reasoning.options.map((option) => option.id),
       ["ultra"],
     );
+  });
+
+  describe("failed refreshes", function () {
+    const identity = {
+      provider: "kimi",
+      model: "kimi-v4",
+      apiBase: "https://api.moonshot.ai/v1",
+      protocol: "openai_chat_compat",
+      apiKey: "secret-for-test",
+    } as const;
+
+    it("waits 60 s before retrying a failed catalog fetch unless forced", async function () {
+      let clock = 1_000_000;
+      let fetches = 0;
+      configureModelCapabilityRuntime({
+        now: () => clock,
+        fetch: (async () => {
+          fetches += 1;
+          throw new Error("offline");
+        }) as typeof fetch,
+      });
+      await refreshModelCatalog(identity);
+      await refreshModelCatalog(identity);
+      clock += 30_000;
+      await refreshModelCatalog(identity);
+      assert.equal(fetches, 1);
+      await refreshModelCatalog(identity, { force: true });
+      assert.equal(fetches, 2);
+      clock += 61_000;
+      await refreshModelCatalog(identity);
+      assert.equal(fetches, 3);
+    });
+
+    it("does not notify again when a repeated failure changes nothing", async function () {
+      let clock = 1_000_000;
+      configureModelCapabilityRuntime({
+        now: () => clock,
+        fetch: (async () => {
+          throw new Error("offline");
+        }) as typeof fetch,
+      });
+      let notifications = 0;
+      const unsubscribe = subscribeModelCapabilities(() => {
+        notifications += 1;
+      });
+      try {
+        await refreshModelCatalog(identity);
+        assert.equal(notifications, 1);
+        clock += 61_000;
+        await refreshModelCatalog(identity);
+        await refreshModelCatalog(identity, { force: true });
+        assert.equal(notifications, 1);
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    it("waits 60 s before retrying a failed registry fetch unless forced", async function () {
+      let clock = 1_000_000;
+      let fetches = 0;
+      configureModelCapabilityRuntime({
+        now: () => clock,
+        fetch: (async () => {
+          fetches += 1;
+          throw new Error("offline");
+        }) as typeof fetch,
+      });
+      assert.isFalse(await refreshModelCapabilityRegistry());
+      assert.isFalse(await refreshModelCapabilityRegistry());
+      assert.equal(fetches, 1);
+      clock += 61_000;
+      await refreshModelCapabilityRegistry();
+      assert.equal(fetches, 2);
+      await refreshModelCapabilityRegistry({ force: true });
+      assert.equal(fetches, 3);
+    });
   });
 
   it("accepts a newer validated remote registry revision", async function () {
