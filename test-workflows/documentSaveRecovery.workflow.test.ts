@@ -16,6 +16,8 @@ import {
   listJournalActions,
   listJournalSteps,
 } from "../src/agent/store/changeJournal";
+import { revertActions } from "../src/agent/services/changeReverter";
+import { ZoteroGateway } from "../src/agent/services/zoteroGateway";
 
 describe("workflow: document save recovery", function () {
   this.timeout(60000);
@@ -451,6 +453,92 @@ describe("workflow: document save recovery", function () {
         actionId: result.journalStep.actionId,
       });
       assert.equal(action?.status, "applied");
+    } finally {
+      Zotero.DB.queryAsync = originalQuery;
+    }
+  });
+
+  it("keeps the undo's step status when another transaction rolls back during the revert", async function () {
+    await storeDocument();
+    await initAgentChangeJournal();
+    const tool = (Zotero as any).LLMForZotero.api.agent.getToolDefinition(
+      "note_write",
+    );
+    const input = tool.validate({
+      mode: "create",
+      documentId: document.documentId,
+      targetItemId: parent.id,
+    });
+    assert.isTrue(input.ok);
+    const context = {
+      request: {
+        conversationKey: parent.id,
+        mode: "agent",
+        libraryID: parent.libraryID,
+      },
+      item: parent,
+      modelName: "workflow",
+      currentAnswerText: "",
+    };
+    const result = await tool.execute(input.value, context);
+    assert.equal(result.content.status, "created");
+    assert.isOk(result.journalStep, "the save was journalled");
+    const actionId = result.journalStep.actionId;
+    const actions = await listJournalActions({ actionId });
+    assert.lengthOf(actions, 1);
+
+    // Another flow opens a transaction just as the undo records the step as
+    // reverted, then rolls back. A plain write issued meanwhile joins it, so
+    // the status must be written in a transaction of its own.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let started!: () => void;
+    const begun = new Promise<void>((resolve) => (started = resolve));
+    let foreign: Promise<unknown> | undefined;
+    (Zotero.DB as any).queryAsync = async function (
+      sql: string,
+      ...args: any[]
+    ) {
+      if (
+        foreign ||
+        !/UPDATE llm_for_zotero_agent_journal_steps_v2\s+SET status = \?, inverse_json/.test(
+          sql,
+        ) ||
+        args[0]?.[0] !== "reverted"
+      )
+        return (originalQuery as any).call(this, sql, ...args);
+      foreign = Zotero.DB.executeTransaction(async () => {
+        await originalQuery.call(Zotero.DB, "SELECT 1");
+        started();
+        await gate;
+        throw new Error("Workflow foreign transaction rolled back");
+      }).catch((error: unknown) => error);
+      // A plain write lets the foreign transaction begin and joins it. A
+      // transactional one holds it off, so stop waiting after a while.
+      await Promise.race([
+        begun,
+        new Promise((resolve) => setTimeout(resolve, 1000)),
+      ]);
+      try {
+        return await (originalQuery as any).call(this, sql, ...args);
+      } finally {
+        release();
+      }
+    };
+    try {
+      const outcome = await revertActions({
+        actions,
+        zoteroGateway: new ZoteroGateway(),
+        context: context as any,
+      });
+      assert.isOk(foreign, "the undo recorded the step as reverted");
+      assert.match(String(await foreign), /foreign transaction rolled back/);
+      assert.equal(outcome.reverted, 1);
+      const steps = await listJournalSteps(actionId);
+      assert.lengthOf(steps, 1);
+      assert.equal(steps[0]!.status, "reverted");
+      const [action] = await listJournalActions({ actionId });
+      assert.equal(action?.status, "reverted");
     } finally {
       Zotero.DB.queryAsync = originalQuery;
     }

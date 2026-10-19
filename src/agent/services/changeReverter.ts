@@ -10,6 +10,7 @@ import {
   claimJournalAction,
   claimJournalStep,
   finalizeRevertedJournalAction,
+  inJournalTransaction,
   listJournalActions,
   updateJournalAction,
   updateJournalStep,
@@ -588,16 +589,19 @@ async function executeLibraryInverseWithProgress(params: {
 }): Promise<RevertedStepVerification> {
   let remaining = atomizeLibraryOperations(params.inverse.operations);
   const checkpoint = async (): Promise<void> => {
-    await updateJournalStep({
-      stepId: params.step.stepId,
-      status: "reverting",
-      inverse: {
-        version: params.inverse.version,
-        kind: "library_operations",
-        operations: remaining,
-      },
-      now: params.now(),
-    });
+    // Own transaction; see the note above revertActions.
+    await inJournalTransaction(() =>
+      updateJournalStep({
+        stepId: params.step.stepId,
+        status: "reverting",
+        inverse: {
+          version: params.inverse.version,
+          kind: "library_operations",
+          operations: remaining,
+        },
+        now: params.now(),
+      }),
+    );
   };
   // Persist the atomic replay plan before the first independently committed
   // target. A restart can therefore resume from the exact remaining suffix.
@@ -1641,12 +1645,15 @@ async function executeScriptSnapshotsWithProgress(params: {
   const plan = await buildScriptReplayPlan(params.inverse, params.step);
   let progress = validatedScriptReplayProgress(params.inverse, plan);
   const checkpoint = async (): Promise<void> => {
-    await updateJournalStep({
-      stepId: params.step.stepId,
-      status: "reverting",
-      inverse: { ...params.inverse, progress },
-      now: params.now(),
-    });
+    // Own transaction; see the note above revertActions.
+    await inJournalTransaction(() =>
+      updateJournalStep({
+        stepId: params.step.stepId,
+        status: "reverting",
+        inverse: { ...params.inverse, progress },
+        now: params.now(),
+      }),
+    );
   };
   await checkpoint();
   while (progress.phase !== "done") {
@@ -1820,6 +1827,19 @@ export async function analyzeJournalActions(params: {
   return conflicts;
 }
 
+// Journal writes in revertActions and its progress helpers run in a
+// transaction of their own (inJournalTransaction). A plain write issued while
+// another flow holds a Zotero transaction joins it and is lost when that flow
+// rolls back, which would leave a step "reverting" after it was undone.
+// Wrapping never nests: executeTransaction waits for any open transaction,
+// including this flow's, so a nested one would stall 30 s and time out. Every
+// wrapped write runs after this flow called claimJournalAction and
+// claimJournalStep, which open their own transactions through inTransaction,
+// so a flow that held a transaction would already have stalled there. The
+// callers are the undo tools, which the tool invocation controller runs
+// outside any transaction. The native Zotero calls between checkpoints
+// (executeOperation, executeScriptReplayUnit) have been awaited to completion
+// before each write.
 export async function revertActions(params: {
   actions: JournalActionWithSteps[];
   zoteroGateway: ZoteroGateway;
@@ -1989,12 +2009,15 @@ export async function revertActions(params: {
               entryId: action.actionId,
               reason: claimedConflict.reason,
             });
-            await updateJournalStep({
-              stepId: step.stepId,
-              status: "revert_failed",
-              error: claimedConflict.reason,
-              now: now(),
-            }).catch(() => undefined);
+            // Own transaction; see the note above revertActions.
+            await inJournalTransaction(() =>
+              updateJournalStep({
+                stepId: step.stepId,
+                status: "revert_failed",
+                error: claimedConflict.reason,
+                now: now(),
+              }),
+            ).catch(() => undefined);
             continue;
           }
           let reread: {
@@ -2058,19 +2081,25 @@ export async function revertActions(params: {
             }.`;
             actionFailed = true;
             skipped.push({ entryId: action.actionId, reason });
-            await updateJournalStep({
-              stepId: step.stepId,
-              status: "revert_failed",
-              error: reason,
-              now: now(),
-            }).catch(() => undefined);
+            // Own transaction; see the note above revertActions.
+            await inJournalTransaction(() =>
+              updateJournalStep({
+                stepId: step.stepId,
+                status: "revert_failed",
+                error: reason,
+                now: now(),
+              }),
+            ).catch(() => undefined);
             continue;
           }
-          await updateJournalStep({
-            stepId: step.stepId,
-            status: "reverted",
-            now: now(),
-          });
+          // Own transaction; see the note above revertActions.
+          await inJournalTransaction(() =>
+            updateJournalStep({
+              stepId: step.stepId,
+              status: "reverted",
+              now: now(),
+            }),
+          );
         } catch (error) {
           actionFailed = true;
           const reason = error instanceof Error ? error.message : String(error);
@@ -2078,21 +2107,27 @@ export async function revertActions(params: {
             conflicts.push(error.conflict);
           }
           skipped.push({ entryId: action.actionId, reason });
-          await updateJournalStep({
-            stepId: step.stepId,
-            status: "revert_failed",
-            error: reason,
-            now: now(),
-          }).catch(() => undefined);
+          // Own transaction; see the note above revertActions.
+          await inJournalTransaction(() =>
+            updateJournalStep({
+              stepId: step.stepId,
+              status: "revert_failed",
+              error: reason,
+              now: now(),
+            }),
+          ).catch(() => undefined);
         }
       }
       if (actionFailed) {
-        await updateJournalAction({
-          actionId: action.actionId,
-          status: "revert_failed",
-          error: "One or more steps could not be reverted",
-          now: now(),
-        });
+        // Own transaction; see the note above revertActions.
+        await inJournalTransaction(() =>
+          updateJournalAction({
+            actionId: action.actionId,
+            status: "revert_failed",
+            error: "One or more steps could not be reverted",
+            now: now(),
+          }),
+        );
         return;
       }
       try {
@@ -2109,12 +2144,15 @@ export async function revertActions(params: {
         actionFailed = true;
         const reason = error instanceof Error ? error.message : String(error);
         skipped.push({ entryId: action.actionId, reason });
-        await updateJournalAction({
-          actionId: action.actionId,
-          status: "revert_failed",
-          error: reason,
-          now: now(),
-        }).catch(() => undefined);
+        // Own transaction; see the note above revertActions.
+        await inJournalTransaction(() =>
+          updateJournalAction({
+            actionId: action.actionId,
+            status: "revert_failed",
+            error: reason,
+            now: now(),
+          }),
+        ).catch(() => undefined);
       }
     });
     if (!actionFailed) {
