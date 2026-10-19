@@ -111,30 +111,43 @@ describe("workflow: add past conversation", function () {
     const panel = await api.renderPanelForItem(fixture.parentItemId);
 
     // A past chat (it has one user turn), then a new current chat that also
-    // has a turn: only the past chat may be offered.
+    // has a turn: only the past chat may be offered. The picker lists every
+    // chat of the library, and earlier tests leave chats there, so the rows
+    // are matched by unique markers instead of counted.
+    const runTag = Date.now().toString(36);
+    const pastMarker = `PASTPICK ${runTag} past chat`;
+    const currentMarker = `PASTPICK ${runTag} current chat`;
     const past = await api.seedPanelStoredUserMessage(
       panel.panelId,
-      "workflow past conversation marker",
+      pastMarker,
     );
     const pastKey = past.conversationKey;
     assert.isOk(pastKey, diagnosticsMessage(past));
     const current = await api.startNewPanelConversation(panel.panelId);
     assert.notEqual(current.conversationKey, pastKey);
-    await api.seedPanelStoredUserMessage(
-      panel.panelId,
-      "workflow current conversation marker",
-    );
+    await api.seedPanelStoredUserMessage(panel.panelId, currentMarker);
 
     const picker = await api.pickPastConversationInPanel(panel.panelId, {
-      rowIndex: 0,
+      title: pastMarker,
     });
     assert.isTrue(picker.slashItemVisible, diagnosticsMessage(picker));
-    assert.lengthOf(
-      picker.rowTitles,
-      1,
-      `only the past chat is listed, not the current one: ${diagnosticsMessage(picker)}`,
+    const pastRows = picker.rowTitles.flatMap((title, index) =>
+      title.includes(pastMarker) ? [index] : [],
     );
-    assert.deepEqual(picker.rowLabels, ["Chat"], diagnosticsMessage(picker));
+    assert.lengthOf(
+      pastRows,
+      1,
+      `the past chat is listed once: ${diagnosticsMessage(picker)}`,
+    );
+    assert.isFalse(
+      picker.rowTitles.some((title) => title.includes(currentMarker)),
+      `the current chat is not listed: ${diagnosticsMessage(picker)}`,
+    );
+    assert.equal(
+      picker.rowLabels[pastRows[0]!],
+      "Chat",
+      diagnosticsMessage(picker),
+    );
     assert.isTrue(picker.picked, diagnosticsMessage(picker));
 
     const attached = await api.getDiagnostics(panel.panelId);
