@@ -162,6 +162,8 @@ import {
 } from "./assistantTurn";
 import { toStoredAssistantRow } from "./storedAssistantRow";
 import { toStoredUserRowPatch } from "./storedUserRow";
+import { createPastChatAttachHandler } from "./pastChatAttachHandler";
+import { setPastChatAttachHandler } from "../../services/pastConversations/attachSink";
 import { getStreamInterruptionLabel } from "./streamInterruption";
 import {
   restoreRetryUserSnapshot,
@@ -219,6 +221,7 @@ import type {
   CollectionContextRef,
   NoteContextRef,
   TagContextRef,
+  AttachedConversationRef,
   SelectedTextContext,
   ResolvedSelectedTextAnchor,
   SelectedTextSource,
@@ -322,8 +325,23 @@ import {
   normalizePaperContextRefs,
   normalizeCollectionContextRefs,
   normalizeTagContextRefs,
+  normalizeAttachedConversationRefs,
   normalizeAttachmentContentHash,
 } from "../../services/context/normalizers";
+import {
+  collectConversationAttachedRefs,
+  normalizeAttachedConversationScope,
+  withoutAgentAttachedMarker,
+} from "../../services/pastConversations/pastConversationText";
+import {
+  addAttachedPastChatsToSimpleChatHistory,
+  pastChatHistoryCurrentMessage,
+  renderCodexCurrentTurnPastChatText,
+} from "./pastChatSimpleChatHistory";
+import {
+  formatAttachedConversationLabel,
+  refreshAttachedConversationExistence,
+} from "./pastConversationSource";
 import { positionMenuAtPointer } from "./menuPositioning";
 import { FULL_PDF_UNSUPPORTED_MESSAGE } from "./pdfSupportMessages";
 import {
@@ -973,6 +991,86 @@ function normalizeCollectionContexts(
 
 function normalizeTagContexts(tagContexts: unknown): TagContextRef[] {
   return normalizeTagContextRefs(tagContexts, { sanitizeText });
+}
+
+function normalizeAttachedConversations(
+  attachedConversations: unknown,
+): AttachedConversationRef[] {
+  return normalizeAttachedConversationRefs(attachedConversations, {
+    sanitizeText,
+  });
+}
+
+/**
+ * Every past chat attached in a conversation (its visible user messages plus
+ * the message being sent): the chats past_chat_read may open. Deduplicated on
+ * system and key, with no cap; each message keeps its own limit of three.
+ */
+function collectAttachedConversationScope(
+  conversationKey: number,
+  currentAttachedConversations: unknown,
+): AttachedConversationRef[] {
+  return collectConversationAttachedRefs(
+    [
+      ...filterMessagesInPendingTurns(
+        conversationKey,
+        chatHistory.get(conversationKey) || [],
+      ),
+      { attachedConversations: currentAttachedConversations },
+    ],
+    { sanitizeText },
+  );
+}
+
+function collectAttachedConversationRefs(
+  messages: readonly { attachedConversations?: unknown }[],
+): AttachedConversationRef[] {
+  const refs: AttachedConversationRef[] = [];
+  for (const message of messages) {
+    if (message.attachedConversations) {
+      refs.push(
+        ...normalizeAttachedConversations(message.attachedConversations),
+      );
+    }
+  }
+  return refs;
+}
+
+/**
+ * Looks up whether the past chats attached to these messages still exist.
+ * The message renderer is synchronous and reads the result from a cache.
+ * Resolves true when a chat turned out to be deleted.
+ */
+async function refreshAttachedConversationChecks(
+  messages: readonly { attachedConversations?: unknown }[],
+): Promise<boolean> {
+  const refs = collectAttachedConversationRefs(messages);
+  if (!refs.length) return false;
+  try {
+    return await refreshAttachedConversationExistence(refs);
+  } catch (err) {
+    appLogger.warn("LLM: attached conversation check failed", err);
+    return false;
+  }
+}
+
+/** Re-checks a loaded chat's attached past chats and repaints on a change. */
+function recheckAttachedConversationsInBackground(
+  conversationKey: number,
+): void {
+  const messages = chatHistory.get(conversationKey) || [];
+  if (!collectAttachedConversationRefs(messages).length) return;
+  void refreshAttachedConversationChecks(messages).then((changed) => {
+    if (!changed) return;
+    for (const [body, getItem] of activeContextPanels) {
+      const panelItem = getItem();
+      if (!panelItem || getConversationKey(panelItem) !== conversationKey) {
+        continue;
+      }
+      refreshConversationPanels(body, panelItem);
+      return;
+    }
+  });
 }
 
 function resolveAutoLoadedPaperContextForItem(
@@ -1876,6 +1974,26 @@ export function refreshActiveConversationPanels(
 
 subscribeModelProviderGroups(refreshActiveConversationPanels);
 
+// The one writer of a past chat the agent attached (past_chat_attach): the
+// in-memory user message gets the chip, then its row is saved.
+setPastChatAttachHandler(
+  createPastChatAttachHandler({
+    getHistory: (conversationKey) => chatHistory.get(conversationKey),
+    isTemporaryConversation: (conversationKey) =>
+      isEphemeralConversationKey(conversationKey) ||
+      webChatIsolatedConversationKeys.has(conversationKey),
+    persistUserMessage: (request, message) =>
+      updateStoredLatestUserMessageByConversation(
+        request.conversationKey,
+        toStoredUserRowPatch(message),
+        request.conversationSystem,
+        { expectedTimestamp: request.userMessageTimestamp },
+      ),
+    refreshConversation: (conversationKey) =>
+      refreshActiveConversationPanels(conversationKey),
+  }),
+);
+
 function accumulateSessionTokens(
   conversationKey: number,
   delta: number,
@@ -2538,7 +2656,9 @@ export async function loadConversationMessagesForReadOnlyView(
     PERSISTED_HISTORY_LIMIT,
     conversationSystem,
   );
-  return stored.map((message) => toPanelMessage(message));
+  const messages = stored.map((message) => toPanelMessage(message));
+  await refreshAttachedConversationChecks(messages);
+  return messages;
 }
 
 function toPanelMessage(message: StoredChatMessage): Message {
@@ -2594,6 +2714,9 @@ function toPanelMessage(message: StoredChatMessage): Message {
     message.selectedCollectionContexts,
   );
   const selectedTagContexts = normalizeTagContexts(message.selectedTagContexts);
+  const attachedConversations = normalizeAttachedConversations(
+    message.attachedConversations,
+  );
   return {
     // Preserve the immutable database row identity through the runtime
     // history model. Turn-deletion intents use this ID as the primary fence;
@@ -2635,6 +2758,9 @@ function toPanelMessage(message: StoredChatMessage): Message {
       : undefined,
     selectedTagContexts: selectedTagContexts.length
       ? selectedTagContexts
+      : undefined,
+    attachedConversations: attachedConversations.length
+      ? attachedConversations
       : undefined,
     paperContextsExpanded: false,
     screenshotImages,
@@ -2735,6 +2861,7 @@ export async function ensureConversationLoaded(
   if (loadedConversationKeys.has(conversationKey)) {
     await loadConversationForkLinkCache(conversationKey);
     restoreConversationComposeContext(item);
+    recheckAttachedConversationsInBackground(conversationKey);
     return;
   }
   if (
@@ -2836,6 +2963,9 @@ export async function ensureConversationLoaded(
           planDocumentId: storedMessage.planDocumentId,
         });
       }
+      // Render reads the existence result from a cache; fill it before the
+      // freshness check so no await sits between that check and the write.
+      await refreshAttachedConversationChecks(storedMessages);
       if (isFrozen()) {
         chatHistory.delete(conversationKey);
         conversationForkLinks.delete(conversationKey);
@@ -4080,7 +4210,10 @@ type CodexSendRequestSite = {
   conversationGeneration?: number;
   userMessage: Pick<
     Message,
-    "timestamp" | "citationPaperContexts" | "pinnedPaperContexts"
+    | "timestamp"
+    | "citationPaperContexts"
+    | "pinnedPaperContexts"
+    | "attachedConversations"
   >;
   item: Zotero.Item;
   shownQuestion: string;
@@ -4143,6 +4276,7 @@ function codexSendRequestContext({
     citationPaperContexts: userMessage.citationPaperContexts,
     selectedCollectionContexts: selectedCollectionContextsForMessage,
     selectedTagContexts: selectedTagContextsForMessage,
+    attachedConversations: userMessage.attachedConversations,
     attachments: modelAttachments || attachments,
     skillAttachments: attachments,
     localDocuments,
@@ -4187,6 +4321,7 @@ type CodexRetryRequestSite = {
       | "citationPaperContexts"
       | "forcedSkillIds"
       | "pinnedPaperContexts"
+      | "attachedConversations"
     >;
   };
   item: Zotero.Item;
@@ -4234,6 +4369,7 @@ function codexRetryRequestContext({
     citationPaperContexts: retryPair.userMessage.citationPaperContexts,
     selectedCollectionContexts,
     selectedTagContexts,
+    attachedConversations: retryPair.userMessage.attachedConversations,
     attachments,
     skillAttachments: attachments,
     localDocuments: retryLocalDocuments,
@@ -4345,6 +4481,10 @@ async function prepareFinalContextPlanChatRequest(params: {
           typeof message.content === "string"
             ? message.content
             : JSON.stringify(message.content ?? ""),
+        ),
+        providerProtocol: finalPrepared.providerProtocol,
+        finalMessageRoles: finalPrepared.messages.map(
+          (message) => message.role,
         ),
         combinedContext: params.combinedContext,
         strategy: params.contextPlan.strategy,
@@ -5591,6 +5731,14 @@ function syncComposeContextForInlineEdit(
     userMessage.selectedTagContexts,
   );
   composeContextStore.tags.replace(item.id, selectedTagContexts);
+  // A chat the agent attached comes back as a user chip: sent again from
+  // the composer, it is the user's choice.
+  composeContextStore.attachedConversations.replace(
+    item.id,
+    withoutAgentAttachedMarker(
+      normalizeAttachedConversations(userMessage.attachedConversations),
+    ),
+  );
   // Clear existing mode overrides for this item, then set full-next for each full-text paper
   composeContextStore.paperSendModes.clearOwner(item.id);
   for (const paperContext of fullTextPaperContexts) {
@@ -5633,6 +5781,7 @@ export async function editLatestUserMessageAndRetry(
     fullTextPaperContexts,
     selectedCollectionContexts,
     selectedTagContexts,
+    attachedConversations,
     attachments,
     modelAttachments,
     localDocuments: _localDocuments,
@@ -5885,6 +6034,15 @@ export async function editLatestUserMessageAndRetry(
     selectedTagContextsForMessage.length
       ? selectedTagContextsForMessage
       : undefined;
+  if (attachedConversations !== undefined) {
+    const attachedConversationsForMessage = normalizeAttachedConversations(
+      attachedConversations,
+    );
+    retryPair.userMessage.attachedConversations =
+      attachedConversationsForMessage.length
+        ? attachedConversationsForMessage
+        : undefined;
+  }
   retryPair.userMessage.paperContextsExpanded = false;
   retryPair.userMessage.attachments = attachmentsForMessage.length
     ? attachmentsForMessage
@@ -5930,6 +6088,7 @@ export async function editLatestUserMessageAndRetry(
         selectedCollectionContexts:
           retryPair.userMessage.selectedCollectionContexts,
         selectedTagContexts: retryPair.userMessage.selectedTagContexts,
+        attachedConversations: retryPair.userMessage.attachedConversations,
         attachments: retryPair.userMessage.attachments,
         modelAttachments: retryPair.userMessage.modelAttachments,
         modelName: retryPair.userMessage.modelName,
@@ -6519,7 +6678,43 @@ export async function retryLatestAssistantResponse(
       await preflightClaudeBridgeLocalPdfCapability();
       if (await stopRetryPreparation()) return;
     }
-    const llmHistory = buildLLMHistoryMessages(historyForLLM);
+    const rawLLMHistory = buildLLMHistoryMessages(historyForLLM);
+    // Attached past chats go into the model messages only; historyForLLM
+    // (the chat messages) stays as it is for the retry bookkeeping. The
+    // retried question is the prompt, so its chats go last, unless the
+    // retry continues an answer and the question is still in the history.
+    const pastChatReadAvailable = shouldUseCodexNativeLightContext({
+      isCodexNativeTurn,
+    });
+    const retriedMessage = continueIncomplete
+      ? undefined
+      : retryPair.userMessage;
+    const llmHistory = await addAttachedPastChatsToSimpleChatHistory({
+      conversationKey,
+      conversationSystem: effectiveConversationSystem,
+      includeCodex: isCodexNativeTurn,
+      pastChatReadAvailable,
+      libraryID: item.libraryID,
+      messages: historyForLLM,
+      rawHistory: rawLLMHistory,
+      currentMessage: pastChatHistoryCurrentMessage(
+        isCodexNativeTurn,
+        retriedMessage,
+      ),
+      effectiveRequestConfig,
+    });
+    // A retry sends the block into the thread again, as it sends the
+    // question again.
+    const codexPastChatText = isCodexNativeTurn
+      ? await renderCodexCurrentTurnPastChatText({
+          conversationKey,
+          libraryID: item.libraryID,
+          message: retriedMessage,
+          pastChatReadAvailable,
+          effectiveRequestConfig,
+        })
+      : null;
+    if (await stopRetryPreparation()) return;
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
     if (effectiveConversationSystem === "upstream") {
       await preflightRequestModelCapabilities({
@@ -6740,6 +6935,7 @@ export async function retryLatestAssistantResponse(
             conversationGeneration,
             model: effectiveRequestConfig.model,
             messages: finalPrepared.messages,
+            attachedPastChatText: codexPastChatText || undefined,
             reasoning: effectiveRequestConfig.reasoning,
             signal: getAbortController(conversationKey)?.signal,
             codexPath: getEffectiveCodexAppServerBinaryPath(
@@ -7015,6 +7211,7 @@ export async function editUserTurnAndRetry(opts: {
   fullTextPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
+  attachedConversations?: AttachedConversationRef[];
   attachments?: ChatAttachment[];
   modelAttachments?: ChatAttachment[];
   localDocuments?: readonly import("../../shared/types").LocalDocumentResource[];
@@ -7055,6 +7252,7 @@ export async function editUserTurnAndRetry(opts: {
     fullTextPaperContexts,
     selectedCollectionContexts,
     selectedTagContexts,
+    attachedConversations,
     attachments,
     modelAttachments,
     localDocuments: _localDocuments,
@@ -7380,6 +7578,14 @@ export async function editUserTurnAndRetry(opts: {
   userMsg.selectedTagContexts = selectedTagContextsForMessage.length
     ? selectedTagContextsForMessage
     : undefined;
+  if (attachedConversations !== undefined) {
+    const attachedConversationsForMessage = normalizeAttachedConversations(
+      attachedConversations,
+    );
+    userMsg.attachedConversations = attachedConversationsForMessage.length
+      ? attachedConversationsForMessage
+      : undefined;
+  }
   userMsg.paperContextsExpanded = false;
   userMsg.attachments = attachmentsForMessage.length
     ? attachmentsForMessage
@@ -7419,6 +7625,7 @@ export async function editUserTurnAndRetry(opts: {
         citationPaperContexts: getMessageCitationPaperContexts(userMsg),
         selectedCollectionContexts: userMsg.selectedCollectionContexts,
         selectedTagContexts: userMsg.selectedTagContexts,
+        attachedConversations: userMsg.attachedConversations,
         attachments: userMsg.attachments,
         modelAttachments: userMsg.modelAttachments,
         modelName: userMsg.modelName,
@@ -7858,6 +8065,17 @@ async function buildAgentRuntimeRequest(
     // is temporarily unavailable.
   }
   const conversationInstanceID = registeredConversation?.instanceID;
+  const attachedConversations = normalizeAttachedConversations(
+    params.attachedConversations,
+  );
+  const attachedConversationScope = collectAttachedConversationScope(
+    params.conversationKey,
+    attachedConversations,
+  );
+  // A carried-over list can hold more than one message's three chats.
+  const deliveredConversations = normalizeAttachedConversationScope(
+    params.deliveredConversations,
+  );
   return {
     conversationKey: params.conversationKey,
     conversationGeneration: params.conversationGeneration,
@@ -7894,6 +8112,15 @@ async function buildAgentRuntimeRequest(
       params.selectedCollectionContexts,
     ),
     selectedTagContexts: normalizeTagContexts(params.selectedTagContexts),
+    attachedConversations: attachedConversations.length
+      ? attachedConversations
+      : undefined,
+    deliveredConversations: deliveredConversations.length
+      ? deliveredConversations
+      : undefined,
+    attachedConversationScope: attachedConversationScope.length
+      ? attachedConversationScope
+      : undefined,
     availableAttachmentResources: attachmentResourcePool.resources,
     attachmentResourceSummaries: attachmentResourcePool.summaries,
     attachments: params.attachments,
@@ -8317,6 +8544,7 @@ async function sendAgentQuestion(opts: {
   fullTextPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
+  attachedConversations?: AttachedConversationRef[];
   attachments?: ChatAttachment[];
   modelAttachments?: ChatAttachment[];
   localDocuments?: readonly import("../../shared/types").LocalDocumentResource[];
@@ -8397,6 +8625,7 @@ export async function sendQuestion(
     fullTextPaperContexts,
     selectedCollectionContexts,
     selectedTagContexts,
+    attachedConversations,
     attachments,
     modelAttachments,
     localDocuments,
@@ -8535,6 +8764,7 @@ export async function sendQuestion(
         fullTextPaperContexts,
         selectedCollectionContexts,
         selectedTagContexts,
+        attachedConversations,
         attachments,
         modelAttachments,
         localDocuments,
@@ -8900,6 +9130,9 @@ export async function sendQuestion(
   );
   const selectedTagContextsForMessage =
     normalizeTagContexts(selectedTagContexts);
+  const attachedConversationsForMessage = normalizeAttachedConversations(
+    attachedConversations,
+  );
   let {
     paperContexts: paperContextsForMessage,
     fullTextPaperContexts: fullTextPaperContextsForMessage,
@@ -8988,6 +9221,9 @@ export async function sendQuestion(
     selectedTagContexts: selectedTagContextsForMessage.length
       ? selectedTagContextsForMessage
       : undefined,
+    attachedConversations: attachedConversationsForMessage.length
+      ? attachedConversationsForMessage
+      : undefined,
     forcedSkillIds: opts.forcedSkillIds?.length
       ? opts.forcedSkillIds.slice()
       : undefined,
@@ -9033,6 +9269,7 @@ export async function sendQuestion(
         citationPaperContexts: userMessage.citationPaperContexts,
         selectedCollectionContexts: userMessage.selectedCollectionContexts,
         selectedTagContexts: userMessage.selectedTagContexts,
+        attachedConversations: userMessage.attachedConversations,
         screenshotImages: userMessage.screenshotImages,
         attachments: userMessage.attachments,
         modelAttachments: userMessage.modelAttachments,
@@ -9344,8 +9581,40 @@ export async function sendQuestion(
   try {
     const rawLLMHistory = buildLLMHistoryMessages(historyForLLM);
     // Apply auto-summary compression when the history grows long.
-    const llmHistory =
+    const compressedLLMHistory =
       applyHistoryCompression(conversationKey, rawLLMHistory) ?? rawLLMHistory;
+    // Attached past chats go into the model messages only, never into
+    // historyForLLM or the summary input. The question being sent is the
+    // prompt, so its own chats go last in the history; a native Codex turn
+    // puts them into its turn input instead (codexPastChatText).
+    const pastChatReadAvailable = shouldUseCodexNativeLightContext({
+      isCodexNativeTurn,
+    });
+    const llmHistory = await addAttachedPastChatsToSimpleChatHistory({
+      conversationKey,
+      conversationSystem: effectiveConversationSystem,
+      includeCodex: isCodexNativeTurn,
+      pastChatReadAvailable,
+      libraryID: item.libraryID,
+      messages: historyForLLM,
+      rawHistory: rawLLMHistory,
+      history: compressedLLMHistory,
+      currentMessage: pastChatHistoryCurrentMessage(
+        isCodexNativeTurn,
+        userMessage,
+      ),
+      effectiveRequestConfig,
+    });
+    const codexPastChatText = isCodexNativeTurn
+      ? await renderCodexCurrentTurnPastChatText({
+          conversationKey,
+          libraryID: item.libraryID,
+          message: userMessage,
+          pastChatReadAvailable,
+          effectiveRequestConfig,
+        })
+      : null;
+    if (await stopInactiveRequest()) return;
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
 
     if (effectiveConversationSystem === "upstream") {
@@ -9566,6 +9835,7 @@ export async function sendQuestion(
             conversationGeneration,
             model: effectiveRequestConfig.model,
             messages: finalPrepared.messages,
+            attachedPastChatText: codexPastChatText || undefined,
             reasoning: effectiveRequestConfig.reasoning,
             signal: getAbortController(conversationKey)?.signal,
             codexPath: getEffectiveCodexAppServerBinaryPath(
@@ -9825,11 +10095,16 @@ function buildInlineEditWidget(
       setInlineEditSavedDraft(body, "");
       // The chips' questions belong to the turn that was edited; they must not
       // ride along with the next message.
-      if (
-        stripSelectedTextQuestionsForItem(
-          editConversationKey ?? getConversationKey(item),
-        )
-      ) {
+      let composerChanged = stripSelectedTextQuestionsForItem(
+        editConversationKey ?? getConversationKey(item),
+      );
+      // Past chats are one-shot like the questions: the edit restored them
+      // into the composer, and they must not attach to the next message.
+      if (composeContextStore.attachedConversations.has(item.id)) {
+        composeContextStore.attachedConversations.delete(item.id);
+        composerChanged = true;
+      }
+      if (composerChanged) {
         activeContextPanelStateSync.get(body)?.();
       }
       if (superseded) {
@@ -10549,6 +10824,7 @@ function renderChatForPanel(
       let papersExpanded: HTMLDivElement | null = null;
       let collectionsExpanded: HTMLDivElement | null = null;
       let tagsExpanded: HTMLDivElement | null = null;
+      let attachedConversationsExpanded: HTMLDivElement | null = null;
       let filesExpanded: HTMLDivElement | null = null;
       const selectedTexts = getMessageSelectedTexts(msg);
       const selectedTextSources = normalizeSelectedTextSources(
@@ -10576,11 +10852,15 @@ function renderChatForPanel(
         msg.selectedCollectionContexts,
       );
       const selectedTagContexts = normalizeTagContexts(msg.selectedTagContexts);
+      const attachedConversationRefs = normalizeAttachedConversations(
+        msg.attachedConversations,
+      );
       hasUserContext =
         hasScreenshotContext ||
         hasSelectedTextContext ||
         selectedCollectionContexts.length > 0 ||
-        selectedTagContexts.length > 0;
+        selectedTagContexts.length > 0 ||
+        attachedConversationRefs.length > 0;
       if (hasScreenshotContext) {
         const screenshotBar = doc.createElementNS(
           HTML_NS,
@@ -10891,6 +11171,95 @@ function renderChatForPanel(
         hasContextBadge = true;
       }
 
+      if (attachedConversationRefs.length) {
+        const conversationsBar = doc.createElementNS(
+          HTML_NS,
+          "button",
+        ) as HTMLButtonElement;
+        conversationsBar.type = "button";
+        conversationsBar.className =
+          "llm-user-papers-bar llm-user-conversations-bar";
+
+        const conversationsIcon = createContextIcon(
+          doc,
+          "model",
+          "llm-user-papers-icon",
+        );
+        const conversationsLabel = doc.createElement("span") as HTMLSpanElement;
+        conversationsLabel.className = "llm-user-papers-label";
+        conversationsLabel.textContent =
+          attachedConversationRefs.length === 1 ? "Past chat" : "Past chats";
+        const conversationTexts = attachedConversationRefs.map(
+          formatAttachedConversationLabel,
+        );
+        conversationsLabel.title = conversationTexts.join("\n");
+        conversationsBar.append(conversationsIcon, conversationsLabel);
+
+        const conversationsExpandedEl = doc.createElement(
+          "div",
+        ) as HTMLDivElement;
+        conversationsExpandedEl.className =
+          "llm-user-papers-expanded llm-user-conversations-expanded";
+        attachedConversationsExpanded = conversationsExpandedEl;
+        const conversationsList = doc.createElement("div") as HTMLDivElement;
+        conversationsList.className =
+          "llm-user-papers-list llm-user-conversations-list";
+        conversationTexts.forEach((text) => {
+          const conversationItem = doc.createElement("div") as HTMLDivElement;
+          conversationItem.className =
+            "llm-user-papers-item llm-user-conversations-item";
+          const conversationTitle = doc.createElement(
+            "span",
+          ) as HTMLSpanElement;
+          conversationTitle.className = "llm-user-papers-item-title";
+          conversationTitle.textContent = text;
+          conversationTitle.title = text;
+          conversationItem.append(conversationTitle);
+          conversationsList.appendChild(conversationItem);
+        });
+        conversationsExpandedEl.appendChild(conversationsList);
+
+        const applyConversationsState = () => {
+          const expanded = Boolean(msg.attachedConversationsExpanded);
+          conversationsBar.classList.toggle("expanded", expanded);
+          conversationsBar.setAttribute(
+            "aria-expanded",
+            expanded ? "true" : "false",
+          );
+          conversationsExpandedEl.hidden = !expanded;
+          conversationsExpandedEl.style.display = expanded ? "block" : "none";
+          conversationsBar.title = expanded
+            ? "Collapse past chats"
+            : "Expand past chats";
+        };
+        const toggleConversationsExpanded = () => {
+          msg.attachedConversationsExpanded =
+            !msg.attachedConversationsExpanded;
+          applyConversationsState();
+        };
+        applyConversationsState();
+        conversationsBar.addEventListener("mousedown", (e: Event) => {
+          const mouse = e as MouseEvent;
+          if (mouse.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          toggleConversationsExpanded();
+        });
+        conversationsBar.addEventListener("click", (e: Event) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        conversationsBar.addEventListener("keydown", (e: KeyboardEvent) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          e.stopPropagation();
+          toggleConversationsExpanded();
+        });
+
+        contextBadgesRow.appendChild(conversationsBar);
+        hasContextBadge = true;
+      }
+
       const paperContexts = getMessageDisplayPaperContexts(msg);
       hasUserContext = hasUserContext || paperContexts.length > 0;
       if (paperContexts.length) {
@@ -11135,6 +11504,9 @@ function renderChatForPanel(
       }
       if (tagsExpanded) {
         wrapper.appendChild(tagsExpanded);
+      }
+      if (attachedConversationsExpanded) {
+        wrapper.appendChild(attachedConversationsExpanded);
       }
       if (papersExpanded) {
         wrapper.appendChild(papersExpanded);

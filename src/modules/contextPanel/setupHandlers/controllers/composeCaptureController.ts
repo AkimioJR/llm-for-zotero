@@ -1,6 +1,7 @@
 import { t } from "../../../../utils/i18n";
 import { registerAddonDialog } from "../../../../utils/dialogRegistry";
 import { MAX_SELECTED_IMAGES } from "../../constants";
+import { MAX_ATTACHED_CONVERSATIONS } from "../../../../services/context/normalizers";
 import { activeContextPanels } from "../../state";
 import { composeContextStore } from "../../contexts/composeContextStore";
 import {
@@ -46,6 +47,11 @@ type ComposeCaptureControllerDeps = {
   slashMenu: HTMLDivElement | null;
   slashUploadOption: HTMLButtonElement | null;
   slashReferenceOption: HTMLButtonElement | null;
+  slashPastConversationOption?: HTMLButtonElement | null;
+  /** Opens the past conversation picker. */
+  openPastConversationPicker?: () => void;
+  /** How many past chats the composer holds now. */
+  getAttachedConversationCount?: () => number;
   slashPdfPageOption: HTMLButtonElement | null;
   slashPdfMultiplePagesOption: HTMLButtonElement | null;
   slashSideChatOption?: HTMLButtonElement | null;
@@ -86,6 +92,7 @@ export function attachComposeCaptureController(
     slashMenu,
     slashUploadOption,
     slashReferenceOption,
+    slashPastConversationOption,
     slashPdfPageOption,
     slashPdfMultiplePagesOption,
     slashSideChatOption,
@@ -424,6 +431,23 @@ export function attachComposeCaptureController(
       deps.consumeActiveActionToken();
       deps.closeSlashMenu();
       openReferenceSlashFromMenu();
+    });
+  }
+
+  if (slashPastConversationOption) {
+    slashPastConversationOption.addEventListener("click", (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      deps.consumeActiveActionToken();
+      deps.closeSlashMenu();
+      if (
+        (deps.getAttachedConversationCount?.() ?? 0) >=
+        MAX_ATTACHED_CONVERSATIONS
+      ) {
+        setStatus(t("Up to 3 past chats per message"), "warning");
+        return;
+      }
+      deps.openPastConversationPicker?.();
     });
   }
 

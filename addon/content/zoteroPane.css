@@ -12163,7 +12163,8 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 
 /* Collection context chip */
 .llm-collection-context-chip,
-.llm-tag-context-chip {
+.llm-tag-context-chip,
+.llm-conversation-context-chip {
   --llm-context-chip-icon-size: 18px;
   flex: 0 0 auto;
   max-width: 100%;
@@ -12171,7 +12172,8 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 }
 
 .llm-collection-chip-label,
-.llm-tag-chip-label {
+.llm-tag-chip-label,
+.llm-conversation-chip-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -12189,7 +12191,8 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 }
 
 .llm-collection-chip-icon,
-.llm-tag-chip-icon {
+.llm-tag-chip-icon,
+.llm-conversation-chip-icon {
   width: var(--llm-context-chip-icon-size);
   height: var(--llm-context-chip-icon-size);
   opacity: 1;
@@ -12203,8 +12206,13 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   color: var(--llm-context-icon-tag-color);
 }
 
+.llm-conversation-chip-icon {
+  color: var(--llm-context-icon-model-color);
+}
+
 .llm-collection-chip-title,
-.llm-tag-chip-title {
+.llm-tag-chip-title,
+.llm-conversation-chip-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -12212,19 +12220,22 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 }
 
 .llm-collection-context-chip:hover .llm-collection-chip-label,
-.llm-tag-context-chip:hover .llm-tag-chip-label {
+.llm-tag-context-chip:hover .llm-tag-chip-label,
+.llm-conversation-context-chip:hover .llm-conversation-chip-label {
   color: var(--fill-primary);
 }
 
 .llm-collection-chip-header,
-.llm-tag-chip-header {
+.llm-tag-chip-header,
+.llm-conversation-chip-header {
   gap: 0;
   padding-right: 4px;
   cursor: default;
 }
 
 .llm-collection-chip-header .llm-collection-clear,
-.llm-tag-chip-header .llm-tag-clear {
+.llm-tag-chip-header .llm-tag-clear,
+.llm-conversation-chip-header .llm-conversation-clear {
   display: grid;
   place-items: center;
   align-self: center;

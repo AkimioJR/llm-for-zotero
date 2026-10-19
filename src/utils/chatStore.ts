@@ -6,6 +6,7 @@ import type {
   PaperContextRef,
   QuoteCitation,
   TagContextRef,
+  AttachedConversationRef,
   GeneratedChatImage,
   GlobalConversationSummary,
   PaperConversationSummary,
@@ -93,6 +94,7 @@ import {
   normalizePaperContextRefs,
   normalizeCollectionContextRefs,
   normalizeTagContextRefs,
+  normalizeAttachedConversationRefs,
 } from "../services/context/normalizers";
 import { normalizeQuoteCitations } from "../services/quotes/quoteCitations";
 import {
@@ -178,6 +180,7 @@ export type StoredChatMessage = {
   quoteCitations?: QuoteCitation[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
+  attachedConversations?: AttachedConversationRef[];
   screenshotImages?: string[];
   attachments?: StoredChatAttachment[];
   modelAttachments?: StoredChatAttachment[];
@@ -266,6 +269,7 @@ const CHAT_MESSAGE_SELECT_COLUMNS_SQL = `id,
             quote_citations_json AS quoteCitationsJson,
             collection_contexts_json AS collectionContextsJson,
             tag_contexts_json AS tagContextsJson,
+            attached_conversations_json AS attachedConversationsJson,
             screenshot_images AS screenshotImages,
             attachments_json AS attachmentsJson,
             model_attachments_json AS modelAttachmentsJson,
@@ -489,6 +493,7 @@ const CHAT_MESSAGE_COPY_COLUMNS = [
   "quote_citations_json",
   "collection_contexts_json",
   "tag_contexts_json",
+  "attached_conversations_json",
   "screenshot_images",
   "attachments_json",
   "model_attachments_json",
@@ -1334,6 +1339,7 @@ export async function initChatStore(): Promise<void> {
         quote_citations_json TEXT,
         collection_contexts_json TEXT,
         tag_contexts_json TEXT,
+        attached_conversations_json TEXT,
         screenshot_images TEXT,
         attachments_json TEXT,
         model_attachments_json TEXT,
@@ -1608,6 +1614,12 @@ export async function initChatStore(): Promise<void> {
       messageColumns,
       "tag_contexts_json",
       "tag_contexts_json TEXT",
+    );
+    await ensureColumn(
+      CHAT_MESSAGES_TABLE,
+      messageColumns,
+      "attached_conversations_json",
+      "attached_conversations_json TEXT",
     );
     const hasScreenshotImagesColumn = Boolean(
       columns?.some((column) => column?.name === "screenshot_images"),
@@ -2155,6 +2167,7 @@ export async function loadConversation(
         quoteCitationsJson?: unknown;
         collectionContextsJson?: unknown;
         tagContextsJson?: unknown;
+        attachedConversationsJson?: unknown;
         screenshotImages?: unknown;
         attachmentsJson?: unknown;
         modelAttachmentsJson?: unknown;
@@ -2381,6 +2394,21 @@ export async function loadConversation(
         selectedTagContexts = undefined;
       }
     }
+    let attachedConversations: AttachedConversationRef[] | undefined;
+    if (
+      typeof row.attachedConversationsJson === "string" &&
+      row.attachedConversationsJson
+    ) {
+      try {
+        const parsed = JSON.parse(row.attachedConversationsJson) as unknown;
+        const normalized = normalizeAttachedConversationRefs(parsed);
+        if (normalized.length) {
+          attachedConversations = normalized;
+        }
+      } catch (_err) {
+        attachedConversations = undefined;
+      }
+    }
     let screenshotImages: string[] | undefined;
     if (typeof row.screenshotImages === "string" && row.screenshotImages) {
       try {
@@ -2477,6 +2505,7 @@ export async function loadConversation(
       quoteCitations,
       selectedCollectionContexts,
       selectedTagContexts,
+      attachedConversations,
       screenshotImages,
       attachments,
       modelAttachments,
@@ -2613,6 +2642,9 @@ export async function appendMessage(
   const selectedTagContexts = normalizeTagContextRefs(
     message.selectedTagContexts,
   );
+  const attachedConversations = normalizeAttachedConversationRefs(
+    message.attachedConversations,
+  );
   const screenshotImages = Array.isArray(message.screenshotImages)
     ? message.screenshotImages.filter((entry) => Boolean(entry))
     : [];
@@ -2662,8 +2694,8 @@ export async function appendMessage(
         const identityPlaceholder = identityAvailable ? ", ?" : "";
         await Zotero.DB.queryAsync(
           `INSERT INTO ${CHAT_MESSAGES_TABLE}
-        (conversation_id, conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_text_contexts_json, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, selected_text_note_contexts_json, forced_skill_ids_json, paper_contexts_json, pdf_paper_contexts_json, full_text_paper_contexts_json, citation_paper_contexts_json, quote_citations_json, collection_contexts_json, tag_contexts_json, screenshot_images, attachments_json, model_attachments_json, generated_images_json, model_name, model_entry_id, model_provider_label, interrupted, completion_status, completion_reason, webchat_run_state, webchat_completion_reason, reasoning_summary, reasoning_details, context_tokens, context_window, document_id${identityColumn})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${identityPlaceholder})`,
+        (conversation_id, conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_text_contexts_json, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, selected_text_note_contexts_json, forced_skill_ids_json, paper_contexts_json, pdf_paper_contexts_json, full_text_paper_contexts_json, citation_paper_contexts_json, quote_citations_json, collection_contexts_json, tag_contexts_json, attached_conversations_json, screenshot_images, attachments_json, model_attachments_json, generated_images_json, model_name, model_entry_id, model_provider_label, interrupted, completion_status, completion_reason, webchat_run_state, webchat_completion_reason, reasoning_summary, reasoning_details, context_tokens, context_window, document_id${identityColumn})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${identityPlaceholder})`,
           [
             conversationID,
             normalizedKey,
@@ -2703,6 +2735,9 @@ export async function appendMessage(
               : null,
             selectedTagContexts.length
               ? JSON.stringify(selectedTagContexts)
+              : null,
+            attachedConversations.length
+              ? JSON.stringify(attachedConversations)
               : null,
             screenshotImages.length ? JSON.stringify(screenshotImages) : null,
             attachments.length ? JSON.stringify(attachments) : null,
@@ -2783,6 +2818,7 @@ export async function updateLatestUserMessage(
     | "citationPaperContexts"
     | "selectedCollectionContexts"
     | "selectedTagContexts"
+    | "attachedConversations"
     | "screenshotImages"
     | "attachments"
     | "modelAttachments"
@@ -2834,6 +2870,9 @@ export async function updateLatestUserMessage(
   const selectedTagContexts = normalizeTagContextRefs(
     message.selectedTagContexts,
   );
+  const attachedConversations = normalizeAttachedConversationRefs(
+    message.attachedConversations,
+  );
   const screenshotImages = Array.isArray(message.screenshotImages)
     ? message.screenshotImages.filter((entry) => Boolean(entry))
     : [];
@@ -2880,6 +2919,7 @@ export async function updateLatestUserMessage(
            citation_paper_contexts_json = ?,
            collection_contexts_json = ?,
            tag_contexts_json = ?,
+           attached_conversations_json = ?,
            screenshot_images = ?,
            attachments_json = ?,
            model_attachments_json = ?,
@@ -2924,6 +2964,9 @@ export async function updateLatestUserMessage(
           ? JSON.stringify(selectedCollectionContexts)
           : null,
         selectedTagContexts.length ? JSON.stringify(selectedTagContexts) : null,
+        attachedConversations.length
+          ? JSON.stringify(attachedConversations)
+          : null,
         screenshotImages.length ? JSON.stringify(screenshotImages) : null,
         attachments.length ? JSON.stringify(attachments) : null,
         hasExplicitModelAttachments ? JSON.stringify(modelAttachments) : null,

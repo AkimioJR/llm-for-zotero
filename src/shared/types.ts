@@ -211,6 +211,26 @@ export type TagContextRef = {
   excludedItemIds?: number[];
 };
 
+/**
+ * A past conversation attached to a user message as context.
+ * Reference only: no conversation text is copied into the message.
+ */
+export type AttachedConversationRef = {
+  system: ConversationSystem;
+  conversationKey: number;
+  /** Catalog conversationID, used to detect a reused conversationKey. */
+  conversationID?: string;
+  title: string;
+  libraryID: number;
+  kind?: "paper" | "global";
+  paperItemID?: number;
+  /**
+   * "agent" when the agent attached it with past_chat_attach; absent when
+   * the user attached it from the picker.
+   */
+  via?: "agent";
+};
+
 export type ActiveNoteSession = {
   noteKind: "item" | "standalone";
   noteId: number;

@@ -617,6 +617,11 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     t("Select references"),
     t("Add papers from your library"),
   );
+  const slashPastConversationBtn = makeSlashItem(
+    "llm-slash-past-conversation-option",
+    t("Add past conversation"),
+    t("Use an earlier chat as context"),
+  );
   const slashPdfPageBtn = makeSlashItem(
     "llm-slash-pdf-page-option",
     t("Send current PDF page"),
@@ -630,6 +635,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const slashBaseButtons: Record<SlashBaseMenuItem, HTMLButtonElement> = {
     upload: slashUploadBtn,
     reference: slashReferenceBtn,
+    pastConversation: slashPastConversationBtn,
     pdfPage: slashPdfPageBtn,
     pdfMultiplePages: slashPdfMultiplePagesBtn,
   };

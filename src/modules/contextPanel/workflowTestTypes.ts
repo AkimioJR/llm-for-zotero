@@ -564,6 +564,7 @@ export type WorkflowTestDiagnostics = {
   selectedContextLabels: string[];
   composerCollectionLabels: string[];
   composerTagLabels: string[];
+  composerAttachedConversationLabels: string[];
   sentContextBadgeLabels: string[];
   sentContextItemLabels: string[];
   historyNewVisible?: boolean;
@@ -1229,7 +1230,7 @@ export type WorkflowTestApi = {
     text: string,
     overrides?: Pick<
       SendQuestionOptions,
-      "forcedSkillIds" | "selectedTagContexts"
+      "forcedSkillIds" | "selectedTagContexts" | "attachedConversations"
     >,
   ) => Promise<{ conversationKey: number; sendSettledSequenceBefore: number }>;
   /**
@@ -1254,8 +1255,41 @@ export type WorkflowTestApi = {
       | "fullTextPaperContexts"
       | "selectedCollectionContexts"
       | "selectedTagContexts"
+      | "attachedConversations"
     >,
   ) => Promise<WorkflowTestDiagnostics>;
+  /**
+   * Types "/" in the composer, clicks "Add past conversation", reads the
+   * picker rows, and clicks the row with `input.rowIndex`, or the first row
+   * whose title contains `input.title`.
+   */
+  pickPastConversationInPanel: (
+    panelId: string,
+    input?: { title?: string; rowIndex?: number },
+  ) => Promise<{
+    slashItemVisible: boolean;
+    rowTitles: string[];
+    rowLabels: string[];
+    picked: boolean;
+  }>;
+  /**
+   * Adds a past chat to the panel's latest user message the way the agent's
+   * past_chat_attach does (through the panel's attach handler, via "agent"),
+   * then reads the refs from the in-memory message and the stored row.
+   */
+  attachPastChatAsAgentInPanel: (
+    panelId: string,
+    input: {
+      conversationKey: number;
+      title: string;
+      system?: ConversationSystem;
+    },
+  ) => Promise<{
+    outcome: { ok: true } | { ok: false; reason: string };
+    memoryRefs: import("../../shared/types").AttachedConversationRef[];
+    storedRefs: import("../../shared/types").AttachedConversationRef[];
+    diagnostics: WorkflowTestDiagnostics;
+  }>;
   clickPanelSystemToggle: (
     panelId: string,
     system: RuntimeConversationSystem,

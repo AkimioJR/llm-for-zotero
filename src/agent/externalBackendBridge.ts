@@ -107,6 +107,15 @@ import {
 import { validateLocalPdfDocumentBatch } from "./context/localDocumentBatch";
 import { RAW_PDF_TRANSPORT_POLICY_BLOCK } from "./context/rawPdfTransportPolicy";
 import { loadLatestDocumentForRun } from "./documents/store";
+import { resolveAgentPromptBudgetLimits } from "./context/promptBudget";
+import {
+  renderAgentPastChatMessageText,
+  type PastConversationSource,
+} from "../services/pastConversations/pastConversationLoader";
+import {
+  isSlashCommandText,
+  normalizeAttachedConversationScope,
+} from "../services/pastConversations/pastConversationText";
 import {
   AgentEventLocalDocumentStreamRedactor,
   acquireLocalDocumentPathLease,
@@ -1064,9 +1073,77 @@ async function streamBridgeLines(
   }
 }
 
+/**
+ * The text a Claude Code turn sends the bridge: the turn's past-chat block,
+ * a blank line, then the user's text; the user's text alone when the turn
+ * delivers no past chat (request.deliveredConversations) or is a slash
+ * message. The block is the built-in agent's past-chat message, rendered
+ * under the same memo key as the resume-fallback history
+ * (agentMode/pastChatHistory.ts), so a later replay sends the same bytes.
+ * The bridge needs no change: it reads userText as the prompt.
+ *
+ * request.userText itself stays unchanged, for the MCP scope and skill
+ * routing. Never fails the turn.
+ */
+async function buildClaudeBridgeUserText(
+  request: AgentRuntimeRequest,
+  source?: PastConversationSource,
+): Promise<string> {
+  const userText = request.userText || "";
+  const refs = normalizeAttachedConversationScope(
+    request.deliveredConversations,
+  );
+  // A slash message goes to Claude Code's command handling as it is.
+  if (!refs.length || isSlashCommandText(userText)) return userText;
+  try {
+    let contextWindowTokens: number | undefined;
+    try {
+      contextWindowTokens = resolveAgentPromptBudgetLimits({
+        model: request.model,
+        inputTokenCap: request.advanced?.inputTokenCap,
+        apiBase: request.apiBase,
+        providerProtocol: request.providerProtocol,
+        authMode: request.authMode,
+        profileOverride: request.advanced?.profileOverride,
+        outputTokenLimit: request.advanced?.outputTokenLimit,
+      }).contextWindow;
+    } catch {
+      contextWindowTokens = undefined;
+    }
+    const block = await renderAgentPastChatMessageText({
+      conversationKey: request.conversationKey,
+      userMessageTimestamp: request.metadata?.sourceMessageTimestamp,
+      refs,
+      libraryID: request.libraryID,
+      contextWindowTokens,
+      source,
+    });
+    if (!block) return userText;
+    // The fallback history applies the same redaction to the same text.
+    const redacted = new LocalDocumentPathStreamRedactor(
+      request.conversationKey,
+    ).redactTerminalText(block);
+    return `${redacted}\n\n${userText}`;
+  } catch (error) {
+    appLogger.warn(
+      "Claude Code bridge: rendering the attached past chats failed",
+      error,
+    );
+    return userText;
+  }
+}
+
+export function buildClaudeBridgeUserTextForTests(
+  request: AgentRuntimeRequestInput,
+  source?: PastConversationSource,
+): Promise<string> {
+  return buildClaudeBridgeUserText(resolveAgentRuntimeRequest(request), source);
+}
+
 async function runExternalBridgeTurn(
   baseUrl: string,
   params: ResolvedRunTurnParams & {
+    pastConversationSource?: PastConversationSource;
     contextEnvelope?: ContextEnvelope;
     runtimeRequest?: BridgeRuntimeRequest;
     allowedTools?: string[];
@@ -1106,10 +1183,12 @@ async function runExternalBridgeTurn(
             : undefined;
   const debugModeEnabled = false;
 
-  const userTextRaw = params.request.userText || "";
   const probeRequested =
     debugModeEnabled && params.request.metadata?.testPermissionProbe === true;
-  const userTextForBridge = userTextRaw;
+  const userTextForBridge = await buildClaudeBridgeUserText(
+    params.request,
+    params.pastConversationSource,
+  );
 
   const requestMetadata =
     params.request.metadata && typeof params.request.metadata === "object"
@@ -1417,9 +1496,20 @@ function buildClaudeZoteroMcpScope(
     title: selectedPaper?.title,
     userText: request.userText,
     exhaustiveReadBackend: "unavailable",
+    attachedConversationScope: request.attachedConversationScope,
     turnPaperScope: request.turnPaperScope,
     turnPaperScopeWarnings: request.turnPaperScopeWarnings,
   };
+}
+
+export function buildClaudeZoteroMcpScopeForTests(
+  request: AgentRuntimeRequestInput,
+  profileSignature: string,
+): ZoteroMcpActiveScope {
+  return buildClaudeZoteroMcpScope(
+    resolveAgentRuntimeRequest(request),
+    profileSignature,
+  );
 }
 
 /**
@@ -2429,8 +2519,13 @@ export function bindClaudeBridgeConversationSystem(
 export function createExternalBackendBridgeRuntime(options: {
   coreRuntime: AgentRuntime;
   getBridgeUrl: () => string;
+  /**
+   * Where attached past chats are read from; the conversation stores unless
+   * a test supplies a fake.
+   */
+  pastConversationSource?: PastConversationSource;
 }): AgentRuntimeLike {
-  const { coreRuntime, getBridgeUrl } = options;
+  const { coreRuntime, getBridgeUrl, pastConversationSource } = options;
   let cachedTools: ExternalToolDescriptor[] = [];
   let cacheExpiresAt = 0;
   let refreshInFlight: Promise<void> | null = null;
@@ -3427,6 +3522,7 @@ export function createExternalBackendBridgeRuntime(options: {
             runExternalBridgeTurn(bridgeUrl, {
               ...params,
               request,
+              pastConversationSource,
               onStart: async (runId) => {
                 if (scopedMcpToken) {
                   updateScopedZoteroMcpScope(scopedMcpToken, { runId });

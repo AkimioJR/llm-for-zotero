@@ -8,8 +8,10 @@ import type {
 import type {
   ActiveNoteContext,
   AdvancedModelParams,
+  AttachedConversationRef,
   ChatAttachment,
   CollectionContextRef,
+  ConversationSystem,
   LocalDocumentResource,
   NoteContextRef,
   PaperContentSourceMode,
@@ -107,6 +109,24 @@ export type AgentRequest = {
   pinnedPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
+  /**
+   * Past chats the current user message attached (at most three). The
+   * built-in agent renders them once, into the transcript, on this turn.
+   */
+  attachedConversations?: AttachedConversationRef[];
+  /**
+   * Past chats this Claude Code turn puts in front of its text: the current
+   * message's chats plus those of the slash messages right before it (a
+   * slash message cannot carry them). Host-set by the agent engine with
+   * resolveDeliveredPastChatRefs; empty on a slash turn and for other systems.
+   */
+  deliveredConversations?: AttachedConversationRef[];
+  /**
+   * Every past chat attached anywhere in this conversation: the chats
+   * past_chat_read may open. Host-set from the stored user messages and
+   * copied into the Zotero MCP scope, never taken from tool arguments.
+   */
+  attachedConversationScope?: AttachedConversationRef[];
   availableAttachmentResources?: AgentAttachmentResource[];
   attachmentResourceSummaries?: AgentAttachmentResourceSummary[];
   attachments?: ChatAttachment[];
@@ -1312,6 +1332,19 @@ export type AgentToolContext = {
     prepared: PreparedToolExecution,
   ) => Promise<PreparedToolExecutionResult>;
   request: AgentRuntimeRequest;
+  /**
+   * Host-set system of the calling conversation: the MCP server sets it from
+   * the scope's runtime. Absent for the built-in agent, whose conversations
+   * are "upstream" ones.
+   */
+  conversationSystem?: ConversationSystem;
+  /**
+   * Host hook called when past_chat_attach added a chat to the turn's scope.
+   * The MCP server adds it to the scope token, so later calls of the turn can
+   * open it; the built-in runtime needs none, because its calls share
+   * context.request.
+   */
+  extendAttachedConversationScope?: (ref: AttachedConversationRef) => void;
   /** Durable identity of the execution that owns any journalled writes. */
   runId?: string;
   item: Zotero.Item | null;

@@ -47,6 +47,7 @@ export type PanelDomRefs = {
   slashMenu: HTMLDivElement | null;
   slashUploadOption: HTMLButtonElement | null;
   slashReferenceOption: HTMLButtonElement | null;
+  slashPastConversationOption: HTMLButtonElement | null;
   slashPdfPageOption: HTMLButtonElement | null;
   slashPdfMultiplePagesOption: HTMLButtonElement | null;
   slashSideChatOption: HTMLButtonElement | null;
@@ -216,6 +217,9 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     ) as HTMLButtonElement | null,
     slashReferenceOption: body.querySelector(
       "#llm-slash-reference-option",
+    ) as HTMLButtonElement | null,
+    slashPastConversationOption: body.querySelector(
+      "#llm-slash-past-conversation-option",
     ) as HTMLButtonElement | null,
     slashPdfPageOption: body.querySelector(
       "#llm-slash-pdf-page-option",

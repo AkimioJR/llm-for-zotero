@@ -10,6 +10,10 @@ export type WorkflowTestSendInterceptor = (
 export type WorkflowTestFinalRequestSnapshot = {
   prompt: string;
   historyTexts: string[];
+  /** The protocol the request would go out with. */
+  providerProtocol: string;
+  /** Roles of the messages sent after the input cap, system included. */
+  finalMessageRoles: string[];
   combinedContext: string;
   strategy: ContextAssemblyStrategy;
   systemMessages: string[];

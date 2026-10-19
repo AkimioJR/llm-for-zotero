@@ -16,6 +16,9 @@ import { createLibraryReadTool } from "./read/libraryRead";
 import { createLiteratureReviewTool } from "./read/reviewLiterature";
 import { createLiteratureSearchTool } from "./read/literatureSearch";
 import { createContextReadTool } from "./read/contextRead";
+import { createPastChatReadTool } from "./read/pastChatRead";
+import { createPastChatSearchTool } from "./read/pastChatSearch";
+import { createPastChatAttachTool } from "./control/pastChatAttach";
 import { createWebReadTool } from "./read/webRead";
 import { createWebSearchTool } from "./read/webSearch";
 import { AgentToolRegistry } from "./registry";
@@ -691,6 +694,9 @@ export function createBuiltInToolRegistry(
   registry.register(runCommand);
   registry.register(zoteroScript);
   registry.register(createContextReadTool());
+  registry.register(createPastChatReadTool());
+  registry.register(createPastChatSearchTool());
+  registry.register(createPastChatAttachTool());
   registry.register(
     createLoadSkillTool({
       getToolDefinitions: (request) =>

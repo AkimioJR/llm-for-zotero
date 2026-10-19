@@ -41,6 +41,7 @@ import {
 import { CONNECTED_RUNTIME_EFFECT_WORK_CATEGORY } from "../agent/workCategory";
 import {
   buildLegacyCodexAppServerChatInput,
+  insertCodexPastChatTurnInput,
   prepareCodexAppServerChatTurn,
   type CodexAppServerUserInput,
 } from "../utils/codexAppServerInput";
@@ -1684,12 +1685,14 @@ function buildCodexNativeScopedMcpScope(params: {
     executionContext:
       params.preparedRequest?.executionContext || params.executionContext,
     exhaustiveReadBackend: "codex_responses",
+    attachedConversationScope: resolvedRequest.attachedConversationScope,
     turnPaperScope: resolvedRequest.turnPaperScope,
     turnPaperScopeWarnings: resolvedRequest.turnPaperScopeWarnings,
   };
 }
 
 export function buildCodexNativeScopedMcpScopeForTests(params: {
+  preparedRequest?: import("../agent/types").AgentRuntimeRequest;
   executionContext?: import("../agent/types").AgentExecutionContext;
   scope: CodexNativeConversationScope;
   profileSignature: string;
@@ -3014,6 +3017,12 @@ export async function runCodexAppServerNativeTurn(input: {
   conversationGeneration?: number;
   model: string;
   messages: ChatMessage[];
+  /**
+   * The past-chat block of the chats the current user message attached,
+   * rendered by the panel (chat.ts). It goes into this turn's input only;
+   * `messages` carry the blocks of earlier messages for a seeded thread.
+   */
+  attachedPastChatText?: string;
   reasoning?: ReasoningConfig;
   signal?: AbortSignal;
   codexPath?: string;
@@ -3900,6 +3909,15 @@ export async function runCodexAppServerNativeTurn(input: {
             });
           }
         }
+        // The current turn's past chats go into the turn input after the
+        // inject/legacy choice (a legacy input is rebuilt from the messages,
+        // which would drop them) and before the skill inputs. The resolver
+        // returns the prepared turn input itself unless it fell back.
+        input = insertCodexPastChatTurnInput(
+          input as CodexAppServerUserInput[],
+          params.attachedPastChatText,
+          { legacy: input !== preparedTurn.turnInput },
+        );
         const nativeInput = useNativeSkillInputs
           ? applyNativeSkillInputs({
               input: input as CodexAppServerUserInput[],
