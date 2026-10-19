@@ -105,6 +105,7 @@ import type {
   WorkflowTestReaderPopupStandaloneRoutingDiagnostics,
   WorkflowTestReaderSelectionTrackingDiagnostics,
   WorkflowTestRuntimeGeometry,
+  WorkflowTestRuntimeBadge,
   WorkflowTestRuntimeSystemToggle,
   WorkflowTestStandaloneComposerResizeDiagnostics,
   WorkflowTestStandaloneDiagnostics,
@@ -626,6 +627,91 @@ async function appendWorkflowStoredMessage(
     return;
   }
   await appendMessage(conversationKey, message);
+}
+
+function readRuntimeBadge(
+  root: ParentNode | null | undefined,
+): WorkflowTestRuntimeBadge | undefined {
+  const button = root?.querySelector(
+    "#llm-runtime-mode-toggle",
+  ) as HTMLButtonElement | null;
+  if (!button) return undefined;
+  const menu = root?.querySelector("#llm-runtime-menu") as HTMLElement | null;
+  const menuOpen = Boolean(menu && menu.style.display !== "none");
+  return {
+    visible: button.style.display !== "none",
+    label: (
+      button.querySelector(".llm-agent-toggle-label")?.textContent || ""
+    ).trim(),
+    clickable: !button.disabled,
+    menuOpen,
+    menuItems: menuOpen
+      ? (
+          Array.from(
+            menu?.querySelectorAll("[data-runtime-system]") || [],
+          ) as HTMLElement[]
+        ).map((option) => ({
+          system: option.dataset.runtimeSystem || "",
+          label: (option.textContent || "").trim(),
+          selected: option.classList.contains("llm-permission-option-selected"),
+        }))
+      : [],
+  };
+}
+
+function dispatchRuntimeMenuClick(element: HTMLElement): void {
+  const eventCtor = element.ownerDocument.defaultView?.MouseEvent;
+  if (eventCtor) {
+    element.dispatchEvent(
+      new eventCtor("click", { bubbles: true, cancelable: true }),
+    );
+  } else {
+    element.click();
+  }
+}
+
+/** Opens the badge menu under `root` if it is closed, and reads it. */
+async function openRuntimeMenuIn(
+  root: ParentNode,
+  owner: string,
+): Promise<WorkflowTestRuntimeBadge> {
+  const button = root.querySelector(
+    "#llm-runtime-mode-toggle",
+  ) as HTMLButtonElement | null;
+  if (!button) throw new Error(`${owner} runtime badge was not rendered`);
+  if (button.style.display === "none") {
+    throw new Error(`${owner} runtime badge is hidden`);
+  }
+  if (button.disabled) {
+    throw new Error(`${owner} runtime badge is not clickable`);
+  }
+  if (readRuntimeBadge(root)?.menuOpen !== true) {
+    dispatchRuntimeMenuClick(button);
+    await Zotero.Promise.delay(100);
+  }
+  const badge = readRuntimeBadge(root);
+  if (!badge?.menuOpen) {
+    throw new Error(`${owner} runtime menu did not open`);
+  }
+  return badge;
+}
+
+/** Opens the badge menu under `root` if needed and clicks one option. */
+async function clickRuntimeMenuOptionIn(
+  root: ParentNode,
+  owner: string,
+  system: ConversationSystem,
+): Promise<void> {
+  await openRuntimeMenuIn(root, owner);
+  const option = root.querySelector(
+    `#llm-runtime-menu [data-runtime-system='${system}']`,
+  ) as HTMLElement | null;
+  if (!option) {
+    throw new Error(
+      `${owner} runtime menu has no ${system} option: ${JSON.stringify(readRuntimeBadge(root))}`,
+    );
+  }
+  dispatchRuntimeMenuClick(option);
 }
 
 function readRuntimeSystemToggles(
@@ -2283,30 +2369,37 @@ async function clickPanelSystemTogglesRapidly(
   return getDiagnostics(panelId);
 }
 
-async function clickPanelRuntimeModeToggle(
+async function openPanelRuntimeMenu(
   panelId: string,
+): Promise<WorkflowTestRuntimeBadge> {
+  assertWorkflowTestEnabled();
+  return openRuntimeMenuIn(getPanel(panelId).body, "Panel");
+}
+
+async function pickPanelRuntime(
+  panelId: string,
+  system: ConversationSystem,
 ): Promise<WorkflowTestDiagnostics> {
   assertWorkflowTestEnabled();
   const panel = getPanel(panelId);
-  const button = panel.body.querySelector(
-    "#llm-runtime-mode-toggle",
-  ) as HTMLButtonElement | null;
-  if (!button) {
-    throw new Error("Panel runtime mode toggle was not rendered");
+  await clickRuntimeMenuOptionIn(panel.body, "Panel", system);
+  const deadline = Date.now() + 15000;
+  let diagnostics = await getDiagnostics(panelId);
+  while (Date.now() < deadline) {
+    if (
+      diagnostics.conversationSystem === system &&
+      diagnostics.runtimeSystemToggles
+        .filter((toggle) => toggle.visible)
+        .every((toggle) => !toggle.disabled)
+    ) {
+      return diagnostics;
+    }
+    await Zotero.Promise.delay(25);
+    diagnostics = await getDiagnostics(panelId);
   }
-  if (button.style.display === "none") {
-    throw new Error("Panel runtime mode toggle is hidden");
-  }
-  const eventCtor = panel.body.ownerDocument.defaultView?.MouseEvent;
-  if (eventCtor) {
-    button.dispatchEvent(
-      new eventCtor("click", { bubbles: true, cancelable: true }),
-    );
-  } else {
-    button.click();
-  }
-  await Zotero.Promise.delay(150);
-  return getDiagnostics(panelId);
+  throw new Error(
+    `Timed out waiting for panel runtime ${system} after a badge pick: ${JSON.stringify(diagnostics)}`,
+  );
 }
 
 async function measurePanelRuntimeGeometry(
@@ -3797,6 +3890,7 @@ function readStandaloneDiagnostics(): WorkflowTestStandaloneDiagnostics {
       doc,
       ".llm-standalone-runtime-system-controls",
     ),
+    runtimeBadge: readRuntimeBadge(contentArea),
     lastSend,
     lastFinalRequest,
   };
@@ -3981,6 +4075,25 @@ async function waitForStandaloneConversationSystem(
     );
   }
   return diagnostics;
+}
+
+async function openStandaloneRuntimeMenu(): Promise<WorkflowTestRuntimeBadge> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const content = doc.querySelector(".llm-standalone-content");
+  if (!content) throw new Error("Standalone content area was not rendered");
+  return openRuntimeMenuIn(content, "Standalone");
+}
+
+async function pickStandaloneRuntime(
+  system: ConversationSystem,
+): Promise<WorkflowTestStandaloneDiagnostics> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const content = doc.querySelector(".llm-standalone-content");
+  if (!content) throw new Error("Standalone content area was not rendered");
+  await clickRuntimeMenuOptionIn(content, "Standalone", system);
+  return waitForStandaloneConversationSystem(system);
 }
 
 async function clickStandaloneSystemTogglesRapidly(
@@ -5652,6 +5765,7 @@ async function getDiagnostics(
       body,
       ".llm-panel-runtime-system-controls",
     ),
+    runtimeBadge: readRuntimeBadge(body),
     webChatMode: panelRoot?.dataset.webchatMode === "true",
     modelButtonDisabled: (
       body?.querySelector("#llm-model-toggle") as HTMLButtonElement | null
@@ -8775,7 +8889,8 @@ export function installWorkflowTestHarness(targetAddon: {
     attachPastChatAsAgentInPanel,
     clickPanelSystemToggle,
     clickPanelSystemTogglesRapidly,
-    clickPanelRuntimeModeToggle,
+    openPanelRuntimeMenu,
+    pickPanelRuntime,
     measurePanelRuntimeGeometry,
     measurePanelFooterLayout,
     selectNoteEditorText,
@@ -8889,6 +9004,8 @@ export function installWorkflowTestHarness(targetAddon: {
     clickStandaloneTab,
     toggleStandaloneSidebar,
     hoverStandaloneSidebarToggle,
+    openStandaloneRuntimeMenu,
+    pickStandaloneRuntime,
     clickStandaloneSystemToggle,
     clickStandaloneSystemTogglesRapidly,
     measureStandaloneRuntimeGeometry,

@@ -519,7 +519,11 @@ import { createPdfPaperAttachmentResolver } from "./setupHandlers/controllers/pd
 import { createLocalPdfResourceResolver } from "./setupHandlers/controllers/localPdfResourceResolver";
 import { isZoteroPdfAttachmentCandidate } from "./setupHandlers/controllers/pdfAttachmentPolicy";
 import { resolvePdfModeModelInputs } from "./setupHandlers/controllers/pdfPaperModelInputController";
-import { attachFooterPermissionControl } from "./footerPermissionControl";
+import {
+  FOOTER_PERMISSION_MENU_OPEN_CLASS,
+  attachFooterPermissionControl,
+} from "./footerPermissionControl";
+import { resolveRuntimeBadgeState } from "./runtimeBadge";
 import { attachFooterQuotaControl } from "./footerQuotaControl";
 import { readFooterQuota } from "./footerQuotaReader";
 import { resolveQuotaTarget } from "../../providers/quota";
@@ -661,6 +665,12 @@ export type SetupHandlersHooks = {
   leaveWebChatMode?: () => Promise<boolean>;
   /** Called by standalone to resolve the currently selected model consistently. */
   getCurrentModelName?: () => string | null;
+  /**
+   * Called when the runtime badge menu picks a runtime. The standalone window
+   * owns its runtime and remounts the panel, so it switches itself (with a
+   * fresh draft). Without this hook the panel switches the sidebar runtime.
+   */
+  requestConversationSystem?: (system: ConversationSystem) => void;
 };
 
 const setupHandlersCleanupByBody = new WeakMap<Element, () => void>();
@@ -756,6 +766,7 @@ export function setupHandlers(
     modelMenu,
     reasoningBtn,
     runtimeModeBtn,
+    runtimeMenu,
     reasoningSlot,
     reasoningMenu,
     actionsRow,
@@ -1314,17 +1325,11 @@ export function setupHandlers(
   };
   const getCurrentRuntimeMode = (): ChatRuntimeMode => {
     if (!item) return "chat";
-    const key = getConversationKey(item);
-    const noteSession = resolveCurrentNoteSession();
     return resolveRuntimeModeForConversation({
-      cachedMode: selectedRuntimeModeCache.get(key) || null,
       isRuntimeConversationSystem: isRuntimeConversationSystem(),
       runtimeConversationSystem: getConversationSystem(),
       isWebChat: isWebChatModeActive(),
       agentModeEnabled: getAgentModeEnabled(),
-      displayConversationKind: resolveDisplayConversationKind(item),
-      noteKind: noteSession?.noteKind || null,
-      lastUsedRuntimeMode: panelChoices.getLastUsedRuntimeMode(),
     });
   };
   let syncFooterPermissionControl = () => Promise.resolve();
@@ -1334,81 +1339,69 @@ export function setupHandlers(
     // Plain chat lists the scope only; Agent mode records reads.
     syncTaskProgressPanel(body);
   };
-  const updateRuntimeModeButtonState = () => {
-    void syncFooterPermissionControl();
-    if (!runtimeModeBtn) return;
-    const indicator = runtimeModeBtn.querySelector(
-      ".llm-agent-toggle-indicator",
-    ) as HTMLSpanElement | null;
-    if (isRuntimeConversationSystem()) {
-      const labelText = isCodexConversationSystem() ? "Codex" : "Claude Code";
-      const staticMode: ChatRuntimeMode = isCodexConversationSystem()
-        ? "chat"
-        : "agent";
-      runtimeModeBtn.style.display = "";
-      const label = runtimeModeBtn.querySelector(
-        ".llm-agent-toggle-label",
-      ) as HTMLSpanElement | null;
-      if (label) {
-        label.textContent = labelText;
-      }
-      runtimeModeBtn.classList.remove("llm-agent-toggle-enabled");
-      runtimeModeBtn.classList.add("llm-runtime-mode-static");
-      runtimeModeBtn.dataset.mode = staticMode;
-      runtimeModeBtn.dataset.system = getConversationSystem();
-      runtimeModeBtn.title = isCodexConversationSystem()
-        ? "Codex native runtime"
-        : labelText;
-      runtimeModeBtn.setAttribute(
-        "aria-label",
-        isCodexConversationSystem() ? "Codex native runtime" : labelText,
-      );
-      runtimeModeBtn.setAttribute("aria-pressed", "false");
-      runtimeModeBtn.setAttribute("aria-disabled", "true");
-      runtimeModeBtn.disabled = true;
-      if (indicator) indicator.style.display = "none";
-      panelRoot.dataset.runtimeMode = staticMode;
-      return;
-    }
-    runtimeModeBtn.classList.remove("llm-runtime-mode-static");
-    delete runtimeModeBtn.dataset.system;
-    runtimeModeBtn.removeAttribute("aria-disabled");
-    runtimeModeBtn.disabled = false;
-    if (indicator) indicator.style.display = "";
-    const agentFeatureEnabled = getAgentModeEnabled();
-    // [webchat] Agent mode not available in webchat — hide toggle
+  const closeRuntimeMenu = () => {
+    if (!runtimeMenu) return;
+    setFloatingMenuOpen(runtimeMenu, FOOTER_PERMISSION_MENU_OPEN_CLASS, false);
+    runtimeMenu.replaceChildren();
+    runtimeModeBtn?.setAttribute("aria-expanded", "false");
+  };
+  const getRuntimeBadgeState = () => {
     let webChatActive = false;
     try {
       webChatActive = isWebChatModeActive();
     } catch {
       /* not ready */
     }
-    // Hide the entire toggle when agent feature is disabled or in webchat mode.
-    const shouldHide = !agentFeatureEnabled || webChatActive;
-    runtimeModeBtn.style.display = shouldHide ? "none" : "";
-    if (shouldHide) {
-      panelRoot.dataset.runtimeMode = "chat";
+    return resolveRuntimeBadgeState({
+      system: getConversationSystem(),
+      agentEnabled: getAgentModeEnabled(),
+      codexEnabled: isCodexModeAvailable(),
+      claudeEnabled: isClaudeModeAvailable(),
+      isWebChat: webChatActive,
+      isSideChat: isSidePanel,
+    });
+  };
+  const updateRuntimeModeButtonState = () => {
+    void syncFooterPermissionControl();
+    if (!runtimeModeBtn) return;
+    const state = getRuntimeBadgeState();
+    const mode = getCurrentRuntimeMode();
+    panelRoot.dataset.runtimeMode = mode;
+    runtimeModeBtn.style.display = state.visible ? "" : "none";
+    if (!state.visible) {
+      closeRuntimeMenu();
       return;
     }
-    const mode = getCurrentRuntimeMode();
-    const enabled = mode === "agent";
     const label = runtimeModeBtn.querySelector(
       ".llm-agent-toggle-label",
     ) as HTMLSpanElement | null;
-    if (label) {
-      label.textContent = t("Agent (beta)");
-    }
-    runtimeModeBtn.classList.toggle("llm-agent-toggle-enabled", enabled);
+    if (label) label.textContent = state.label;
     runtimeModeBtn.dataset.mode = mode;
-    runtimeModeBtn.title = enabled
-      ? t("Agent mode ON. Click to switch to Chat mode")
-      : t("Agent mode OFF. Click to switch to Agent mode");
-    runtimeModeBtn.setAttribute(
-      "aria-label",
-      mode === "agent" ? t("Switch to Chat mode") : t("Switch to Agent mode"),
+    runtimeModeBtn.dataset.system = getConversationSystem();
+    runtimeModeBtn.classList.toggle(
+      "llm-runtime-mode-static",
+      !state.clickable,
     );
-    runtimeModeBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
-    panelRoot.dataset.runtimeMode = mode;
+    runtimeModeBtn.disabled = !state.clickable;
+    if (state.clickable) {
+      runtimeModeBtn.removeAttribute("aria-disabled");
+      runtimeModeBtn.setAttribute("aria-haspopup", "menu");
+      if (!runtimeModeBtn.hasAttribute("aria-expanded")) {
+        runtimeModeBtn.setAttribute("aria-expanded", "false");
+      }
+      runtimeModeBtn.title = t("Switch runtime");
+      runtimeModeBtn.setAttribute(
+        "aria-label",
+        `${state.label}, ${t("Switch runtime")}`,
+      );
+    } else {
+      closeRuntimeMenu();
+      runtimeModeBtn.setAttribute("aria-disabled", "true");
+      runtimeModeBtn.removeAttribute("aria-haspopup");
+      runtimeModeBtn.removeAttribute("aria-expanded");
+      runtimeModeBtn.title = state.label;
+      runtimeModeBtn.setAttribute("aria-label", state.label);
+    }
   };
   const setCurrentRuntimeMode = (mode: ChatRuntimeMode) => {
     if (!item || isRuntimeConversationSystem()) {
@@ -5158,15 +5151,19 @@ export function setupHandlers(
     syncConversationIdentity();
   };
 
+  /**
+   * Switches this panel's runtime to `targetSystem`. The header buttons resolve
+   * their toggle rule first (`resolveRuntimeSystemToggleTarget`); the runtime
+   * badge menu passes the picked system straight through.
+   */
   const switchRuntimeSystemFromControl = async (
-    clickedSystem: RuntimeConversationSystem,
+    targetSystem: ConversationSystem,
   ) => {
     if (
       runtimeSystemSwitchInFlight ||
       !item ||
-      (clickedSystem === "codex"
-        ? !isCodexModeAvailable()
-        : !isClaudeModeAvailable())
+      (targetSystem === "codex" && !isCodexModeAvailable()) ||
+      (targetSystem === "claude_code" && !isClaudeModeAvailable())
     ) {
       return;
     }
@@ -5174,11 +5171,7 @@ export function setupHandlers(
     runtimeSystemSwitchInFlight = true;
     updateRuntimeSystemToggles();
     try {
-      const nextSystem = resolveRuntimeSystemToggleTarget(
-        getConversationSystem(),
-        clickedSystem,
-      );
-      await switchConversationSystem(nextSystem, { forceFresh: true });
+      await switchConversationSystem(targetSystem, { forceFresh: true });
     } catch (err) {
       appLogger.warn("LLM: Failed to switch conversation runtime", err);
     } finally {
@@ -5192,7 +5185,9 @@ export function setupHandlers(
     button.addEventListener("click", (event: Event) => {
       event.preventDefault();
       event.stopPropagation();
-      void switchRuntimeSystemFromControl(system);
+      void switchRuntimeSystemFromControl(
+        resolveRuntimeSystemToggleTarget(getConversationSystem(), system),
+      );
     });
   }
 
@@ -8013,10 +8008,77 @@ export function setupHandlers(
     void executeSend();
   });
 
-  if (runtimeModeBtn) {
+  // The runtime badge opens a small menu above it; picking a runtime switches
+  // to it with a fresh draft, like the header buttons.
+  const pickRuntimeFromBadgeMenu = (system: ConversationSystem) => {
+    closeRuntimeMenu();
+    if (system === getConversationSystem()) return;
+    if (hooks?.requestConversationSystem) {
+      hooks.requestConversationSystem(system);
+      return;
+    }
+    void switchRuntimeSystemFromControl(system);
+  };
+  const renderRuntimeMenu = () => {
+    if (!runtimeMenu) return;
+    runtimeMenu.replaceChildren();
+    const state = getRuntimeBadgeState();
+    const currentSystem = getConversationSystem();
+    for (const entry of state.items) {
+      const selected = entry.system === currentSystem;
+      const row = runtimeMenu.ownerDocument.createElement("button");
+      row.type = "button";
+      row.className = "llm-permission-option";
+      row.dataset.runtimeSystem = entry.system;
+      row.setAttribute("role", "menuitemradio");
+      row.setAttribute("aria-checked", String(selected));
+      row.classList.toggle("llm-permission-option-selected", selected);
+      row.textContent = entry.label;
+      row.addEventListener("click", (event: Event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        pickRuntimeFromBadgeMenu(entry.system);
+        runtimeModeBtn?.focus();
+      });
+      runtimeMenu.appendChild(row);
+    }
+  };
+  const stopRuntimeMenuPointerEvent = (event: Event) => event.stopPropagation();
+  const onRuntimeMenuOutsidePointerDown = (event: Event) => {
+    if (!runtimeMenu || !isFloatingMenuOpen(runtimeMenu)) return;
+    const target = event.target as Node | null;
+    if (
+      target &&
+      (runtimeMenu.contains(target) || runtimeModeBtn?.contains(target))
+    ) {
+      return;
+    }
+    closeRuntimeMenu();
+  };
+  const onRuntimeMenuEscape = (event: Event) => {
+    const keyboardEvent = event as KeyboardEvent;
+    if (
+      keyboardEvent.key !== "Escape" ||
+      !runtimeMenu ||
+      !isFloatingMenuOpen(runtimeMenu)
+    ) {
+      return;
+    }
+    closeRuntimeMenu();
+    runtimeModeBtn?.focus();
+    keyboardEvent.preventDefault();
+    keyboardEvent.stopPropagation();
+  };
+  const runtimeMenuDoc = body.ownerDocument;
+  if (runtimeModeBtn && runtimeMenu) {
     runtimeModeBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
+      if (runtimeModeBtn.disabled) return;
+      if (runtimeModeBtn.getAttribute("aria-expanded") === "true") {
+        closeRuntimeMenu();
+        return;
+      }
       // Same contract as the runtime-system toggles: the fence delivers this
       // click even on a drifted panel, so the handler repairs the drift instead
       // of refusing the only control that can end it.
@@ -8027,22 +8089,26 @@ export function setupHandlers(
       ) {
         return;
       }
-      const nextMode: ChatRuntimeMode =
-        getCurrentRuntimeMode() === "agent" ? "chat" : "agent";
-      setCurrentRuntimeMode(nextMode);
-      // Only an explicit toggle updates the sticky default, so implicit
-      // switches (/compact, skill selection) stay scoped to this conversation.
-      panelChoices.setLastUsedRuntimeMode(nextMode);
-      if (status) {
-        setStatus(
-          status,
-          nextMode === "agent"
-            ? t("Agent mode enabled")
-            : t("Chat mode enabled"),
-          "ready",
-        );
+      if (!getRuntimeBadgeState().clickable) return;
+      renderRuntimeMenu();
+      positionFloatingMenu(body, runtimeMenu, runtimeModeBtn, {
+        horizontalAlignment: "center",
+        verticalPlacement: "above",
+      });
+      if (runtimeMenu.scrollHeight <= runtimeMenu.clientHeight) {
+        runtimeMenu.style.overflowY = "hidden";
       }
+      setFloatingMenuOpen(runtimeMenu, FOOTER_PERMISSION_MENU_OPEN_CLASS, true);
+      runtimeModeBtn.setAttribute("aria-expanded", "true");
     });
+    runtimeMenu.addEventListener("pointerdown", stopRuntimeMenuPointerEvent);
+    runtimeMenu.addEventListener("mousedown", stopRuntimeMenuPointerEvent);
+    runtimeMenuDoc.addEventListener(
+      "pointerdown",
+      onRuntimeMenuOutsidePointerDown,
+      true,
+    );
+    runtimeMenuDoc.addEventListener("keydown", onRuntimeMenuEscape, true);
   }
 
   // Enter key (Shift+Enter for newline).
@@ -8647,6 +8713,12 @@ export function setupHandlers(
     quotaControl = null;
     disposeFooterPermissionControl?.();
     disposeFooterPermissionControl = null;
+    runtimeMenuDoc.removeEventListener(
+      "pointerdown",
+      onRuntimeMenuOutsidePointerDown,
+      true,
+    );
+    runtimeMenuDoc.removeEventListener("keydown", onRuntimeMenuEscape, true);
     cleanupMineruPaperSourceObservers?.();
     cleanupModelCapabilitySubscription?.();
     cleanupModelCapabilitySubscription = null;

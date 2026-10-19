@@ -590,6 +590,10 @@ describe("panel ownership fence", function () {
     const standalone = buildProductionRuntimeToggles("standalone");
     const modeToggle = new SelectorElement();
     modeToggle.id = "llm-runtime-mode-toggle";
+    const runtimeMenu = new SelectorElement();
+    runtimeMenu.id = "llm-runtime-menu";
+    const runtimeMenuOption = new SelectorElement();
+    runtimeMenu.append(runtimeMenuOption);
 
     for (const target of [
       sidebar.button,
@@ -598,6 +602,7 @@ describe("panel ownership fence", function () {
       standalone.button,
       standalone.icon,
       modeToggle,
+      runtimeMenuOption,
     ]) {
       assert.isFalse(
         shouldOwnershipFenceSwallowEvent(

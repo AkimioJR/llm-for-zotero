@@ -294,10 +294,12 @@ describe("workflow: the side chat is never saved", function () {
       kind: "global",
     });
     assert.equal(side.surface, "side");
-    // The side chat starts in the last used mode; switch to Agent if needed.
-    let diagnostics = await api.getDiagnostics(side.panelId);
-    if (diagnostics.runtimeMode !== "agent")
-      diagnostics = await api.clickPanelRuntimeModeToggle(side.panelId);
+    // The built-in runtime is Agent; a side chat never offers another one.
+    const diagnostics = await api.getDiagnostics(side.panelId);
+    assert.isFalse(
+      diagnostics.runtimeBadge?.clickable,
+      "the side chat's runtime badge is a static label",
+    );
     assert.equal(
       diagnostics.runtimeMode,
       "agent",

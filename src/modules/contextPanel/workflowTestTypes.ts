@@ -382,6 +382,18 @@ export type WorkflowTestRuntimeSystemToggle = {
   ariaPressed: boolean;
 };
 
+/** The composer's runtime badge and its menu, as a reader sees them. */
+export type WorkflowTestRuntimeBadge = {
+  visible: boolean;
+  /** Text on the badge itself ("Agent", "Chat", "Codex" or "Claude"). */
+  label: string;
+  /** False when the badge is disabled (a static label). */
+  clickable: boolean;
+  menuOpen: boolean;
+  /** Menu entries in display order; empty while the menu is closed. */
+  menuItems: Array<{ system: string; label: string; selected: boolean }>;
+};
+
 export type WorkflowTestPermissionSurfaceDiagnostics = {
   provider: ConversationSystem | null;
   visible: boolean;
@@ -570,6 +582,7 @@ export type WorkflowTestDiagnostics = {
   historyNewVisible?: boolean;
   historyToggleVisible?: boolean;
   runtimeSystemToggles: WorkflowTestRuntimeSystemToggle[];
+  runtimeBadge?: WorkflowTestRuntimeBadge;
   webChatMode?: boolean;
   modelButtonDisabled?: boolean;
   inputValue?: string;
@@ -675,6 +688,7 @@ export type WorkflowTestStandaloneDiagnostics = {
   openTabText?: string;
   statusText?: string;
   runtimeSystemToggles: WorkflowTestRuntimeSystemToggle[];
+  runtimeBadge?: WorkflowTestRuntimeBadge;
   lastSend: SendQuestionOptions | null;
   lastFinalRequest: WorkflowTestFinalRequestSnapshot | null;
 };
@@ -1294,8 +1308,12 @@ export type WorkflowTestApi = {
     panelId: string,
     system: RuntimeConversationSystem,
   ) => Promise<WorkflowTestDiagnostics>;
-  clickPanelRuntimeModeToggle: (
+  /** Opens the runtime badge menu; resolves with the badge and its items. */
+  openPanelRuntimeMenu: (panelId: string) => Promise<WorkflowTestRuntimeBadge>;
+  /** Picks a runtime from the badge menu and waits for the switch to finish. */
+  pickPanelRuntime: (
     panelId: string,
+    system: ConversationSystem,
   ) => Promise<WorkflowTestDiagnostics>;
   clickPanelSystemTogglesRapidly: (
     panelId: string,
@@ -1351,6 +1369,10 @@ export type WorkflowTestApi = {
   ) => Promise<WorkflowTestStandaloneDiagnostics>;
   toggleStandaloneSidebar: () => Promise<WorkflowTestStandaloneDiagnostics>;
   hoverStandaloneSidebarToggle: () => Promise<WorkflowTestStandaloneDiagnostics>;
+  openStandaloneRuntimeMenu: () => Promise<WorkflowTestRuntimeBadge>;
+  pickStandaloneRuntime: (
+    system: ConversationSystem,
+  ) => Promise<WorkflowTestStandaloneDiagnostics>;
   clickStandaloneSystemToggle: (
     system: RuntimeConversationSystem,
   ) => Promise<WorkflowTestStandaloneDiagnostics>;

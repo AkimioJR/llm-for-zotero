@@ -1734,6 +1734,12 @@ export function openStandaloneChat(options?: {
               if (cancelled || newWin.closed) return;
               return await createStandaloneOpenConversationForContext();
             },
+            // The runtime badge menu: the window owns its runtime, and the
+            // sidebar's stays as it is.
+            requestConversationSystem: (system) => {
+              if (cancelled || newWin.closed) return;
+              void switchConversationSystem(system, { forceFresh: true });
+            },
           };
           const llmMain = mountPanelShell({
             body: contentArea,

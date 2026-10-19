@@ -555,10 +555,11 @@ export function renderPanelOwnershipBlocked(
  * Both surfaces that render these controls give every button the shared
  * `llm-runtime-system-toggle` class on top of their own
  * (`llm-panel-runtime-system-toggle`, `llm-standalone-runtime-system-toggle`),
- * so the shared class is what this matches.
+ * so the shared class is what this matches. The runtime badge opens a menu
+ * (`#llm-runtime-menu`); its options are controls of the same kind.
  */
 const OWNERSHIP_FENCE_EXEMPT_SELECTOR =
-  "#llm-runtime-mode-toggle, .llm-runtime-system-toggle";
+  "#llm-runtime-mode-toggle, #llm-runtime-menu, .llm-runtime-system-toggle";
 
 function matchesWithin(target: unknown, selector: string): boolean {
   const element = target as {

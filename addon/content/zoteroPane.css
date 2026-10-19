@@ -10410,21 +10410,33 @@ label.llm-search-results-item:hover {
   align-items: center;
   gap: 8px;
   min-height: 26px;
-  padding: 3px 10px 3px 8px;
+  padding: 3px 10px;
   border-radius: 999px;
   border: 1px solid var(--stroke-secondary);
   background: var(--material-background);
-  color: var(--fill-secondary);
+  color: var(--fill-primary, #0d0d0d);
   font-size: var(--llm-fs-12);
+  font-weight: 700;
   line-height: 1.2;
   cursor: pointer;
   user-select: none;
   box-sizing: border-box;
 }
 
+#llm-runtime-mode-toggle .llm-agent-toggle-label {
+  font-weight: 700;
+}
+
+#llm-runtime-mode-toggle[data-system="claude_code"] {
+  color: #d77757;
+}
+
 #llm-runtime-mode-toggle:hover:not(:disabled) {
-  border-color: var(--stroke-primary);
-  color: var(--fill-primary);
+  background: color-mix(
+    in srgb,
+    var(--fill-primary, #0d0d0d) 8%,
+    var(--material-background)
+  );
 }
 
 #llm-runtime-mode-toggle:focus-visible {
@@ -10432,35 +10444,14 @@ label.llm-search-results-item:hover {
   outline-offset: 1px;
 }
 
-#llm-runtime-mode-toggle:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
+#llm-runtime-mode-toggle:disabled,
 #llm-runtime-mode-toggle.llm-runtime-mode-static {
   cursor: default;
-  border-color: var(--stroke-secondary);
-  color: #d77757;
-  font-weight: 700;
 }
 
-#llm-runtime-mode-toggle.llm-runtime-mode-static:hover:not(:disabled) {
-  border-color: var(--stroke-secondary);
-  color: #d77757;
-}
-
-#llm-runtime-mode-toggle.llm-runtime-mode-static[data-system="codex"] {
-  color: var(--fill-primary, #0d0d0d);
-}
-
-#llm-runtime-mode-toggle.llm-runtime-mode-static[data-system="codex"]:hover:not(
-    :disabled
-  ) {
-  color: var(--fill-primary, #0d0d0d);
-}
-
-#llm-runtime-mode-toggle.llm-runtime-mode-static .llm-agent-toggle-label {
-  font-weight: 700;
+/* A static badge is a label, not a disabled control, so it is not dimmed. */
+#llm-runtime-mode-toggle:disabled:not(.llm-runtime-mode-static) {
+  opacity: 0.6;
 }
 
 .llm-context-previews > #llm-selected-context-list {
@@ -10509,29 +10500,6 @@ label.llm-search-results-item:hover {
 
 .llm-agent-toggle-label {
   min-width: 0;
-}
-
-.llm-agent-toggle-indicator {
-  position: relative;
-  display: inline-flex;
-  flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
-  border: 1px solid var(--fill-secondary);
-  border-radius: 999px;
-  box-sizing: border-box;
-}
-
-.llm-agent-toggle-indicator::after {
-  content: "";
-  position: absolute;
-  inset: 2px;
-  border-radius: 999px;
-  background: #9ca3af;
-}
-
-.llm-agent-toggle-enabled .llm-agent-toggle-indicator::after {
-  background: #16a34a;
 }
 
 .llm-paper-context-inline-list {

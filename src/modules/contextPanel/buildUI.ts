@@ -682,6 +682,15 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   retryModelMenu.style.display = "none";
   container.appendChild(retryModelMenu);
 
+  // Runtime menu (opened from the runtime badge). It reuses the permission
+  // menu look, so it carries the permission menu classes and no CSS of its own.
+  const runtimeMenu = createElement(doc, "div", "llm-permission-menu", {
+    id: "llm-runtime-menu",
+  });
+  runtimeMenu.setAttribute("role", "menu");
+  runtimeMenu.style.display = "none";
+  container.appendChild(runtimeMenu);
+
   // Input section
   const inputSection = createElement(doc, "div", "llm-input-section");
   const contextPreviews = createElement(doc, "div", "llm-context-previews", {
@@ -694,27 +703,22 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-runtime-mode-toggle",
       type: "button",
-      title: t("Switch to Agent mode"),
+      title: t("Agent"),
       disabled: !hasItem,
     },
   );
-  runtimeModeBtn.setAttribute("aria-label", t("Switch to Agent mode"));
-  runtimeModeBtn.setAttribute("aria-pressed", "false");
-  const runtimeModeIndicator = createElement(
-    doc,
-    "span",
-    "llm-agent-toggle-indicator",
-  );
-  runtimeModeIndicator.setAttribute("aria-hidden", "true");
+  runtimeModeBtn.setAttribute("aria-label", t("Agent"));
+  runtimeModeBtn.setAttribute("aria-haspopup", "menu");
+  runtimeModeBtn.setAttribute("aria-expanded", "false");
   const runtimeModeLabel = createElement(
     doc,
     "span",
     "llm-agent-toggle-label llm-agent-process-summary-label",
     {
-      textContent: t("Agent mode"),
+      textContent: t("Agent"),
     },
   );
-  runtimeModeBtn.append(runtimeModeIndicator, runtimeModeLabel);
+  runtimeModeBtn.append(runtimeModeLabel);
   contextPreviews.appendChild(runtimeModeBtn);
   const selectedContextList = createElement(
     doc,

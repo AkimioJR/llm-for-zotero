@@ -204,9 +204,7 @@ const zhCN: Record<string, string> = {
   "Select PDF pages": "选择 PDF 页面",
   "Send current entire PDF": "发送当前整个 PDF",
   "Add the open PDF file to context": "将打开的 PDF 文件添加到上下文",
-  "Switch to Agent mode": "切换到 Agent 模式",
-  "Agent mode": "Agent 模式",
-  // "Agent (beta)" — intentionally not translated, keep English
+  "Switch runtime": "切换运行时",
   "Agent actions": "Agent 操作",
   "Base actions": "基础操作",
   "Selected screenshot preview": "已选截图预览",
@@ -350,13 +348,6 @@ const zhCN: Record<string, string> = {
     "参考文献选择器已就绪。浏览分类或输入搜索论文。",
   "Tip: Enable Agent mode in Preferences for a better library chat experience.":
     "提示：在偏好设置中启用 Agent 模式以获得更好的文献库对话体验。",
-  "Agent mode enabled": "Agent 模式已启用",
-  "Chat mode enabled": "对话模式已启用",
-  "Agent mode ON. Click to switch to Chat mode":
-    "Agent 模式已开启。点击切换到对话模式",
-  "Agent mode OFF. Click to switch to Agent mode":
-    "Agent 模式已关闭。点击切换到 Agent 模式",
-  "Switch to Chat mode": "切换到对话模式",
   "Paper mode only accepts text from this paper":
     "论文模式仅接受来自此论文的文本",
   "Edit target changed. Please edit latest prompt again.":
@@ -485,8 +476,8 @@ const zhCN: Record<string, string> = {
   "Disable this if you prefer not to show the Add Text option in Zotero's text selection popup menu.":
     '如果你不想在 Zotero 文本选区弹出菜单中显示"添加文本"选项，请禁用此项。',
   "Enable Agent Mode (Beta)": "启用 Agent 模式（测试版）",
-  'Shows the "Agent (beta)" toggle in the context bar, enabling the agentic multi-step assistant. Off by default — enable only if you want to experiment with the beta feature.':
-    '在上下文栏显示"Agent（测试版）"切换按钮，启用多步骤 Agent 助手。默认关闭 — 仅在你想体验测试版功能时启用。',
+  'Shows the "Agent" runtime in the context bar, enabling the agentic multi-step assistant. Off by default — enable only if you want to experiment with the beta feature.':
+    '在上下文栏显示"Agent"运行时，启用多步骤 Agent 助手。默认关闭 — 仅在你想体验测试版功能时启用。',
   "Original Agent Mode": "原生 Agent 模式",
   "This panel configures the in-plugin Original Agent. Its permissions are independent from the native permission controls for Claude Code and Codex.":
     "此面板用于配置插件内的原生 Agent。其权限与 Claude Code 和 Codex 的原生权限控制彼此独立。",
@@ -1110,8 +1101,8 @@ const zhCN: Record<string, string> = {
   Runtimes: "运行时",
   "Original Agent": "原生 Agent",
   "Built in · Beta": "内置 · 测试版",
-  'The agent that ships with the plugin. Turning it on adds the "Agent (beta)" toggle to the chat context bar, which runs the multi-step assistant inside Zotero. Its library permissions are independent from the permission controls for Claude Code and Codex.':
-    "插件自带的 Agent。开启后会在聊天上下文栏显示“Agent（测试版）”切换按钮，多步骤助手将完全在 Zotero 内运行。它的文献库权限与 Claude Code 和 Codex 的权限控制彼此独立。",
+  'The agent that ships with the plugin. Turning it on makes "Agent" the built-in runtime in the chat context bar, which runs the multi-step assistant inside Zotero. Its library permissions are independent from the permission controls for Claude Code and Codex.':
+    "插件自带的 Agent。开启后聊天上下文栏中的内置运行时为“Agent”，多步骤助手将完全在 Zotero 内运行。它的文献库权限与 Claude Code 和 Codex 的权限控制彼此独立。",
   Permissions: "权限",
   "Web search": "网页搜索",
   "Runs the Codex CLI as a local app server. Run":
