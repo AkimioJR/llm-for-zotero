@@ -127,6 +127,10 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
     "Read stored context. source:'conversation': omit messageId to list chat messages, set it to read one. source:'tool_result': read a trh_ handle; omit path for metadata. Continue with offset or textOffset=nextTextOffset.",
   past_chat_read:
     "Read a past chat the user attached in this conversation, by its id (e.g. upstream:123). Omit message to list the user's questions with message numbers; set message to read from it on. Continue with nextMessage, or textOffset=nextTextOffset. Set query to a few distinctive words to find messages that contain all of them.",
+  past_chat_search:
+    "Find the user's earlier chats in this library by distinctive words, plus paperItemId, withinDays or mode when named. Use it for an earlier chat that is not attached; follow the result's hint.",
+  past_chat_attach:
+    "Add a chat from past_chat_search to this conversation (shown as a chip on the user's message); returns its text.",
   note_write:
     "Write a Zotero note. sourceMessageId reuses an exact answer; documentId reuses finalized material. Markdown file:// images from paper_read figure crops are imported and verified as embedded images; do not reimplement embedding with scripts. First call load_skill('write-note').",
   note_write_batch:

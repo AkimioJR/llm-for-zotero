@@ -13,6 +13,7 @@ import {
   parsePastConversationId,
   pastConversationId,
   previewPastChatText,
+  snippetAround,
   type LoadedPastConversation,
 } from "../../../services/pastConversations/pastConversationText";
 import {
@@ -230,33 +231,6 @@ function readMessages(
 }
 
 /**
- * Up to SNIPPET_CHARS characters of `text` around `position`, whitespace
- * folded, with an ellipsis where it was cut.
- */
-function snippetAround(text: string, position: number): string {
-  const half = Math.floor(SNIPPET_CHARS / 2);
-  let start = Math.max(
-    0,
-    Math.min(position - half, text.length - SNIPPET_CHARS),
-  );
-  let end = Math.min(text.length, start + SNIPPET_CHARS);
-  // Never cut a surrogate pair: a lone surrogate makes the JSON invalid for
-  // some providers.
-  const isLow = (i: number) => {
-    const c = text.charCodeAt(i);
-    return c >= 0xdc00 && c <= 0xdfff;
-  };
-  const isHigh = (i: number) => {
-    const c = text.charCodeAt(i);
-    return c >= 0xd800 && c <= 0xdbff;
-  };
-  if (start > 0 && isLow(start)) start -= 1;
-  if (end < text.length && end > start && isHigh(end - 1)) end -= 1;
-  const body = text.slice(start, end).replace(/\s+/g, " ").trim();
-  return `${start > 0 ? "…" : ""}${body}${end < text.length ? "…" : ""}`;
-}
-
-/**
  * The messages that contain the query's words: case-insensitive substring
  * matches, so a word inside a longer one and text without spaces (Chinese,
  * Japanese) are found too. Messages that contain every word come first; when
@@ -300,7 +274,7 @@ function searchMessages(chat: LoadedPastConversation, query: string) {
     matches: shown.map((entry) => ({
       message: entry.message.index,
       role: entry.message.role,
-      snippet: snippetAround(entry.message.text, entry.first),
+      snippet: snippetAround(entry.message.text, entry.first, SNIPPET_CHARS),
     })),
     totalMatches: candidates.length,
     ...(partial ? { partial: true } : {}),

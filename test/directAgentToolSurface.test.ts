@@ -53,11 +53,15 @@ describe("direct Agent model tool surface", function () {
     // raised to 24,100 by past_chat_read, the always-listed tool
     // that opens past chats the user attached (24,035 tool characters and
     // 32,854 with the fixed prompt, 2026-10-18), and to 24,200 by its query
-    // search (24,171 tool characters, 2026-10-18).
-    assert.isAtMost(serializedToolCharacters, 24_200);
+    // search (24,171 tool characters, 2026-10-18), and to 25,000 by
+    // past_chat_search and past_chat_attach, the always-listed tools that
+    // find an earlier chat and add it (24,904 tool characters, 2026-10-19);
+    // the same two tools raised the cap with the fixed prompt to 34,000
+    // (33,723 characters).
+    assert.isAtMost(serializedToolCharacters, 25_000);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      33_000,
+      34_000,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

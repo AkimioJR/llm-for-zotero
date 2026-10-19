@@ -6,15 +6,9 @@
  * Pure merge, filter, and sort rules are exported so they can be unit tested.
  * The async loaders read the catalog and the search index.
  */
-import {
-  conversationRepository,
-  type ConversationCatalogEntry,
-} from "../../core/conversations/repository";
+import type { ConversationCatalogEntry } from "../../core/conversations/repository";
 import { pendingDeletionStore } from "../../core/conversations/pendingDeletionStore";
-import {
-  searchConversationIndexWithStatus,
-  type ConversationSearchIndexMatch,
-} from "../../shared/conversationSearchIndex";
+import type { ConversationSearchIndexMatch } from "../../shared/conversationSearchIndex";
 import { isEphemeralConversationKey } from "../../shared/conversationKeySpace";
 import type {
   AttachedConversationRef,
@@ -22,6 +16,11 @@ import type {
 } from "../../shared/types";
 import { normalizeAttachedConversationRefs } from "../../services/context/normalizers";
 import { findPastConversationCatalogEntry } from "../../services/pastConversations/pastConversationLoader";
+import {
+  PAST_CONVERSATION_SYSTEMS,
+  listPastConversationCatalog,
+  searchPastConversationIndex,
+} from "../../services/pastConversations/pastConversationSearch";
 import { t } from "../../utils/i18n";
 import {
   formatGlobalHistoryTimestamp,
@@ -36,11 +35,7 @@ import {
   type HistorySearchResult,
 } from "./setupHandlers/controllers/historySearchController";
 
-export const PAST_CONVERSATION_SYSTEMS: readonly ConversationSystem[] = [
-  "upstream",
-  "claude_code",
-  "codex",
-];
+export { PAST_CONVERSATION_SYSTEMS };
 
 /** A picker row: the popup's entry plus the system the chat belongs to. */
 export type PastConversationEntry = ConversationHistoryEntry & {
@@ -246,21 +241,11 @@ export async function listPastConversationEntries(params: {
   limit?: number;
 }): Promise<PastConversationEntry[]> {
   const limit = params.limit ?? DEFAULT_LIST_LIMIT;
-  const perSystem = await Promise.all(
-    PAST_CONVERSATION_SYSTEMS.map(async (system) => {
-      try {
-        return await conversationRepository.listAllCatalogEntries({
-          system,
-          libraryID: params.libraryID,
-          limit,
-        });
-      } catch {
-        return [];
-      }
-    }),
-  );
-  const entries = perSystem
-    .flat()
+  const catalog = await listPastConversationCatalog({
+    libraryID: params.libraryID,
+    limit,
+  });
+  const entries = catalog
     .filter((entry) => entry.webchatSession !== true)
     .map(catalogEntryToPastEntry);
   return sortPastConversationEntries(
@@ -288,33 +273,12 @@ export async function searchPastConversationEntries(params: {
       resultsByKey: new Map(),
     };
   }
-  const perSystem = await Promise.all(
-    PAST_CONVERSATION_SYSTEMS.map(async (system) => {
-      try {
-        const request = {
-          system,
-          libraryID: params.libraryID,
-          query: params.query,
-          limit,
-        };
-        let indexed = await searchConversationIndexWithStatus({
-          ...request,
-          refresh: false,
-        });
-        if (indexed.status === "empty" || indexed.status === "stale") {
-          const refreshed = await searchConversationIndexWithStatus({
-            ...request,
-            refresh: true,
-          });
-          if (refreshed.status !== "unavailable") indexed = refreshed;
-        }
-        return indexed.matches;
-      } catch {
-        return [];
-      }
-    }),
-  );
-  const candidates = perSystem.flat().map((match) => ({
+  const matches = await searchPastConversationIndex({
+    libraryID: params.libraryID,
+    query: params.query,
+    limit,
+  });
+  const candidates = matches.map((match) => ({
     entry: indexMatchToPastEntry(match),
     bodyText: match.bodyText,
   }));

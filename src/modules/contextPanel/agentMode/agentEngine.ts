@@ -1628,6 +1628,17 @@ export async function sendAgentTurn(
         .slice(0, deps.maxSelectedImages)
     : [];
 
+  // The turn's messages must live in the array chatHistory holds: later
+  // writers of the user row (and past_chat_attach, which finds the message
+  // there) use that array. A conversation not in memory yet is loaded first,
+  // so the load cannot replace the array after the message is pushed.
+  if (!deps.chatHistory.has(conversationKey)) {
+    await deps.ensureConversationLoaded(item);
+  }
+  // When the load left nothing in memory (a frozen write generation, a web
+  // chat shown elsewhere), keep the earlier behaviour: a local array, so the
+  // load below still reads the stored history. past_chat_attach then
+  // refuses, as the message is not in chatHistory.
   const historyForRun = deps.chatHistory.get(conversationKey) || [];
   const isCompactCommand = /^\/compact(?:\s|$)/i.test(question.trim());
   const userMessage: Message = {

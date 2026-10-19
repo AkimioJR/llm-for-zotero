@@ -471,6 +471,70 @@ describe("agent engine final UI release", function () {
     assert.include(statuses, "Continuing agent (page 2 · 7 of 30)");
   });
 
+  it("pushes the turn into the array chatHistory holds, loading a conversation not in memory first; a refused load keeps a local array", async function () {
+    for (const loads of [true, false]) {
+      const conversationKey = loads ? 124 : 125;
+      let messagesAtStart: unknown[] | undefined;
+      const runtime = {
+        getCapabilities: () => ({
+          streaming: true,
+          toolCalls: true,
+          multimodal: false,
+        }),
+        runTurn: async (params: any) => {
+          await params.onStart?.("run-history-array");
+          messagesAtStart = deps.chatHistory.get(conversationKey);
+          await params.onEvent?.({ type: "final", text: "Done." });
+          return {
+            kind: "completed",
+            runId: "run-history-array",
+            text: "Done.",
+          };
+        },
+      } as unknown as AgentRuntime;
+      const deps = createDeps({
+        runtime,
+        pendingWrites: [],
+        idleRestores: [],
+        statuses: [],
+      });
+      const prior = [
+        { role: "user", text: "earlier", timestamp: 1 },
+        { role: "assistant", text: "earlier answer", timestamp: 2 },
+      ];
+      let loadCalls = 0;
+      deps.ensureConversationLoaded = async () => {
+        loadCalls += 1;
+        // A real load sets the stored messages; a refused one sets nothing.
+        if (loads && !deps.chatHistory.has(conversationKey))
+          deps.chatHistory.set(conversationKey, [...prior]);
+      };
+      await sendAgentTurn(
+        {
+          body: {} as Element,
+          item: fakeItem(conversationKey),
+          question: "find the grid chat",
+        },
+        deps,
+      );
+      assert.isAtLeast(loadCalls, 1);
+      if (!loads) {
+        // A refused load leaves chatHistory alone, so the later load still
+        // reads the stored history.
+        assert.isFalse(deps.chatHistory.has(conversationKey));
+        continue;
+      }
+      const history = deps.chatHistory.get(conversationKey) || [];
+      assert.strictEqual(messagesAtStart, history);
+      const user = history.find(
+        (message: any) =>
+          message.role === "user" && message.text === "find the grid chat",
+      );
+      assert.exists(user, "the user message is in chatHistory");
+      assert.equal(history[0].text, "earlier", "loaded before the push");
+    }
+  });
+
   it("preserves and persists the final answer when completion fails after the final event", async function () {
     const statuses: string[] = [];
     const stored: any[] = [];

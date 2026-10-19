@@ -390,4 +390,71 @@ describe("workflow: add past conversation", function () {
       },
     );
   });
+
+  it("shows a chat the agent attached as a chip on the stored user message, stores it with via agent, and keeps it after reload", async function () {
+    const fixture = await api.createPaperWithPdfFixture({
+      title: "Workflow Agent Attach Paper",
+      pdfTitle: "Workflow Agent Attach PDF",
+    });
+    fixtures.push(fixture);
+    const panel = await api.renderPanelForItem(fixture.parentItemId);
+
+    const past = await api.seedPanelStoredUserMessage(
+      panel.panelId,
+      "workflow agent attach past marker",
+    );
+    const pastKey = past.conversationKey;
+    assert.isOk(pastKey, diagnosticsMessage(past));
+    const current = await api.startNewPanelConversation(panel.panelId);
+    assert.notEqual(current.conversationKey, pastKey);
+    await api.seedPanelStoredUserMessage(
+      panel.panelId,
+      "workflow agent attach current question",
+    );
+
+    // The real panel handler registered by chat.ts, as past_chat_attach
+    // reaches it.
+    const attached = await api.attachPastChatAsAgentInPanel(panel.panelId, {
+      conversationKey: pastKey!,
+      title: "workflow agent attach past marker",
+    });
+    assert.deepEqual(
+      attached.outcome,
+      { ok: true },
+      diagnosticsMessage(attached),
+    );
+    // The chip is on the stored user row, not in the composer.
+    assert.include(
+      attached.diagnostics.sentContextBadgeLabels,
+      "Past chat",
+      diagnosticsMessage(attached.diagnostics),
+    );
+    assert.deepEqual(
+      attached.diagnostics.composerAttachedConversationLabels,
+      [],
+      diagnosticsMessage(attached.diagnostics),
+    );
+    // The in-memory message and the stored row both hold the ref with via
+    // "agent".
+    for (const refs of [attached.memoryRefs, attached.storedRefs]) {
+      assert.lengthOf(refs, 1, diagnosticsMessage(attached));
+      assert.equal(refs[0]!.conversationKey, pastKey);
+      assert.equal(refs[0]!.system, "upstream");
+      assert.equal(refs[0]!.via, "agent");
+    }
+
+    // After a reload the stored message still carries the chip.
+    const startup = await api.renderStartupPanelForItem(fixture.parentItemId);
+    const reloaded = await api.getDiagnostics(startup.panelId);
+    assert.include(
+      reloaded.sentContextBadgeLabels,
+      "Past chat",
+      diagnosticsMessage(reloaded),
+    );
+    assert.deepEqual(
+      reloaded.composerAttachedConversationLabels,
+      [],
+      "loading a chat must not put past chat chips in the composer",
+    );
+  });
 });

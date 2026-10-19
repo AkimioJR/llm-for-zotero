@@ -38,6 +38,7 @@ import {
   pastConversationId,
   resolvePastChatFullTextBudget,
   resolvePastChatSimpleChatBudgetChars,
+  withoutAgentAttachedConversationRefs,
 } from "../../services/pastConversations/pastConversationText";
 import type {
   AdvancedModelParams,
@@ -393,6 +394,11 @@ export async function addAttachedPastChatsToSimpleChatHistory(params: {
  * the turn input (nativeClient.ts), never into the seeded history, so a new
  * thread gets it once. Rendered with the history's mode and memo key, so a
  * thread seeded on a later turn carries the same bytes before this message.
+ *
+ * Only the chats the user picked: a chat the agent attached with
+ * past_chat_attach (via "agent") is in that tool result in the Codex thread.
+ * A seeded history keeps it (tool results are not replayed there), and a
+ * retry on a new thread has it in scope only, for past_chat_read.
  */
 export async function renderCodexCurrentTurnPastChatText(params: {
   conversationKey: number;
@@ -402,10 +408,16 @@ export async function renderCodexCurrentTurnPastChatText(params: {
   effectiveRequestConfig: SimpleChatPastChatConfig;
   source?: PastConversationSource;
 }): Promise<string | null> {
-  if (!params.message || !attachesPastChats(params.message)) return null;
+  const message = params.message && {
+    ...params.message,
+    attachedConversations: withoutAgentAttachedConversationRefs(
+      params.message.attachedConversations,
+    ),
+  };
+  if (!message || !attachesPastChats(message)) return null;
   try {
     return await renderHistoryMessage(
-      params.message,
+      message,
       resolveHistoryRender({
         conversationKey: params.conversationKey,
         conversationSystem: "codex",

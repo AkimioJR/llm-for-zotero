@@ -39,12 +39,15 @@ import {
  * that opens past chats the user attached to the conversation (510 tool
  * characters, 2026-10-18); a turn with nothing attached is otherwise
  * unchanged. Raised again by its query search (the query field and one
- * sentence of description: 133, 99 and 133 characters, 2026-10-18).
+ * sentence of description: 133, 99 and 133 characters, 2026-10-18). Raised
+ * again by past_chat_search and past_chat_attach, the always-listed tools
+ * that find an earlier chat and add it to the user's message (733
+ * characters each, 2026-10-19).
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 36_656,
-  paper: 35_373,
-  collection: 36_754,
+  global: 37_389,
+  paper: 36_106,
+  collection: 37_487,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

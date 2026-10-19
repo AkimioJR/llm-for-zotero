@@ -17,7 +17,9 @@
     "note_write",
     "note_write_batch",
     "paper_read",
+    "past_chat_attach",
     "past_chat_read",
+    "past_chat_search",
     "read_attachment",
     "request_user_input",
     "run_command",
@@ -27,5 +29,5 @@
     "zotero_script"
   ],
   "internal": [],
-  "specBytes": 26461
+  "specBytes": 27377
 }

@@ -32,6 +32,10 @@ export const PAST_CHAT_CLOSING_LINE =
 
 /** Name of the agent tool that opens attached past chats. */
 export const PAST_CHAT_READ_TOOL_NAME = "past_chat_read";
+/** Name of the agent tool that finds past chats by words. */
+export const PAST_CHAT_SEARCH_TOOL_NAME = "past_chat_search";
+/** Name of the agent tool that attaches a found past chat. */
+export const PAST_CHAT_ATTACH_TOOL_NAME = "past_chat_attach";
 
 /** A past chat at or below this size can go into the turn in full. */
 export const PAST_CHAT_FULL_TEXT_MAX_TOKENS = 8_000;
@@ -155,6 +159,35 @@ export function normalizeAttachedConversationScope(
 }
 
 /**
+ * True when the agent attached this chat with past_chat_attach (not the user
+ * from the picker). The tool's result already holds the chat's text in the
+ * runtime's context, so the turn that attached it does not get the past-chat
+ * block again; a history rebuilt from stored rows (no tool results) does.
+ */
+export function isAgentAttachedConversationRef(ref: {
+  via?: unknown;
+}): boolean {
+  return ref.via === "agent";
+}
+
+/** The references the user attached from the picker (no agent attaches). */
+export function withoutAgentAttachedConversationRefs<
+  T extends { via?: unknown },
+>(refs: readonly T[] | undefined): T[] {
+  return (refs || []).filter((ref) => !isAgentAttachedConversationRef(ref));
+}
+
+/**
+ * The references with the agent marker removed. Editing a message puts its
+ * chips back in the composer; sent again, they are the user's own.
+ */
+export function withoutAgentAttachedMarker<T extends { via?: unknown }>(
+  refs: readonly T[],
+): Omit<T, "via">[] {
+  return refs.map(({ via: _via, ...ref }) => ref);
+}
+
+/**
  * True when a user message is a slash command ("/compact", "/review …"):
  * its trimmed text starts with "/". Claude Code passes such a message to its
  * own command handling, so a past chat is never put in front of it.
@@ -179,6 +212,11 @@ export function isSlashCommandText(text: unknown): boolean {
  * Callers pass the text the slash test should read: a stored row's `text`
  * (displayQuestion || question) for history, and the runtime userText
  * (question) for the current turn.
+ *
+ * `excludeAgentAttached` leaves out the chats the agent attached with
+ * past_chat_attach (via "agent"). The current turn sets it: that turn's tool
+ * result already holds the chat. A history rebuilt from stored rows keeps
+ * them, because tool results are not replayed there.
  */
 export function resolveDeliveredPastChatRefs(
   messages: ReadonlyArray<{
@@ -188,11 +226,16 @@ export function resolveDeliveredPastChatRefs(
   } | null>,
   index: number,
   system: string,
+  options: { excludeAgentAttached?: boolean } = {},
 ): AttachedConversationRef[] {
   const message = messages[index];
   if (!message || message.role !== "user") return [];
+  const pick = (refs: AttachedConversationRef[]) =>
+    options.excludeAgentAttached
+      ? withoutAgentAttachedConversationRefs(refs)
+      : refs;
   if (system !== "claude_code") {
-    return collectConversationAttachedRefs([message]);
+    return pick(collectConversationAttachedRefs([message]));
   }
   if (isSlashCommandText(message.text)) return [];
   const slashRun: Array<{ attachedConversations?: unknown }> = [];
@@ -202,7 +245,7 @@ export function resolveDeliveredPastChatRefs(
     if (!isSlashCommandText(candidate.text)) break;
     slashRun.unshift(candidate);
   }
-  return collectConversationAttachedRefs([message, ...slashRun]);
+  return pick(collectConversationAttachedRefs([message, ...slashRun]));
 }
 
 /**
@@ -329,6 +372,33 @@ export function formatPastConversationFull(
     `Full text (${chat.messages.length} ${chat.messages.length === 1 ? "message" : "messages"}):`,
     ...chat.messages.map(formatMessage),
   ].join("\n\n");
+}
+
+/**
+ * Up to `maxChars` characters of `text` around `position`, whitespace
+ * folded, with an ellipsis where it was cut. Never cuts a surrogate pair: a
+ * lone surrogate makes the JSON invalid for some providers.
+ */
+export function snippetAround(
+  text: string,
+  position: number,
+  maxChars: number,
+): string {
+  const half = Math.floor(maxChars / 2);
+  let start = Math.max(0, Math.min(position - half, text.length - maxChars));
+  let end = Math.min(text.length, start + maxChars);
+  const isLow = (i: number) => {
+    const c = text.charCodeAt(i);
+    return c >= 0xdc00 && c <= 0xdfff;
+  };
+  const isHigh = (i: number) => {
+    const c = text.charCodeAt(i);
+    return c >= 0xd800 && c <= 0xdbff;
+  };
+  if (start > 0 && isLow(start)) start -= 1;
+  if (end < text.length && end > start && isHigh(end - 1)) end -= 1;
+  const body = text.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "…" : ""}${body}${end < text.length ? "…" : ""}`;
 }
 
 /** One-line preview of a message: whitespace folded, cut at 160 characters. */

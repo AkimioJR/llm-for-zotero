@@ -216,14 +216,21 @@ import {
   getPaperConversation,
   loadConversation,
 } from "../../utils/chatStore";
-import { appendCodexMessage } from "../../codexAppServer/store";
+import {
+  appendCodexMessage,
+  loadCodexConversation,
+} from "../../codexAppServer/store";
 import { setCodexAppServerModelCatalogLoaderForTests } from "../../codexAppServer/modelCatalog";
 import {
   resetCodexDirectCatalogForTests,
   setCodexDirectCatalogDependenciesForTests,
 } from "../../codexAuth/modelCatalog";
 import type { WorkflowTestCodexModelCatalogResponse } from "./workflowTestTypes";
-import { appendClaudeMessage } from "../../claudeCode/store";
+import {
+  appendClaudeMessage,
+  loadClaudeConversation,
+} from "../../claudeCode/store";
+import { notifyPastChatAttached } from "../../services/pastConversations/attachSink";
 import {
   ensureMarkedReaderSelectionTrackingListener,
   READER_TEXT_SELECTION_POPUP_EVENT,
@@ -239,7 +246,10 @@ import type { RuntimeConversationSystem } from "./runtimeSystemControls";
 import { collectReaderSelectionDocuments } from "../../services/pdf/readerSelection";
 import { getReaderContextPanelForTab } from "./readerPopupPanelRouting";
 import { closeReaderSelectionPromptOverlay } from "./selectionPrompt/readerSelectionPromptOverlay";
-import type { ConversationSystem } from "../../shared/types";
+import type {
+  AttachedConversationRef,
+  ConversationSystem,
+} from "../../shared/types";
 import { clearPaperRestoreTargetsForWorkflowTests } from "../../shared/paperConversationRestore";
 import { relayGetStateSnapshot } from "../../webchat/relayServer";
 import {
@@ -5465,6 +5475,72 @@ async function pickPastConversationInPanel(
   return { slashItemVisible, rowTitles, rowLabels, picked };
 }
 
+/**
+ * Adds a past chat to the panel's latest user message the way past_chat_attach
+ * does: through the attach handler chat.ts registers, with via "agent". Then
+ * reads the refs back from the in-memory message and from the stored row.
+ */
+async function attachPastChatAsAgentInPanel(
+  panelId: string,
+  input: {
+    conversationKey: number;
+    title: string;
+    system?: ConversationSystem;
+  },
+): Promise<{
+  outcome: Awaited<ReturnType<typeof notifyPastChatAttached>>;
+  memoryRefs: AttachedConversationRef[];
+  storedRefs: AttachedConversationRef[];
+  diagnostics: WorkflowTestDiagnostics;
+}> {
+  assertWorkflowTestEnabled();
+  const panel = getPanel(panelId);
+  const item = activeContextPanels.get(panel.body)?.() || panel.item;
+  const conversationKey = getConversationKey(item);
+  if (!conversationKey) {
+    throw new Error("Workflow panel has no active conversation key");
+  }
+  const datasetSystem = (
+    panel.body.querySelector("#llm-main") as HTMLElement | null
+  )?.dataset.conversationSystem;
+  const conversationSystem: ConversationSystem =
+    datasetSystem === "codex" || datasetSystem === "claude_code"
+      ? datasetSystem
+      : "upstream";
+  const latestUser = [...(chatHistory.get(conversationKey) || [])]
+    .reverse()
+    .find((message) => message.role === "user");
+  if (!latestUser) throw new Error("Workflow panel has no user message");
+  const outcome = await notifyPastChatAttached({
+    conversationKey,
+    conversationSystem,
+    userMessageTimestamp: latestUser.timestamp,
+    ref: {
+      system: input.system || "upstream",
+      conversationKey: input.conversationKey,
+      title: input.title,
+      libraryID: item.libraryID,
+      via: "agent",
+    },
+  });
+  await Zotero.Promise.delay(100);
+  const stored =
+    conversationSystem === "codex"
+      ? await loadCodexConversation(conversationKey, 200)
+      : conversationSystem === "claude_code"
+        ? await loadClaudeConversation(conversationKey, 200)
+        : await loadConversation(conversationKey, 200);
+  const storedUser = [...stored]
+    .reverse()
+    .find((message) => message.role === "user");
+  return {
+    outcome,
+    memoryRefs: [...(latestUser.attachedConversations || [])],
+    storedRefs: [...(storedUser?.attachedConversations || [])],
+    diagnostics: await getDiagnostics(panelId),
+  };
+}
+
 async function getDiagnostics(
   panelId?: string,
 ): Promise<WorkflowTestDiagnostics> {
@@ -8695,6 +8771,7 @@ export function installWorkflowTestHarness(targetAddon: {
     readChatTurnLifecycle,
     seedPanelStoredUserMessage,
     pickPastConversationInPanel,
+    attachPastChatAsAgentInPanel,
     clickPanelSystemToggle,
     clickPanelSystemTogglesRapidly,
     clickPanelRuntimeModeToggle,

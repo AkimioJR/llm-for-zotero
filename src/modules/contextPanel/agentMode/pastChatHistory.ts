@@ -17,6 +17,12 @@
  * fallback replay puts each block before the message that delivered it.
  *
  * Codex receives past chats through chat.ts, not through this history.
+ *
+ * A chat the agent attached with past_chat_attach (via "agent") is kept in a
+ * rebuilt history, before the message that holds it, like a picked chip: the
+ * tool result that held its text is not replayed there. The current turn
+ * leaves it out (resolveCurrentTurnDeliveredPastChats): that turn's session
+ * holds the tool result.
  */
 import { LocalDocumentPathStreamRedactor } from "../../../agent/privacy/localDocumentPathRedaction";
 import { resolveAgentPromptBudgetLimits } from "../../../agent/context/promptBudget";
@@ -135,6 +141,7 @@ export function resolveCurrentTurnDeliveredPastChats(params: {
     [...params.history, { role: "user", ...params.current }],
     params.history.length,
     "claude_code",
+    { excludeAgentAttached: true },
   );
   return refs.length ? refs : undefined;
 }

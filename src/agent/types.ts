@@ -11,6 +11,7 @@ import type {
   AttachedConversationRef,
   ChatAttachment,
   CollectionContextRef,
+  ConversationSystem,
   LocalDocumentResource,
   NoteContextRef,
   PaperContentSourceMode,
@@ -1331,6 +1332,19 @@ export type AgentToolContext = {
     prepared: PreparedToolExecution,
   ) => Promise<PreparedToolExecutionResult>;
   request: AgentRuntimeRequest;
+  /**
+   * Host-set system of the calling conversation: the MCP server sets it from
+   * the scope's runtime. Absent for the built-in agent, whose conversations
+   * are "upstream" ones.
+   */
+  conversationSystem?: ConversationSystem;
+  /**
+   * Host hook called when past_chat_attach added a chat to the turn's scope.
+   * The MCP server adds it to the scope token, so later calls of the turn can
+   * open it; the built-in runtime needs none, because its calls share
+   * context.request.
+   */
+  extendAttachedConversationScope?: (ref: AttachedConversationRef) => void;
   /** Durable identity of the execution that owns any journalled writes. */
   runId?: string;
   item: Zotero.Item | null;

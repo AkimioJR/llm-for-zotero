@@ -1272,6 +1272,24 @@ export type WorkflowTestApi = {
     rowLabels: string[];
     picked: boolean;
   }>;
+  /**
+   * Adds a past chat to the panel's latest user message the way the agent's
+   * past_chat_attach does (through the panel's attach handler, via "agent"),
+   * then reads the refs from the in-memory message and the stored row.
+   */
+  attachPastChatAsAgentInPanel: (
+    panelId: string,
+    input: {
+      conversationKey: number;
+      title: string;
+      system?: ConversationSystem;
+    },
+  ) => Promise<{
+    outcome: { ok: true } | { ok: false; reason: string };
+    memoryRefs: import("../../shared/types").AttachedConversationRef[];
+    storedRefs: import("../../shared/types").AttachedConversationRef[];
+    diagnostics: WorkflowTestDiagnostics;
+  }>;
   clickPanelSystemToggle: (
     panelId: string,
     system: RuntimeConversationSystem,

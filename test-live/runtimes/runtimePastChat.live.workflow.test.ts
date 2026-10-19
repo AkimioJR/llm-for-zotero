@@ -17,6 +17,16 @@
  * The upstream system is skipped: the built-in agent has its own test
  * (test-live/agent/pastChatDelivery.live.workflow.test.ts).
  *
+ * A second test per system ("pastchatfind" in
+ * LLM_FOR_ZOTERO_LIVE_RUNTIME_TESTS) checks that the runtime finds an
+ * earlier chat from plain words over the Zotero MCP bridge
+ * (past_chat_search, then past_chat_attach): a clear match is attached
+ * without a question, and between several matches it asks and attaches
+ * nothing (pastChatFindLive.ts). Its report is
+ * <data dir>/runtime-past-chat-find-live-report.json. Claude Code's allowed
+ * tools leave out request_user_input, so its question is expected in the
+ * text.
+ *
  *   LLM_FOR_ZOTERO_TEST_ENTRIES=test-live/runtimes \
  *   LLM_FOR_ZOTERO_LIVE_RUNTIME_TESTS=pastchat \
  *   LLM_FOR_ZOTERO_LIVE_RUNTIME_SYSTEMS=codex,claude_code \
@@ -30,6 +40,10 @@
  */
 import { assert } from "chai";
 import { resolveLiveAgentCredentials } from "../agent/liveAgentCredentials";
+import {
+  runPastChatFindCases,
+  type PastChatFindTurn,
+} from "./pastChatFindLive";
 import {
   describeError,
   ensureOwnZoteroHttpServer,
@@ -47,6 +61,10 @@ declare const Zotero: any;
 
 const selectedTests = env("LLM_FOR_ZOTERO_LIVE_RUNTIME_TESTS");
 const enabled = !selectedTests || selectedTests.split(",").includes("pastchat");
+const findEnabled =
+  !selectedTests || selectedTests.split(",").includes("pastchatfind");
+const FIND_REPORT_NAME = "runtime-past-chat-find-live-report.json";
+const findTurns: PastChatFindTurn[] = [];
 
 const SHORT_FACT = "Biscuit-Tamarind";
 const SHORT_QUESTION =
@@ -311,6 +329,42 @@ function panelDisclosures(panelId: string): string[] {
           ).catch(() => undefined);
           await api.reset();
           if (fixture) await api.cleanupFixture(fixture);
+        }
+      });
+    }
+  },
+);
+
+(findEnabled ? describe : describe.skip)(
+  "live: Claude Code and Codex find and add an earlier chat",
+  function () {
+    this.timeout(900_000);
+
+    const systems = selectedSystems().filter(
+      (system) => system === "claude_code" || system === "codex",
+    );
+
+    for (const system of systems) {
+      it(`${system}: attaches a clear match without asking and asks between several`, async function () {
+        // Codex and Claude Code call this instance's MCP endpoint over HTTP.
+        await ensureOwnZoteroHttpServer();
+        const credentials = await resolveLiveAgentCredentials();
+        assert.isOk(
+          credentials,
+          "Configure LLM_FOR_ZOTERO_LIVE_MODEL in LLM_FOR_ZOTERO_LIVE_PROFILE_PATH; this test must not skip",
+        );
+        try {
+          await runPastChatFindCases({
+            system,
+            credentials: credentials!,
+            cases: ["clear", "several"],
+            turns: findTurns,
+          });
+        } finally {
+          await Zotero.File.putContentsAsync(
+            `${Zotero.DataDirectory.dir}/${FIND_REPORT_NAME}`,
+            JSON.stringify({ turns: findTurns }, null, 2),
+          ).catch(() => undefined);
         }
       });
     }

@@ -1254,6 +1254,47 @@ describe("conversation store characterization (golden)", function () {
         });
       });
 
+      it("updateLatestUser keeps an agent-attached chat's via marker through the round trip", async function () {
+        const key = await initAndCreate("global");
+        await store.append(key, plain("user", "u1", at(1)));
+        const picked = {
+          system: "upstream" as const,
+          conversationKey: 31,
+          conversationID: "conv-31",
+          title: "Picked chat",
+          libraryID: 1,
+          kind: "global" as const,
+        };
+        const found = {
+          system: "codex" as const,
+          conversationKey: 32,
+          conversationID: "conv-32",
+          title: "Found chat",
+          libraryID: 1,
+          kind: "paper" as const,
+          paperItemID: 7,
+          via: "agent" as const,
+        };
+        // The attach write targets the row by timestamp, then a later
+        // whole-row write rewrites it from the same in-memory message.
+        const matched = await store.updateUserAt(
+          key,
+          plain("user", "u1", at(1), {
+            attachedConversations: [picked, found],
+          }),
+          at(1),
+        );
+        assert.isTrue(matched);
+        await store.updateLatestUser(
+          key,
+          plain("user", "u1", at(1), {
+            attachedConversations: [picked, found],
+          }),
+        );
+        const loaded = await store.load(key, 50);
+        assert.deepEqual(loaded[0]?.attachedConversations, [picked, found]);
+      });
+
       it("updateLatestAssistant with an expected timestamp writes only that row, and nothing when it is gone", async function () {
         const key = await initAndCreate("global");
         await store.append(key, plain("user", "u1", at(1)));

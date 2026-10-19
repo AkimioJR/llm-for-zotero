@@ -509,6 +509,7 @@ export function normalizeAttachedConversationRefs(
       libraryID,
       ...(kind ? { kind } : {}),
       ...(paperItemID ? { paperItemID } : {}),
+      ...(typed.via === "agent" ? { via: "agent" as const } : {}),
     });
   }
   return out;

@@ -224,6 +224,11 @@ export type AttachedConversationRef = {
   libraryID: number;
   kind?: "paper" | "global";
   paperItemID?: number;
+  /**
+   * "agent" when the agent attached it with past_chat_attach; absent when
+   * the user attached it from the picker.
+   */
+  via?: "agent";
 };
 
 export type ActiveNoteSession = {

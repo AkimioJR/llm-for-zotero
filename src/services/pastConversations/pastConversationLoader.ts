@@ -27,6 +27,15 @@ import {
   pastConversationModeLabel,
   type PastConversationLoadResult,
 } from "./pastConversationText";
+import {
+  catalogEntryToPastConversationCandidate,
+  indexMatchToPastConversationCandidate,
+  listPastConversationCatalog,
+  matchesPastConversationFilters,
+  searchPastConversationIndex,
+  type PastConversationCandidate,
+  type PastConversationSearchFilters,
+} from "./pastConversationSearch";
 
 /** Most stored messages read from one past chat (the newest ones). */
 export const PAST_CHAT_LOAD_MESSAGE_LIMIT = 400;
@@ -40,6 +49,8 @@ export type PastConversationCatalogEntry = {
   paperItemID?: number;
   lastActivityAt: number;
   createdAt: number;
+  /** A web chat session row: never attached. */
+  webchatSession?: boolean;
 };
 
 /** Where past chats are read from; tests pass a fake. */
@@ -56,6 +67,29 @@ export type PastConversationSource = {
   }): Promise<ReadonlyArray<Record<string, unknown>>>;
   isPendingDeletion(conversationKey: number): boolean | Promise<boolean>;
   resolvePaperTitle?(paperItemID: number): string | undefined;
+  /**
+   * Chats of every system in one library whose title or text contains any of
+   * the query's words, or every word with `matchAllWords`, inside the filters
+   * (past_chat_search). At most `limit` per system, newest first.
+   */
+  searchChats?(
+    params: {
+      libraryID: number;
+      query: string;
+      limit: number;
+      matchAllWords?: boolean;
+    } & PastConversationSearchFilters,
+  ): Promise<PastConversationCandidate[]>;
+  /**
+   * Chats of every system in one library inside the filters, at most `limit`
+   * per system, newest first. No text (catalog rows).
+   */
+  listChats?(
+    params: {
+      libraryID: number;
+      limit: number;
+    } & PastConversationSearchFilters,
+  ): Promise<PastConversationCandidate[]>;
 };
 
 function resolveZoteroPaperTitle(paperItemID: number): string | undefined {
@@ -89,6 +123,16 @@ export const defaultPastConversationSource: PastConversationSource = {
     return pendingDeletionStore.isConversationPendingDeletion(conversationKey);
   },
   resolvePaperTitle: resolveZoteroPaperTitle,
+  async searchChats(params) {
+    return (await searchPastConversationIndex(params)).map(
+      indexMatchToPastConversationCandidate,
+    );
+  },
+  async listChats(params) {
+    return (await listPastConversationCatalog(params))
+      .map(catalogEntryToPastConversationCandidate)
+      .filter((candidate) => matchesPastConversationFilters(candidate, params));
+  },
 };
 
 function singleLine(value: string): string {

@@ -162,6 +162,8 @@ import {
 } from "./assistantTurn";
 import { toStoredAssistantRow } from "./storedAssistantRow";
 import { toStoredUserRowPatch } from "./storedUserRow";
+import { createPastChatAttachHandler } from "./pastChatAttachHandler";
+import { setPastChatAttachHandler } from "../../services/pastConversations/attachSink";
 import { getStreamInterruptionLabel } from "./streamInterruption";
 import {
   restoreRetryUserSnapshot,
@@ -329,6 +331,7 @@ import {
 import {
   collectConversationAttachedRefs,
   normalizeAttachedConversationScope,
+  withoutAgentAttachedMarker,
 } from "../../services/pastConversations/pastConversationText";
 import {
   addAttachedPastChatsToSimpleChatHistory,
@@ -1970,6 +1973,26 @@ export function refreshActiveConversationPanels(
 }
 
 subscribeModelProviderGroups(refreshActiveConversationPanels);
+
+// The one writer of a past chat the agent attached (past_chat_attach): the
+// in-memory user message gets the chip, then its row is saved.
+setPastChatAttachHandler(
+  createPastChatAttachHandler({
+    getHistory: (conversationKey) => chatHistory.get(conversationKey),
+    isTemporaryConversation: (conversationKey) =>
+      isEphemeralConversationKey(conversationKey) ||
+      webChatIsolatedConversationKeys.has(conversationKey),
+    persistUserMessage: (request, message) =>
+      updateStoredLatestUserMessageByConversation(
+        request.conversationKey,
+        toStoredUserRowPatch(message),
+        request.conversationSystem,
+        { expectedTimestamp: request.userMessageTimestamp },
+      ),
+    refreshConversation: (conversationKey) =>
+      refreshActiveConversationPanels(conversationKey),
+  }),
+);
 
 function accumulateSessionTokens(
   conversationKey: number,
@@ -5708,9 +5731,13 @@ function syncComposeContextForInlineEdit(
     userMessage.selectedTagContexts,
   );
   composeContextStore.tags.replace(item.id, selectedTagContexts);
+  // A chat the agent attached comes back as a user chip: sent again from
+  // the composer, it is the user's choice.
   composeContextStore.attachedConversations.replace(
     item.id,
-    normalizeAttachedConversations(userMessage.attachedConversations),
+    withoutAgentAttachedMarker(
+      normalizeAttachedConversations(userMessage.attachedConversations),
+    ),
   );
   // Clear existing mode overrides for this item, then set full-next for each full-text paper
   composeContextStore.paperSendModes.clearOwner(item.id);

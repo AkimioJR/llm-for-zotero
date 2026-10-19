@@ -79,8 +79,11 @@ import { resolveActiveLibraryID } from "../../utils/zoteroLibraryScope";
 import { resolveAgentToolCallWorkCategory } from "../workCategory";
 import { getNotesDirectoryConfig } from "../../utils/notesDirectoryConfig";
 import {
+  PAST_CHAT_ATTACH_TOOL_NAME,
   PAST_CHAT_READ_TOOL_NAME,
+  PAST_CHAT_SEARCH_TOOL_NAME,
   normalizeAttachedConversationScope,
+  pastConversationId,
 } from "../../services/pastConversations/pastConversationText";
 
 export const ZOTERO_MCP_SERVER_NAME = "llm_for_zotero";
@@ -103,6 +106,13 @@ export const ZOTERO_MCP_SAFE_READ_TOOL_NAMES = [
   // Always listed, so the tool list (and the client's prompt cache) stays the
   // same; it opens only the chats in the scope's attachedConversationScope.
   "past_chat_read",
+  // Lists chats of the scope's library by words; reads only.
+  "past_chat_search",
+  // Not a pure read: it adds a found chat to the user's message (a chip) and
+  // to the scope. That is plugin state with no external effect, so it is
+  // auto-approved here, and its MCP annotations say read-only like every
+  // non-external_effect tool. Refused without a scoped conversation.
+  "past_chat_attach",
 ] as const;
 export const ZOTERO_MCP_PLAN_TOOL_NAMES = [
   "request_user_input",
@@ -144,6 +154,12 @@ export const ZOTERO_MCP_EXCLUDED_TOOL_NAMES: Record<string, string> = {
   context_read:
     "context_read reads the in-plugin conversation transcript and its stored tool-result handles; an external MCP client has neither, and handle reads are gated on an in-plugin metadata flag the MCP path does not set.",
 };
+/** The tools that read or attach past chats, pinned to the scope's library. */
+const PAST_CHAT_TOOL_NAMES = new Set<string>([
+  PAST_CHAT_READ_TOOL_NAME,
+  PAST_CHAT_SEARCH_TOOL_NAME,
+  PAST_CHAT_ATTACH_TOOL_NAME,
+]);
 const CURATED_READ_TOOL_NAMES = new Set<string>([
   ...ZOTERO_MCP_SAFE_READ_TOOL_NAMES,
   ...ZOTERO_MCP_PLAN_TOOL_NAMES,
@@ -927,6 +943,28 @@ export function updateScopedZoteroMcpScope(
 }
 
 /**
+ * Adds a chat past_chat_attach attached to the scope token's chat list, so
+ * the later calls of this turn may open it with past_chat_read. Only the
+ * attach path writes the list, and it adds to the current list instead of
+ * replacing it: a slower call that started before the attach cannot put an
+ * older list back. The next turn's scope comes from the stored messages,
+ * which hold the chat too.
+ */
+function extendScopedMcpAttachedConversationScope(
+  headers: Record<string, string> | undefined,
+  ref: AttachedConversationRef,
+): void {
+  const token = getHeader(headers, ZOTERO_MCP_SCOPE_HEADER).trim();
+  if (!token) return;
+  const entry = scopedZoteroMcpScopes.get(token);
+  if (!entry) return;
+  const current = entry.scope.attachedConversationScope || [];
+  const id = pastConversationId(ref);
+  if (current.some((existing) => pastConversationId(existing) === id)) return;
+  entry.scope.attachedConversationScope = [...current, ref];
+}
+
+/**
  * Returns a scope token that stays stable for one conversation.
  *
  * Agent runtimes bind the scope header when they create their conversation and
@@ -1536,10 +1574,10 @@ function resolveMcpCallScope(params: {
       `Conflicting Zotero library IDs: top-level libraryID=${scopeArgs.libraryID} but library_retrieve scope.libraryID=${retrievalLibraryID}.`,
     );
   }
-  // past_chat_read is pinned to the scope's library: it ignores the library
-  // selected in Zotero, and a model-supplied libraryID that differs from the
-  // scope's is refused (libraryMismatch) instead of overriding it.
-  const pinnedToScopeLibrary = params.toolName === PAST_CHAT_READ_TOOL_NAME;
+  // The past-chat tools are pinned to the scope's library: they ignore the
+  // library selected in Zotero, and a model-supplied libraryID that differs
+  // from the scope's is refused (libraryMismatch) instead of overriding it.
+  const pinnedToScopeLibrary = PAST_CHAT_TOOL_NAMES.has(params.toolName);
   const scopeLibraryID = normalizePositiveInt(scope?.libraryID) || 0;
   const libraryMismatch =
     pinnedToScopeLibrary &&
@@ -1854,9 +1892,11 @@ function createToolContext(
     documentReadObservations: scope?.documentReadObservations,
     documentArtifactObservations: scope?.documentArtifactObservations,
     // past_chat_read checks every chat against this list and the call's
-    // library (an explicit libraryID other than the scope's is refused).
+    // library (an explicit libraryID other than the scope's is refused). A
+    // copy: past_chat_attach extends the scope's own list only through
+    // extendScopedMcpAttachedConversationScope.
     attachedConversationScope: scope?.attachedConversationScope?.length
-      ? scope.attachedConversationScope
+      ? [...scope.attachedConversationScope]
       : undefined,
     exhaustiveReadBackend,
     activeNoteContext,
@@ -2029,6 +2069,12 @@ function createToolContext(
       standalone: !scope?.runtimeAuthority,
     },
     isToolVisible: (spec) => isMcpToolVisibleInScope(spec, scope),
+    conversationSystem:
+      scope?.runtimeAuthority === "claude"
+        ? "claude_code"
+        : scope?.runtimeAuthority === "codex"
+          ? "codex"
+          : undefined,
     signal: scope?.signal,
     runId,
     item,
@@ -2374,6 +2420,8 @@ async function handleToolsCall(
       callScope,
       deps.zoteroGateway,
     );
+    toolContext.extendAttachedConversationScope = (ref) =>
+      extendScopedMcpAttachedConversationScope(headers, ref);
     let prepared = await deps.toolRegistry.prepareExecution(
       {
         id: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,

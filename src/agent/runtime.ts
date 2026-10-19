@@ -219,6 +219,7 @@ import {
   isPastChatMessageText,
   pastChatMessageHasFailedSection,
   pastChatMessageIdSignature,
+  withoutAgentAttachedConversationRefs,
 } from "../services/pastConversations/pastConversationText";
 import type {
   AgentAssistantMessage,
@@ -680,11 +681,18 @@ export class AgentRuntime {
    * and the turn's budget (min 12,000 tokens, 15% of the context window)
    * has room, otherwise as an outline the agent opens with past_chat_read.
    * Never fails the turn.
+   *
+   * Only the chats the user picked: a chat the agent attached with
+   * past_chat_attach (via "agent") is in its tool result already. A retry of
+   * that turn has it in scope and opens it again with a tool.
    */
   private async renderAttachedPastChatMessage(
     request: AgentRuntimeRequest,
   ): Promise<AgentUserMessage | null> {
-    if (!request.attachedConversations?.length) return null;
+    const refs = withoutAgentAttachedConversationRefs(
+      request.attachedConversations,
+    );
+    if (!refs.length) return null;
     try {
       const { contextWindow } = resolveAgentPromptBudgetLimits({
         model: request.model,
@@ -701,7 +709,7 @@ export class AgentRuntime {
       const text = await renderAgentPastChatMessageText({
         conversationKey: request.conversationKey,
         userMessageTimestamp: request.metadata?.sourceMessageTimestamp,
-        refs: request.attachedConversations,
+        refs,
         libraryID: request.libraryID,
         contextWindowTokens: contextWindow,
         source: this.pastConversationSource,
@@ -1586,14 +1594,17 @@ export class AgentRuntime {
         !isCurrentTurnUserTranscriptMessage(transcriptTail, request);
       // Loaded only when this turn's message attached chats and the block
       // below will store them.
+      const pickedPastChats = withoutAgentAttachedConversationRefs(
+        request.attachedConversations,
+      );
       const renderedPastChatMessage =
-        storesTurnMessages && request.attachedConversations?.length
+        storesTurnMessages && pickedPastChats.length
           ? await this.renderAttachedPastChatMessage(request)
           : null;
       if (
         params.signal?.aborted &&
         storesTurnMessages &&
-        request.attachedConversations?.length
+        pickedPastChats.length
       ) {
         // Stopped while the chats loaded: nothing of this turn is stored.
         const stopped = new Error("Aborted");
