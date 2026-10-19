@@ -1363,6 +1363,18 @@ export function createStandaloneSidePanel(
     view.confirm = null;
   };
 
+  const sideChatRenderSignature = (conversationKey: number): string => {
+    const history = chatHistory.get(conversationKey);
+    const last = history?.[history.length - 1];
+    return [
+      conversationKey,
+      history ? history.length : -1,
+      last?.timestamp ?? "",
+      last?.text?.length ?? 0,
+      last?.streaming ? 1 : 0,
+    ].join(":");
+  };
+
   const mountSideChatBody = (view: SideChatTabView) => {
     hideTabConfirm(view);
     const { body, context, conversationKey } = view;
@@ -1410,9 +1422,22 @@ export function createStandaloneSidePanel(
           : t("Ask a side question about your library...");
     }
     registerBackgroundProvider(conversationKey);
+    // A side chat reopened from its tab already holds its history in memory;
+    // the load then changes nothing, and a second full render is wasted.
+    const loadChangesNothing =
+      loadedConversationKeys.has(conversationKey) &&
+      chatHistory.has(conversationKey) &&
+      composeContextStore.initializedConversations.has(conversationKey);
+    const renderedSignature = sideChatRenderSignature(conversationKey);
     void ensureConversationLoaded(item, { body })
       .then(() => {
         if (view.disposed || view.item !== item) return;
+        if (
+          loadChangesNothing &&
+          sideChatRenderSignature(conversationKey) === renderedSignature
+        ) {
+          return;
+        }
         refreshChat(body, item);
       })
       .catch((err) => {
