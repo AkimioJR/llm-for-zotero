@@ -1882,6 +1882,77 @@ describe("workflow: standalone window coexists with the sidebar chat", function 
     );
   });
 
+  it("T14: the window opens at the sidebar's reading place", async function () {
+    const longAnswer = Array.from(
+      { length: 60 },
+      (_, index) =>
+        `Paragraph ${index + 1} POPOUT-LONG: enough text to make the chat scroll.`,
+    ).join("\n\n");
+    const paper = await newFixture("Coexist T14");
+    await openSidebarChat(paper.parentItemId);
+    await ensureSidebarPaperChat(paper.parentItemId);
+    await completeSidebarTurn("Coexist T14 seed question", longAnswer);
+    const body = sidebarBody()!;
+    const chatBox = body.querySelector("#llm-chat-box") as HTMLElement;
+    const owner = body.ownerDocument.defaultView as any;
+    assert.isAbove(
+      chatBox.scrollHeight,
+      chatBox.clientHeight + 100,
+      "the sidebar chat is scrollable",
+    );
+    // A user scroll: wheel first so the chat leaves follow-bottom mode.
+    chatBox.dispatchEvent(new owner.WheelEvent("wheel", { deltaY: -100 }));
+    chatBox.scrollTop = Math.floor(
+      (chatBox.scrollHeight - chatBox.clientHeight) / 2,
+    );
+    chatBox.dispatchEvent(new owner.Event("scroll"));
+    await Zotero.Promise.delay(400);
+
+    const topParagraph = (box: HTMLElement): number => {
+      const top = box.getBoundingClientRect().top;
+      const paragraphs = Array.from(box.querySelectorAll("p")) as HTMLElement[];
+      for (const p of paragraphs) {
+        const match = /^Paragraph (\d+) POPOUT-LONG/.exec(p.textContent || "");
+        if (match && p.getBoundingClientRect().bottom > top + 1) {
+          return Number(match[1]);
+        }
+      }
+      return -1;
+    };
+    const expected = topParagraph(chatBox);
+    assert.isAbove(expected, 5, "the sidebar sits in the middle of the answer");
+
+    (body.querySelector("#llm-popout") as HTMLElement).click();
+    await until(
+      () => Boolean(windowRoot()?.dataset.handlersInitialized),
+      () => "the standalone window opens and mounts its chat",
+    );
+    const windowBox = () =>
+      windowBody()?.querySelector("#llm-chat-box") as HTMLElement | null;
+    await until(
+      () => {
+        const box = windowBox();
+        if (!box) return false;
+        const style = box.ownerDocument.defaultView!.getComputedStyle(box)!;
+        return (
+          style.overflowY === "auto" && box.scrollHeight > box.clientHeight
+        );
+      },
+      () => "the window chat is a scroll container",
+    );
+    await Zotero.Promise.delay(600);
+    const box = windowBox()!;
+    const max = box.scrollHeight - box.clientHeight;
+    assert.isAbove(box.scrollTop, 0, "the window chat is not at the top");
+    assert.isBelow(box.scrollTop, max - 2, "the window chat is not at the end");
+    assert.closeTo(
+      topParagraph(box),
+      expected,
+      1,
+      "the window shows the paragraph the sidebar had at the top",
+    );
+  });
+
   // ── T8 ───────────────────────────────────────────────────────────────────
 
   /**

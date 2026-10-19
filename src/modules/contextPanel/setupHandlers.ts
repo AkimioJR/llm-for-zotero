@@ -60,6 +60,7 @@ import {
   PREFERENCES_PANE_ID,
 } from "./constants";
 import { bindChatScrollLifecycle } from "./chatScrollLifecycle";
+import { isChatViewportVisible } from "./chatScrollSnapshots";
 import { bindChatLatestButton } from "./chatLatestButton";
 import {
   createConversationTurnNavigator,
@@ -2171,10 +2172,6 @@ export function setupHandlers(
     if (!item || !chatBox || !chatBox.childElementCount) return;
     if (!isChatViewportVisible(chatBox)) return;
     persistChatScrollSnapshot(item, chatBox);
-  };
-
-  const isChatViewportVisible = (box: HTMLDivElement): boolean => {
-    return box.clientHeight > 0 && box.getClientRects().length > 0;
   };
 
   const cleanupChatScroll = chatBox

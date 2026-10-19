@@ -230,6 +230,49 @@ function appendElement(
 }
 
 describe("chat scroll snapshots", function () {
+  it("keeps a sidebar position through a first render of a box that is still empty", function () {
+    clearChatScrollSnapshotsForTests();
+    const sidebar = makeChatBox({
+      scrollTop: 1000,
+      scrollHeight: 2000,
+      clientHeight: 300,
+    });
+    sidebar.dispatch("wheel");
+    observeChatScroll(1, sidebar as unknown as HTMLDivElement);
+    assert.equal(
+      getChatScrollSnapshot(1, sidebar as unknown as HTMLDivElement)?.scrollTop,
+      1000,
+    );
+
+    // A second surface renders before its history is in the box: the restore
+    // clamps to the top and must not be saved over the first surface's place.
+    const element = makeChatBox({
+      scrollTop: 0,
+      scrollHeight: 300,
+      clientHeight: 300,
+    });
+    // Like a real scroll box, writes clamp to the scrollable range.
+    let top = 0;
+    Object.defineProperty(element, "scrollTop", {
+      get: () => top,
+      set: (value: number) => {
+        top = Math.max(
+          0,
+          Math.min(element.scrollHeight - element.clientHeight, value),
+        );
+      },
+    });
+    const box = element as unknown as HTMLDivElement;
+    initializeChatScrollViewport(1, box);
+    const snapshot = captureChatScrollForRender(1, box);
+    restoreChatScrollAfterRender(1, box, snapshot);
+
+    appendElement(element, "llm-message", { offsetTop: 0, offsetHeight: 2000 });
+    element.scrollHeight = 2000;
+    reconcileChatScroll(1, box);
+    assert.closeTo(box.scrollTop, 1000, 1);
+  });
+
   it("honors a scrollbar drag after an automatic write but before its delayed event", function () {
     clearChatScrollSnapshotsForTests();
     const element = makeChatBox({

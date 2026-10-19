@@ -218,8 +218,15 @@ function getMaxScrollTop(chatBox: HTMLDivElement): number {
   return Math.max(0, chatBox.scrollHeight - chatBox.clientHeight);
 }
 
-function isChatViewportVisible(chatBox: HTMLDivElement): boolean {
-  return chatBox.clientHeight > 0 && chatBox.getClientRects().length > 0;
+export function isChatViewportVisible(chatBox: HTMLDivElement): boolean {
+  if (!(chatBox.clientHeight > 0 && chatBox.getClientRects().length > 0)) {
+    return false;
+  }
+  // An unfilled box clamps every restore to the top; persisting that would
+  // overwrite the position the reader left in another surface.
+  return (
+    chatBox.childElementCount > 0 || chatBox.scrollHeight > chatBox.clientHeight
+  );
 }
 
 function clampScrollTop(chatBox: HTMLDivElement, scrollTop: number): number {
