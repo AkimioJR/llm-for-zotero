@@ -1,99 +1,112 @@
 /**
  * Puts attached past chats back into the history handed to the built-in
- * agent.
+ * agent and to Claude Code.
  *
  * On the turn a user message attaches past chats, the agent runtime renders
  * them once into the transcript, right before that turn's request. When the
  * transcript is rebuilt from chat history (first turn after an edit, a retry,
  * a fork, or a temporary side chat), that message would be lost. So the
  * history gets one past-chat user message before each user message that
- * attached chats, and the rebuilt transcript keeps it at the same place.
+ * delivered chats, and the rebuilt transcript keeps it at the same place.
  *
- * Only the built-in agent ("upstream" conversations) receives these: Claude
- * Code and Codex read past chats in later steps.
+ * Claude Code receives the chats as a prefix of the delivering turn's text
+ * (externalBackendBridge.ts); this history reaches the bridge only when the
+ * Claude session cannot be resumed. A slash message delivers nothing there,
+ * and the next non-slash message carries its chats, so the history uses the
+ * same rule (resolveDeliveredPastChatRefs) and the same render memo: the
+ * fallback replay puts each block before the message that delivered it.
+ *
+ * Codex receives past chats through chat.ts, not through this history.
  */
 import { LocalDocumentPathStreamRedactor } from "../../../agent/privacy/localDocumentPathRedaction";
 import { resolveAgentPromptBudgetLimits } from "../../../agent/context/promptBudget";
 import {
-  agentPastChatMemoKey,
-  buildPastChatMessageText,
-  buildPastChatMessageTextMemoized,
   insertPastChatMessagesBeforeAttachingTurns,
+  renderAgentPastChatMessageText,
   type PastConversationSource,
 } from "../../../services/pastConversations/pastConversationLoader";
-import { resolvePastChatFullTextBudget } from "../../../services/pastConversations/pastConversationText";
+import { resolveDeliveredPastChatRefs } from "../../../services/pastConversations/pastConversationText";
 import type { AttachedConversationRef } from "../../../shared/types";
 import type { ChatMessage } from "../../../utils/llmClient";
 import type { EffectiveRequestConfig } from "../requestContext";
 
 type HistorySourceMessage = {
   role?: unknown;
+  /** The stored text: displayQuestion || question for a user message. */
+  text?: unknown;
   timestamp?: number;
   attachedConversations?: AttachedConversationRef[];
 };
 
+type PastChatBudgetConfig = Pick<
+  EffectiveRequestConfig,
+  "model" | "apiBase" | "providerProtocol" | "authMode" | "advanced"
+>;
+
+/**
+ * The context window the agent-mode past-chat budget is computed from; the
+ * same inputs give the same window wherever a turn's chats are rendered.
+ */
+function resolveAgentPastChatContextWindow(
+  config: PastChatBudgetConfig,
+): number | undefined {
+  try {
+    return resolveAgentPromptBudgetLimits({
+      model: config.model,
+      inputTokenCap: config.advanced?.inputTokenCap,
+      apiBase: config.apiBase,
+      providerProtocol: config.providerProtocol,
+      authMode: config.authMode,
+      profileOverride: config.advanced?.profileOverride,
+      outputTokenLimit: config.advanced?.outputTokenLimit,
+    }).contextWindow;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function injectAttachedPastChatsIntoAgentHistory(params: {
   conversationKey: number;
-  /** The turn's conversation system; only "upstream" gets past chats. */
+  /**
+   * The turn's conversation system; "upstream" and "claude_code" get past
+   * chats.
+   */
   conversationSystem: string;
   libraryID: number | undefined;
   /** The chat messages `history` was built from, one to one. */
   messages: readonly HistorySourceMessage[];
   history: ChatMessage[];
-  effectiveRequestConfig: Pick<
-    EffectiveRequestConfig,
-    "model" | "apiBase" | "providerProtocol" | "authMode" | "advanced"
-  >;
+  effectiveRequestConfig: PastChatBudgetConfig;
   source?: PastConversationSource;
 }): Promise<ChatMessage[]> {
-  if (params.conversationSystem !== "upstream") return params.history;
-  if (
-    !params.messages.some(
-      (message) =>
-        message.role === "user" && message.attachedConversations?.length,
-    )
-  ) {
-    return params.history;
-  }
-  const config = params.effectiveRequestConfig;
-  let fullTextBudgetTokens: number;
-  try {
-    fullTextBudgetTokens = resolvePastChatFullTextBudget(
-      resolveAgentPromptBudgetLimits({
-        model: config.model,
-        inputTokenCap: config.advanced?.inputTokenCap,
-        apiBase: config.apiBase,
-        providerProtocol: config.providerProtocol,
-        authMode: config.authMode,
-        profileOverride: config.advanced?.profileOverride,
-        outputTokenLimit: config.advanced?.outputTokenLimit,
-      }).contextWindow,
-    );
-  } catch {
-    fullTextBudgetTokens = resolvePastChatFullTextBudget(undefined);
-  }
+  const system = params.conversationSystem;
+  if (system !== "upstream" && system !== "claude_code") return params.history;
+  const delivered = params.messages.map((_message, index) =>
+    resolveDeliveredPastChatRefs(params.messages, index, system),
+  );
+  if (!delivered.some((refs) => refs.length)) return params.history;
+  const contextWindowTokens = resolveAgentPastChatContextWindow(
+    params.effectiveRequestConfig,
+  );
   // The attach turn stores the redacted text; a rebuild applies the same
   // redaction so both hold the same bytes.
   const redactor = new LocalDocumentPathStreamRedactor(params.conversationKey);
   try {
     return await insertPastChatMessagesBeforeAttachingTurns<ChatMessage>(
-      params.messages,
+      params.messages.map((message, index) => ({
+        role: message.role,
+        attachedConversations: delivered[index],
+      })),
       params.history,
-      async (message) => {
-        const typed = message as HistorySourceMessage;
-        const renderParams = {
-          refs: typed.attachedConversations,
+      async (_message, index) => {
+        const text = await renderAgentPastChatMessageText({
+          conversationKey: params.conversationKey,
+          userMessageTimestamp: params.messages[index].timestamp,
+          refs: delivered[index],
           libraryID: params.libraryID,
-          mode: { kind: "agent" as const, fullTextBudgetTokens },
+          contextWindowTokens,
           source: params.source,
-        };
-        const timestamp = Number(typed.timestamp);
-        const text = Number.isFinite(timestamp)
-          ? await buildPastChatMessageTextMemoized(
-              agentPastChatMemoKey(params.conversationKey, timestamp),
-              renderParams,
-            )
-          : await buildPastChatMessageText(renderParams);
+        });
         return text
           ? { role: "user", content: redactor.redactTerminalText(text) }
           : null;
@@ -103,4 +116,25 @@ export async function injectAttachedPastChatsIntoAgentHistory(params: {
     // A past chat that cannot be loaded never blocks the turn.
     return params.history;
   }
+}
+
+/**
+ * The past chats a Claude Code turn puts in front of its text, or undefined
+ * for another system or when there are none. `history` is the turn's own
+ * history source (the messages before this turn); `current.text` is the
+ * runtime userText (question), which is what reaches the bridge's slash
+ * check, while stored history rows hold displayQuestion || question.
+ */
+export function resolveCurrentTurnDeliveredPastChats(params: {
+  conversationSystem: string;
+  history: readonly HistorySourceMessage[];
+  current: { text: string; attachedConversations?: AttachedConversationRef[] };
+}): AttachedConversationRef[] | undefined {
+  if (params.conversationSystem !== "claude_code") return undefined;
+  const refs = resolveDeliveredPastChatRefs(
+    [...params.history, { role: "user", ...params.current }],
+    params.history.length,
+    "claude_code",
+  );
+  return refs.length ? refs : undefined;
 }

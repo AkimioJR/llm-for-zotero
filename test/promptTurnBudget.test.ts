@@ -38,12 +38,13 @@ import {
  * All three caps were raised again by past_chat_read, the always-listed tool
  * that opens past chats the user attached to the conversation (510 tool
  * characters, 2026-10-18); a turn with nothing attached is otherwise
- * unchanged.
+ * unchanged. Raised again by its query search (the query field and one
+ * sentence of description: 133, 99 and 133 characters, 2026-10-18).
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 36_523,
-  paper: 35_274,
-  collection: 36_621,
+  global: 36_656,
+  paper: 35_373,
+  collection: 36_754,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

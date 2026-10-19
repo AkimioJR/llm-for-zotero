@@ -114,9 +114,16 @@ export type AgentRequest = {
    */
   attachedConversations?: AttachedConversationRef[];
   /**
+   * Past chats this Claude Code turn puts in front of its text: the current
+   * message's chats plus those of the slash messages right before it (a
+   * slash message cannot carry them). Host-set by the agent engine with
+   * resolveDeliveredPastChatRefs; empty on a slash turn and for other systems.
+   */
+  deliveredConversations?: AttachedConversationRef[];
+  /**
    * Every past chat attached anywhere in this conversation: the chats
-   * past_chat_read may open. Host-set from the stored user messages; the MCP
-   * scope builder never sets it.
+   * past_chat_read may open. Host-set from the stored user messages and
+   * copied into the Zotero MCP scope, never taken from tool arguments.
    */
   attachedConversationScope?: AttachedConversationRef[];
   availableAttachmentResources?: AgentAttachmentResource[];

@@ -74,6 +74,11 @@ export type BuildAgentRuntimeRequestParams = {
   selectedTagContexts?: TagContextRef[];
   /** Past chats the turn's user message attached. */
   attachedConversations?: AttachedConversationRef[];
+  /**
+   * Claude Code only: the past chats this turn puts in front of its text
+   * (resolveDeliveredPastChatRefs).
+   */
+  deliveredConversations?: AttachedConversationRef[];
   attachments: ChatAttachment[] | undefined;
   localDocuments?: readonly LocalDocumentResource[];
   screenshots: string[] | undefined;
@@ -113,6 +118,11 @@ export type TurnRequestContext = {
   selectedTagContexts?: TagContextRef[];
   /** Past chats the turn's user message attached. */
   attachedConversations?: AttachedConversationRef[];
+  /**
+   * Claude Code only: the past chats this turn puts in front of its text
+   * (resolveDeliveredPastChatRefs).
+   */
+  deliveredConversations?: AttachedConversationRef[];
   attachments: ChatAttachment[] | undefined;
   skillAttachments?: ChatAttachment[];
   localDocuments?: readonly LocalDocumentResource[];

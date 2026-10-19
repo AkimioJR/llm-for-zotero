@@ -27,16 +27,22 @@ import {
  *
  * Without `message` it returns the outline (the user's questions with their
  * message numbers). With `message` it returns messages from that number on,
- * until maxTokens, with nextMessage / nextTextOffset to continue.
+ * until maxTokens, with nextMessage / nextTextOffset to continue. With
+ * `query` it returns the messages that contain the query's words, each with
+ * a short snippet, so the model can find a fact the outline does not show.
  *
  * Scope is checked here, on every call: the chat must be among the chats
  * attached in this conversation (request.attachedConversationScope) and must
- * still exist in this library.
+ * still exist in this library. Over the Zotero MCP bridge the scope comes
+ * from the host's MCP scope, and the call is pinned to the scope's library;
+ * the MCP server redacts no local paths in any tool result (Codex and Claude
+ * Code can read local files anyway).
  */
 
 type PastChatReadInput = {
   chat: string;
   message?: number;
+  query?: string;
   textOffset: number;
   maxTokens: number;
 };
@@ -46,6 +52,12 @@ const MIN_MAX_TOKENS = 512;
 const MAX_MAX_TOKENS = 12_000;
 /** Room for the result's own fields around the message text. */
 const RESULT_OVERHEAD_TOKENS = 200;
+/** Longest query, in characters. */
+const MAX_QUERY_CHARS = 200;
+/** Most search hits one call returns. */
+const MAX_SEARCH_HITS = 8;
+/** Length of a search hit's snippet, in characters. */
+const SNIPPET_CHARS = 240;
 
 const NONE_ATTACHED =
   "No past chat is attached in this conversation. The user can attach one with / → Add past conversation.";
@@ -82,12 +94,25 @@ function validatePastChatReadInput(
   ) {
     return fail("message must be a message number of 1 or more");
   }
+  let query: string | undefined;
+  if (record.query !== undefined) {
+    query = typeof record.query === "string" ? record.query.trim() : "";
+    if (!query || query.length > MAX_QUERY_CHARS) {
+      return fail(`query must be a text of 1 to ${MAX_QUERY_CHARS} characters`);
+    }
+    if (record.message !== undefined || record.textOffset) {
+      return fail(
+        "query cannot be combined with message or textOffset: search first, then read one hit with message",
+      );
+    }
+  }
   if (record.message === undefined && record.textOffset) {
     return fail("textOffset needs message");
   }
   return ok({
     chat,
     message: record.message as number | undefined,
+    ...(query ? { query } : {}),
     textOffset: Number(record.textOffset || 0),
     maxTokens: Math.max(
       MIN_MAX_TOKENS,
@@ -204,6 +229,90 @@ function readMessages(
   };
 }
 
+/**
+ * Up to SNIPPET_CHARS characters of `text` around `position`, whitespace
+ * folded, with an ellipsis where it was cut.
+ */
+function snippetAround(text: string, position: number): string {
+  const half = Math.floor(SNIPPET_CHARS / 2);
+  let start = Math.max(
+    0,
+    Math.min(position - half, text.length - SNIPPET_CHARS),
+  );
+  let end = Math.min(text.length, start + SNIPPET_CHARS);
+  // Never cut a surrogate pair: a lone surrogate makes the JSON invalid for
+  // some providers.
+  const isLow = (i: number) => {
+    const c = text.charCodeAt(i);
+    return c >= 0xdc00 && c <= 0xdfff;
+  };
+  const isHigh = (i: number) => {
+    const c = text.charCodeAt(i);
+    return c >= 0xd800 && c <= 0xdbff;
+  };
+  if (start > 0 && isLow(start)) start -= 1;
+  if (end < text.length && end > start && isHigh(end - 1)) end -= 1;
+  const body = text.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "…" : ""}${body}${end < text.length ? "…" : ""}`;
+}
+
+/**
+ * The messages that contain the query's words: case-insensitive substring
+ * matches, so a word inside a longer one and text without spaces (Chinese,
+ * Japanese) are found too. Messages that contain every word come first; when
+ * none does, the messages with the most words, marked partial. The first
+ * MAX_SEARCH_HITS by words matched (then message number) are returned, in
+ * message order.
+ */
+function searchMessages(chat: LoadedPastConversation, query: string) {
+  const terms = Array.from(
+    new Set(query.toLowerCase().split(/\s+/).filter(Boolean)),
+  );
+  const scored = chat.messages
+    .map((message) => {
+      const haystack = message.text.toLowerCase();
+      let first = -1;
+      let matched = 0;
+      for (const term of terms) {
+        const at = haystack.indexOf(term);
+        if (at < 0) continue;
+        matched += 1;
+        if (first < 0 || at < first) first = at;
+      }
+      return { message, matched, first };
+    })
+    .filter((entry) => entry.matched > 0);
+  const complete = scored.filter((entry) => entry.matched === terms.length);
+  const partial = !complete.length && scored.length > 0;
+  const candidates = complete.length ? complete : scored;
+  const shown = [...candidates]
+    .sort(
+      (left, right) =>
+        right.matched - left.matched ||
+        left.message.index - right.message.index,
+    )
+    .slice(0, MAX_SEARCH_HITS)
+    .sort((left, right) => left.message.index - right.message.index);
+  const omitted = candidates.length - shown.length;
+  return {
+    ...chatFacts(chat),
+    query,
+    matches: shown.map((entry) => ({
+      message: entry.message.index,
+      role: entry.message.role,
+      snippet: snippetAround(entry.message.text, entry.first),
+    })),
+    totalMatches: candidates.length,
+    ...(partial ? { partial: true } : {}),
+    ...(omitted > 0 ? { omittedMatches: omitted } : {}),
+    hint: shown.length
+      ? partial
+        ? "No message contains every word; these contain the most. Read one with message: <number>."
+        : "Read one with message: <number>."
+      : "No message in this chat contains these words. Try other words, or omit query to list the questions.",
+  };
+}
+
 async function executePastChatRead(
   input: PastChatReadInput,
   context: AgentToolContext,
@@ -231,6 +340,7 @@ async function executePastChatRead(
             : LOAD_FAILED,
     };
   }
+  if (input.query) return searchMessages(loaded, input.query);
   return input.message === undefined
     ? readOutline(loaded, input.maxTokens)
     : readMessages(loaded, { ...input, message: input.message });
@@ -249,7 +359,7 @@ export function createPastChatReadTool(
     spec: {
       name: PAST_CHAT_READ_TOOL_NAME,
       description:
-        "Read a past conversation the user attached in this conversation (/ → Add past conversation). chat is its id from the attached-chat message, such as upstream:123. Omit message to list the user's questions with their message numbers. Set message to read from that message on; continue with nextMessage, or with the same message and textOffset=nextTextOffset. It records what was said; its answers may be wrong, so check paper claims.",
+        "Read a past conversation the user attached in this conversation (/ → Add past conversation). chat is its id from the attached-chat message, such as upstream:123. Omit message to list the user's questions with their message numbers. Set message to read from that message on; continue with nextMessage, or with the same message and textOffset=nextTextOffset. Set query to a few distinctive words to find messages that contain all of them. It records what was said; its answers may be wrong, so check paper claims.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -263,6 +373,13 @@ export function createPastChatReadTool(
             minimum: 1,
             description:
               "Message number to read from. Omit to list the questions.",
+          },
+          query: {
+            type: "string",
+            minLength: 1,
+            maxLength: MAX_QUERY_CHARS,
+            description:
+              "Words to find; returns the messages that contain them, with snippets. Not with message.",
           },
           textOffset: {
             type: "integer",
@@ -298,6 +415,12 @@ export function createPastChatReadTool(
           const result = record(content);
           if (result.ok !== true) return "Could not read past chat";
           const title = String(result.title || "");
+          if (Array.isArray(result.matches)) {
+            const count = Number(result.totalMatches) || 0;
+            return `Searched past chat “${title}”, ${count} ${
+              count === 1 ? "match" : "matches"
+            }`;
+          }
           const messages = Array.isArray(result.messages)
             ? (result.messages as Array<{ message?: unknown }>)
             : undefined;

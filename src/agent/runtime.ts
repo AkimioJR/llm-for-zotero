@@ -212,16 +212,13 @@ import {
   setToolResultReadAvailability,
 } from "./execution/toolResultLifecycle";
 import {
-  agentPastChatMemoKey,
-  buildPastChatMessageText,
-  buildPastChatMessageTextMemoized,
+  renderAgentPastChatMessageText,
   type PastConversationSource,
 } from "../services/pastConversations/pastConversationLoader";
 import {
   isPastChatMessageText,
   pastChatMessageHasFailedSection,
   pastChatMessageIdSignature,
-  resolvePastChatFullTextBudget,
 } from "../services/pastConversations/pastConversationText";
 import type {
   AgentAssistantMessage,
@@ -698,31 +695,17 @@ export class AgentRuntime {
         profileOverride: request.advanced?.profileOverride,
         outputTokenLimit: request.advanced?.outputTokenLimit,
       });
-      const renderParams = {
-        refs: request.attachedConversations,
-        libraryID: request.libraryID,
-        mode: {
-          kind: "agent" as const,
-          fullTextBudgetTokens: resolvePastChatFullTextBudget(contextWindow),
-        },
-        source: this.pastConversationSource,
-      };
       // Memoized under the user message, so a later rebuild of this turn's
       // history in the same session (agentMode/pastChatHistory.ts) sends the
       // same bytes.
-      const sourceMessageTimestamp = Number(
-        request.metadata?.sourceMessageTimestamp,
-      );
-      const text =
-        Number.isFinite(sourceMessageTimestamp) && sourceMessageTimestamp > 0
-          ? await buildPastChatMessageTextMemoized(
-              agentPastChatMemoKey(
-                request.conversationKey,
-                sourceMessageTimestamp,
-              ),
-              renderParams,
-            )
-          : await buildPastChatMessageText(renderParams);
+      const text = await renderAgentPastChatMessageText({
+        conversationKey: request.conversationKey,
+        userMessageTimestamp: request.metadata?.sourceMessageTimestamp,
+        refs: request.attachedConversations,
+        libraryID: request.libraryID,
+        contextWindowTokens: contextWindow,
+        source: this.pastConversationSource,
+      });
       return text ? { role: "user", content: text } : null;
     } catch (error) {
       logRuntimeWarning(

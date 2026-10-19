@@ -216,7 +216,7 @@ describe("past conversation text", function () {
       assert.include(text, "and 10 more questions.");
       assert.include(
         text,
-        'Open messages with past_chat_read (chat: "upstream:41", message: <number>).',
+        'Open messages with past_chat_read (chat: "upstream:41", message: <number>), or search with query.',
       );
       assert.notInclude(text, "text 2\n");
     });

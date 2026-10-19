@@ -15,16 +15,30 @@
  * sends the same bytes at the same place and the provider's prompt cache
  * keeps working.
  *
- * Only the plain upstream chat gets these: Codex, Claude Code (later steps)
- * and WebChat (blocked) receive nothing here.
+ * Codex uses the same history for a thread it seeds from chat history (a new,
+ * replaced, raw-PDF or failed-resume thread): the chats of earlier messages
+ * go before the messages that attached them, while the current turn's chats
+ * go into the turn input only (renderCodexCurrentTurnPastChatText), so a new
+ * thread never gets them twice. With Codex's Zotero MCP tools on, the chats
+ * render as the built-in agent's do (full or an outline opened with
+ * past_chat_read); with the tools off, trimmed as in simple chat.
+ *
+ * Claude Code (agentMode/pastChatHistory.ts) and WebChat (blocked) receive
+ * nothing here.
  */
 import {
   buildPastChatMessageText,
   buildPastChatMessageTextMemoized,
   insertPastChatMessagesBeforeAttachingTurns,
+  type PastChatRenderMode,
   type PastConversationSource,
 } from "../../services/pastConversations/pastConversationLoader";
-import { resolvePastChatSimpleChatBudgetChars } from "../../services/pastConversations/pastConversationText";
+import {
+  formatPastChatPointerLine,
+  pastConversationId,
+  resolvePastChatFullTextBudget,
+  resolvePastChatSimpleChatBudgetChars,
+} from "../../services/pastConversations/pastConversationText";
 import type {
   AdvancedModelParams,
   AttachedConversationRef,
@@ -48,6 +62,14 @@ export function simpleChatPastChatMemoKey(
   return `chat:${conversationKey}:${userMessageTimestamp}`;
 }
 
+/** Memo key of Codex's past-chat message for one user message. */
+export function codexPastChatMemoKey(
+  conversationKey: number,
+  userMessageTimestamp: number,
+): string {
+  return `codex:${conversationKey}:${userMessageTimestamp}`;
+}
+
 function attachesPastChats(
   message: SimpleChatPastChatSourceMessage | undefined,
 ): boolean {
@@ -56,23 +78,27 @@ function attachesPastChats(
   );
 }
 
-function resolveBudgetChars(config: SimpleChatPastChatConfig): number {
+/**
+ * The model's input limit, resolved as the request's own input cap does
+ * (finalPrepared.inputCap.limitTokens); undefined when it cannot be read.
+ */
+function resolveInputLimitTokens(
+  config: SimpleChatPastChatConfig,
+): number | undefined {
   try {
-    return resolvePastChatSimpleChatBudgetChars(
-      resolveModelInputTokenLimit(
-        config.model || "",
-        config.advanced?.inputTokenCap,
-        {
-          provider: detectProviderPreset(config.apiBase || "").toString(),
-          apiBase: config.apiBase,
-          protocol: config.providerProtocol,
-          authMode: config.authMode,
-          profileOverride: config.advanced?.profileOverride,
-        },
-      ).limitTokens,
-    );
+    return resolveModelInputTokenLimit(
+      config.model || "",
+      config.advanced?.inputTokenCap,
+      {
+        provider: detectProviderPreset(config.apiBase || "").toString(),
+        apiBase: config.apiBase,
+        protocol: config.providerProtocol,
+        authMode: config.authMode,
+        profileOverride: config.advanced?.profileOverride,
+      },
+    ).limitTokens;
   } catch {
-    return resolvePastChatSimpleChatBudgetChars(undefined);
+    return undefined;
   }
 }
 
@@ -96,6 +122,87 @@ function formatLeftOutLine(
 }
 
 /**
+ * The pointer lines that stand in for an attaching message's chats once they
+ * no longer fit, when past_chat_read can open them again.
+ */
+function formatLeftOutPointerLines(
+  message: SimpleChatPastChatSourceMessage | undefined,
+): string {
+  return (message?.attachedConversations || [])
+    .map((ref) =>
+      formatPastChatPointerLine({
+        id: pastConversationId(ref),
+        title:
+          singleLine(ref.title || "") || `Conversation ${ref.conversationKey}`,
+      }),
+    )
+    .join("\n");
+}
+
+/**
+ * How one conversation's past chats render: the mode, the memo key of a
+ * user message, the budget for all attaching messages together, and the
+ * line that replaces a message that no longer fits. The history and Codex's
+ * current-turn block use the same one, so a message renders to the same
+ * bytes in both places.
+ */
+type PastChatHistoryRender = {
+  mode: PastChatRenderMode;
+  memoKey: (userMessageTimestamp: number) => string;
+  conversationMaxChars: number;
+  leftOutLine: (message: SimpleChatPastChatSourceMessage | undefined) => string;
+};
+
+function resolveHistoryRender(params: {
+  conversationKey: number;
+  conversationSystem: string;
+  pastChatReadAvailable?: boolean;
+  config: SimpleChatPastChatConfig;
+}): PastChatHistoryRender {
+  const limitTokens = resolveInputLimitTokens(params.config);
+  const isCodex = params.conversationSystem === "codex";
+  const memoKey = (timestamp: number) =>
+    isCodex
+      ? codexPastChatMemoKey(params.conversationKey, timestamp)
+      : simpleChatPastChatMemoKey(params.conversationKey, timestamp);
+  if (isCodex && params.pastChatReadAvailable) {
+    const fullTextBudgetTokens = resolvePastChatFullTextBudget(limitTokens);
+    return {
+      mode: { kind: "agent", fullTextBudgetTokens },
+      memoKey,
+      // Twice one turn's budget, at about four characters a token.
+      conversationMaxChars: fullTextBudgetTokens * 4 * 2,
+      leftOutLine: formatLeftOutPointerLines,
+    };
+  }
+  const totalMaxChars = resolvePastChatSimpleChatBudgetChars(limitTokens);
+  return {
+    mode: { kind: "trimmed", totalMaxChars },
+    memoKey,
+    conversationMaxChars: totalMaxChars * 2,
+    leftOutLine: formatLeftOutLine,
+  };
+}
+
+async function renderHistoryMessage(
+  message: SimpleChatPastChatSourceMessage,
+  render: PastChatHistoryRender,
+  params: { libraryID: number | undefined; source?: PastConversationSource },
+): Promise<string | null> {
+  if (!attachesPastChats(message)) return null;
+  const renderParams = {
+    refs: message.attachedConversations,
+    libraryID: params.libraryID,
+    mode: render.mode,
+    source: params.source,
+  };
+  const timestamp = Number(message.timestamp);
+  return Number.isFinite(timestamp) && timestamp > 0
+    ? buildPastChatMessageTextMemoized(render.memoKey(timestamp), renderParams)
+    : buildPastChatMessageText(renderParams);
+}
+
+/**
  * Caps the past-chat text of the whole conversation at `maxChars`. Walks the
  * attaching messages newest first and keeps whole messages while they fit;
  * the first one that does not fit, and every older one, becomes a short
@@ -107,6 +214,7 @@ function applyConversationBudget(
   sources: ReadonlyArray<SimpleChatPastChatSourceMessage>,
   maxChars: number,
   lastIsCurrent: boolean,
+  leftOutLine: PastChatHistoryRender["leftOutLine"],
 ): Array<string | null> {
   const out: Array<string | null> = new Array(texts.length).fill(null);
   let used = 0;
@@ -121,7 +229,7 @@ function applyConversationBudget(
       continue;
     }
     omitting = true;
-    out[index] = formatLeftOutLine(sources[index]);
+    out[index] = leftOutLine(sources[index]);
   }
   return out;
 }
@@ -138,10 +246,34 @@ type SimpleChatPastChatConfig = Pick<
  * nothing is attached or the turn is not a plain upstream chat. Never
  * throws: a past chat that cannot be rendered leaves the history as it was.
  */
+/**
+ * The current user message to pass to the history injection: a native Codex
+ * turn never passes it (its chats go into the turn input), so a new thread
+ * never gets them twice.
+ */
+export function pastChatHistoryCurrentMessage<
+  T extends SimpleChatPastChatSourceMessage,
+>(isCodexNativeTurn: boolean, message: T | undefined): T | undefined {
+  return isCodexNativeTurn ? undefined : message;
+}
+
 export async function addAttachedPastChatsToSimpleChatHistory(params: {
   conversationKey: number;
-  /** The turn's conversation system; only "upstream" gets past chats. */
+  /**
+   * The turn's conversation system; "upstream" (simple chat) and "codex" get
+   * past chats.
+   */
   conversationSystem: string;
+  /**
+   * Codex gets past chats only on a native app-server turn; a Codex
+   * conversation outside the app-server gets none.
+   */
+  includeCodex?: boolean;
+  /**
+   * Codex only: past_chat_read is reachable (the Zotero MCP tools are on),
+   * so chats render in full or as an outline instead of trimmed.
+   */
+  pastChatReadAvailable?: boolean;
   libraryID: number | undefined;
   /** The chat messages `rawHistory` was built from, one to one. */
   messages: readonly SimpleChatPastChatSourceMessage[];
@@ -153,14 +285,22 @@ export async function addAttachedPastChatsToSimpleChatHistory(params: {
    * Defaults to `rawHistory`.
    */
   history?: ChatMessage[];
-  /** The user message whose question is the request's prompt. */
+  /**
+   * The user message whose question is the request's prompt. Codex leaves it
+   * out: its current turn's chats go into the turn input.
+   */
   currentMessage?: SimpleChatPastChatSourceMessage;
   effectiveRequestConfig: SimpleChatPastChatConfig;
   source?: PastConversationSource;
 }): Promise<ChatMessage[]> {
   const history = params.history || params.rawHistory;
   const config = params.effectiveRequestConfig;
-  if (params.conversationSystem !== "upstream") return history;
+  if (
+    params.conversationSystem !== "upstream" &&
+    !(params.conversationSystem === "codex" && params.includeCodex)
+  ) {
+    return history;
+  }
   if (config.authMode === "webchat" || config.providerProtocol === "web_sync")
     return history;
   const mapsOneToOne = params.messages.length === params.rawHistory.length;
@@ -171,41 +311,30 @@ export async function addAttachedPastChatsToSimpleChatHistory(params: {
   ) {
     return history;
   }
-  const totalMaxChars = resolveBudgetChars(config);
-  const render = async (
-    message: SimpleChatPastChatSourceMessage,
-  ): Promise<string | null> => {
-    if (!attachesPastChats(message)) return null;
-    const renderParams = {
-      refs: message.attachedConversations,
-      libraryID: params.libraryID,
-      mode: {
-        kind: "trimmed" as const,
-        totalMaxChars,
-      },
-      source: params.source,
-    };
-    const timestamp = Number(message.timestamp);
-    return Number.isFinite(timestamp) && timestamp > 0
-      ? buildPastChatMessageTextMemoized(
-          simpleChatPastChatMemoKey(params.conversationKey, timestamp),
-          renderParams,
-        )
-      : buildPastChatMessageText(renderParams);
-  };
+  const historyRender = resolveHistoryRender({
+    conversationKey: params.conversationKey,
+    conversationSystem: params.conversationSystem,
+    pastChatReadAvailable: params.pastChatReadAvailable,
+    config,
+  });
   try {
     const sources = params.currentMessage
       ? [...historySources, params.currentMessage]
       : [...historySources];
-    const rendered = await Promise.all(sources.map(render));
+    const rendered = await Promise.all(
+      sources.map((message) =>
+        renderHistoryMessage(message, historyRender, params),
+      ),
+    );
     // The budget runs first. A copy is then dropped only when an older KEPT
     // copy has the same text, so earlier history keeps its bytes and a chat
     // attached again after its first copy was left out still reaches the model.
     const budgeted = applyConversationBudget(
       rendered,
       sources,
-      totalMaxChars * 2,
+      historyRender.conversationMaxChars,
       Boolean(params.currentMessage),
+      historyRender.leftOutLine,
     );
     const keptFull = new Set<string>();
     const texts = budgeted.map((text, index) => {
@@ -255,5 +384,38 @@ export async function addAttachedPastChatsToSimpleChatHistory(params: {
   } catch {
     // A past chat that cannot be loaded never blocks the turn.
     return history;
+  }
+}
+
+/**
+ * The past-chat block of the Codex turn whose user message is `message`, or
+ * null when it attached none or the chats cannot be rendered. It goes into
+ * the turn input (nativeClient.ts), never into the seeded history, so a new
+ * thread gets it once. Rendered with the history's mode and memo key, so a
+ * thread seeded on a later turn carries the same bytes before this message.
+ */
+export async function renderCodexCurrentTurnPastChatText(params: {
+  conversationKey: number;
+  libraryID: number | undefined;
+  message: SimpleChatPastChatSourceMessage | undefined;
+  pastChatReadAvailable: boolean;
+  effectiveRequestConfig: SimpleChatPastChatConfig;
+  source?: PastConversationSource;
+}): Promise<string | null> {
+  if (!params.message || !attachesPastChats(params.message)) return null;
+  try {
+    return await renderHistoryMessage(
+      params.message,
+      resolveHistoryRender({
+        conversationKey: params.conversationKey,
+        conversationSystem: "codex",
+        pastChatReadAvailable: params.pastChatReadAvailable,
+        config: params.effectiveRequestConfig,
+      }),
+      params,
+    );
+  } catch {
+    // A past chat that cannot be loaded never blocks the turn.
+    return null;
   }
 }

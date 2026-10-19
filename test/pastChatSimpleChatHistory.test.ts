@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { addAttachedPastChatsToSimpleChatHistory } from "../src/modules/contextPanel/pastChatSimpleChatHistory";
+import {
+  addAttachedPastChatsToSimpleChatHistory,
+  pastChatHistoryCurrentMessage,
+} from "../src/modules/contextPanel/pastChatSimpleChatHistory";
 import { clearPastChatRenderMemoForTests } from "../src/services/pastConversations/pastConversationLoader";
 import {
   PAST_CHAT_MESSAGE_TITLE,
@@ -231,7 +234,7 @@ describe("simple chat: attached past chats in history", function () {
     );
   });
 
-  it("changes nothing when no chat is attached, and never for Codex or Claude Code", async function () {
+  it("changes nothing when no chat is attached, and never for Claude Code", async function () {
     const history: Source[] = [
       { role: "user", text: "q1", timestamp: 100 },
       { role: "assistant", text: "a1", timestamp: 101 },
@@ -249,7 +252,9 @@ describe("simple chat: attached past chats in history", function () {
     });
     assert.strictEqual(none, rawHistory);
 
-    for (const conversationSystem of ["codex", "claude_code"]) {
+    // Claude Code gets its chats through agentMode/pastChatHistory.ts; Codex
+    // is covered in codexPastChatDelivery.test.ts.
+    for (const conversationSystem of ["claude_code"]) {
       const source = fakeSource();
       const out = await addAttachedPastChatsToSimpleChatHistory({
         conversationKey: 5,
@@ -646,5 +651,41 @@ describe("simple chat: attached past chats in history", function () {
         "no system message for past chats",
       );
     });
+  });
+
+  describe("pastChatHistoryCurrentMessage", function () {
+    const message = { role: "user", timestamp: 5 };
+
+    it("never passes the current message on a native Codex turn", function () {
+      assert.isUndefined(pastChatHistoryCurrentMessage(true, message));
+      assert.isUndefined(pastChatHistoryCurrentMessage(true, undefined));
+    });
+
+    it("passes it unchanged for every other system", function () {
+      assert.strictEqual(
+        pastChatHistoryCurrentMessage(false, message),
+        message,
+      );
+      assert.isUndefined(pastChatHistoryCurrentMessage(false, undefined));
+    });
+  });
+
+  it("gives a Codex conversation past chats only when includeCodex is set", async function () {
+    const messages = [
+      { role: "user", timestamp: 1, attachedConversations: [SHORT_REF] },
+    ];
+    const rawHistory: ChatMessage[] = [{ role: "user", content: "hi" }];
+    const base = {
+      conversationKey: 6_000_007_901,
+      conversationSystem: "codex",
+      libraryID: 1,
+      messages,
+      rawHistory,
+      effectiveRequestConfig: CONFIG,
+    };
+    assert.strictEqual(
+      await addAttachedPastChatsToSimpleChatHistory(base),
+      rawHistory,
+    );
   });
 });

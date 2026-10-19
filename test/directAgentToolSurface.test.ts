@@ -52,8 +52,9 @@ describe("direct Agent model tool surface", function () {
     // library and its metadata mode proposes changes). The tool cap was
     // raised to 24,100 by past_chat_read, the always-listed tool
     // that opens past chats the user attached (24,035 tool characters and
-    // 32,854 with the fixed prompt, 2026-10-18).
-    assert.isAtMost(serializedToolCharacters, 24_100);
+    // 32,854 with the fixed prompt, 2026-10-18), and to 24,200 by its query
+    // search (24,171 tool characters, 2026-10-18).
+    assert.isAtMost(serializedToolCharacters, 24_200);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
       33_000,

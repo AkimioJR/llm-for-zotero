@@ -16,6 +16,7 @@ import type {
 import {
   PAST_CHAT_FULL_TEXT_MAX_TOKENS,
   buildPastChatMessage,
+  resolvePastChatFullTextBudget,
   cleanPastConversationMessages,
   estimatePastConversationTokens,
   formatPastConversationFull,
@@ -352,6 +353,47 @@ export function agentPastChatMemoKey(
   userMessageTimestamp: number,
 ): string {
   return `agent:${conversationKey}:${userMessageTimestamp}`;
+}
+
+/**
+ * The agent-mode past-chat message for the chats one user message delivers:
+ * full text for a small chat while the turn's budget (min 12,000 tokens, 15%
+ * of `contextWindowTokens`) has room, otherwise an outline opened with
+ * past_chat_read. Memoized under agentPastChatMemoKey when the message has a
+ * timestamp, so every caller that renders this message in this session sends
+ * the same bytes: the built-in agent's attaching turn and history rebuilds,
+ * and Claude Code's current-turn prefix and resume-fallback history.
+ *
+ * Path redaction is the caller's: it lives in the agent layer.
+ */
+export async function renderAgentPastChatMessageText(params: {
+  conversationKey: number;
+  /** Timestamp of the user message that delivers the chats. */
+  userMessageTimestamp: unknown;
+  refs: readonly AttachedConversationRef[] | undefined;
+  libraryID: number | undefined;
+  contextWindowTokens: number | undefined;
+  source?: PastConversationSource;
+}): Promise<string | null> {
+  if (!params.refs?.length) return null;
+  const renderParams: PastChatMessageParams = {
+    refs: params.refs,
+    libraryID: params.libraryID,
+    mode: {
+      kind: "agent",
+      fullTextBudgetTokens: resolvePastChatFullTextBudget(
+        params.contextWindowTokens,
+      ),
+    },
+    source: params.source,
+  };
+  const timestamp = Number(params.userMessageTimestamp);
+  return Number.isFinite(timestamp) && timestamp > 0
+    ? buildPastChatMessageTextMemoized(
+        agentPastChatMemoKey(params.conversationKey, timestamp),
+        renderParams,
+      )
+    : buildPastChatMessageText(renderParams);
 }
 
 export function clearPastChatRenderMemoForTests(): void {

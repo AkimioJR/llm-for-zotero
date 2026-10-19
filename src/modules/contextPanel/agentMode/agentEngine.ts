@@ -19,7 +19,10 @@ import {
  * mode can be read and edited without opening chat.ts.
  */
 import type { AgentRuntime } from "../../../agent/runtime";
-import { injectAttachedPastChatsIntoAgentHistory } from "./pastChatHistory";
+import {
+  injectAttachedPastChatsIntoAgentHistory,
+  resolveCurrentTurnDeliveredPastChats,
+} from "./pastChatHistory";
 import { ExecutionCheckpointFold } from "../../../agent/execution/checkpointEvents";
 import { unansweredTurnError } from "../../../agent/execution/unansweredTurn";
 import { taskProgressEffect } from "../taskProgress/runFold";
@@ -1805,6 +1808,14 @@ export async function sendAgentTurn(
     history: deps.buildLLMHistoryMessages(llmHistorySource),
     effectiveRequestConfig,
   });
+  const deliveredConversations = resolveCurrentTurnDeliveredPastChats({
+    conversationSystem: deps.getConversationSystem(),
+    history: llmHistorySource,
+    current: {
+      text: question,
+      attachedConversations: userMessage.attachedConversations,
+    },
+  });
   const normalizedPaperContexts = deps.normalizePaperContexts([
     ...(paperContexts || []),
   ]);
@@ -1884,6 +1895,8 @@ export async function sendAgentTurn(
         selectedCollectionContexts,
         selectedTagContexts,
         attachedConversations: userMessage.attachedConversations,
+        // Claude Code only; other turns keep the request shape they had.
+        ...(deliveredConversations ? { deliveredConversations } : {}),
         attachments: modelAttachments ?? attachments,
         localDocuments,
         screenshots: images,
@@ -2443,6 +2456,14 @@ export async function retryAgentTurn(
     history: deps.buildLLMHistoryMessages(historyForLLMSource),
     effectiveRequestConfig,
   });
+  const deliveredConversations = resolveCurrentTurnDeliveredPastChats({
+    conversationSystem,
+    history: historyForLLMSource,
+    current: {
+      text: question,
+      attachedConversations: retryPair.userMessage.attachedConversations,
+    },
+  });
   if (modelAttachmentsOverride !== undefined) {
     retryPair.userMessage.modelAttachments = modelAttachmentsOverride;
   }
@@ -2476,6 +2497,8 @@ export async function retryAgentTurn(
         selectedCollectionContexts,
         selectedTagContexts,
         attachedConversations: retryPair.userMessage.attachedConversations,
+        // Claude Code only; other turns keep the request shape they had.
+        ...(deliveredConversations ? { deliveredConversations } : {}),
         attachments: retryModelAttachments,
         localDocuments: retryLocalDocuments,
         screenshots: screenshotImages,

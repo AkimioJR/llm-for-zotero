@@ -19,6 +19,11 @@ declare const Zotero: any;
  *     agent opens it with past_chat_read to find a fact deep inside.
  * (c) A chat id that was not attached: past_chat_read refuses, and the
  *     answer does not invent the chat's content.
+ * (d) A fact in an answer whose question does not reveal it, so the outline
+ *     cannot point to it: the agent finds it (with past_chat_read query or by
+ *     reading). Pass is the correct fact; whether query was used and how
+ *     many calls it took are recorded in the report (exploratory smoke test,
+ *     n=1).
  */
 
 const PREF_PREFIX = "extensions.zotero.llmforzotero";
@@ -35,6 +40,9 @@ const LONG_FACT = "QX-4471-PLUM";
 const LONG_QUESTION =
   "In the attached past chat about rig maintenance, what calibration code was given for rig 7? Answer with the code.";
 const FAKE_CHAT_ID = "upstream:987654321";
+const HIDDEN_FACT = "HELIX-0932-FERN";
+const HIDDEN_QUESTION =
+  "In the attached past chat about rig maintenance, what was the freezer alarm reset password? Answer with the password.";
 
 async function withPrefs<T>(
   prefs: Record<string, unknown>,
@@ -81,6 +89,7 @@ describe("live: attached past chats in the built-in agent", function () {
     await workflow.reset();
     const libraryID = Zotero.Libraries.userLibraryID as number;
     const turns: TurnRecord[] = [];
+    let hiddenFactReport: Record<string, unknown> | null = null;
     let fixture: Awaited<
       ReturnType<WorkflowTestApi["createPaperWithPdfFixture"]>
     > | null = null;
@@ -213,7 +222,11 @@ describe("live: attached past chats in the built-in agent", function () {
               `Maintenance question ${index}: what happened on rig ${index}?`,
               index === 7
                 ? `${filler} The calibration code for rig 7 is ${LONG_FACT}. ${filler}`
-                : `${filler} Rig ${index} needed no calibration.`,
+                : index === 11
+                  ? // The question does not name the fact: only a search or
+                    // a read of this answer finds it.
+                    `${filler} Rig 11 needed no calibration. While we were there, the freezer alarm reset password was changed to ${HIDDEN_FACT}. ${filler}`
+                  : `${filler} Rig ${index} needed no calibration.`,
             );
           }
 
@@ -313,6 +326,27 @@ describe("live: attached past chats in the built-in agent", function () {
             "the answer must not borrow another chat's content",
           );
 
+          // (d) A fact the outline cannot point to.
+          const hidden = await turn("d-hidden-fact", {
+            conversationKey: 920706,
+            userText: HIDDEN_QUESTION,
+            attachedConversations: [longRef],
+            attachedConversationScope: [longRef],
+          });
+          const hiddenReads = hidden.calls.filter(
+            (call) => call.name === "past_chat_read",
+          );
+          hiddenFactReport = {
+            pastChatReadCalls: hiddenReads.length,
+            queryUsed: hiddenReads.some(
+              (call) =>
+                typeof (call.args as { query?: unknown } | undefined)?.query ===
+                "string",
+            ),
+            found: hidden.text.includes(HIDDEN_FACT),
+          };
+          assert.include(hidden.text, HIDDEN_FACT, JSON.stringify(hidden.text));
+
           // Probe only: the bare fact question with the short chat attached.
           await turn("probe-world-fact-attached", {
             conversationKey: 920705,
@@ -325,7 +359,11 @@ describe("live: attached past chats in the built-in agent", function () {
     } finally {
       await Zotero.File.putContentsAsync(
         `${Zotero.DataDirectory.dir}/past-chat-delivery-live-report.json`,
-        JSON.stringify({ model: credentials?.model, turns }, null, 2),
+        JSON.stringify(
+          { model: credentials?.model, hiddenFact: hiddenFactReport, turns },
+          null,
+          2,
+        ),
       );
       await workflow.reset();
       if (fixture) await workflow.cleanupFixture(fixture);

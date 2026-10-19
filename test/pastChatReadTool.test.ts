@@ -89,7 +89,8 @@ describe("past_chat_read", function () {
       registry.getTool("past_chat_read")?.spec.executionClass,
       "read",
     );
-    assert.isAtMost(spec!.description.length, 300);
+    // 300 before the query sentence was added (320 characters, 2026-10-18).
+    assert.isAtMost(spec!.description.length, 330);
     assert.isAtMost(
       registry.getTool("past_chat_read")!.spec.description.length,
       1_200,
@@ -242,5 +243,213 @@ describe("past_chat_read", function () {
     );
     assert.isFalse(result.ok);
     assert.equal(result.error, "message must be between 1 and 30.");
+  });
+
+  describe("query search", function () {
+    const searchSource = createFakePastConversationSource([
+      {
+        conversationKey: 40,
+        entry: { title: "Search chat" },
+        messages: [
+          { role: "user", text: "How do grid cells fire?", timestamp: 1 },
+          {
+            role: "assistant",
+            text: `${"Background. ".repeat(40)}Grid cells fire on a triangular lattice; the spacing is about 40 cm.${" More.".repeat(40)}`,
+            timestamp: 2,
+          },
+          { role: "user", text: "And place cells?", timestamp: 3 },
+          {
+            role: "assistant",
+            text: "Place cells fire in one place field.",
+            timestamp: 4,
+          },
+          { role: "user", text: "网格细胞的间距是多少？", timestamp: 5 },
+          {
+            role: "assistant",
+            text: "网格细胞的间距大约是四十厘米。",
+            timestamp: 6,
+          },
+          ...Array.from({ length: 10 }, (_, index) => ({
+            role: index % 2 ? "assistant" : "user",
+            text: `Theta note ${index + 1}: theta rhythm detail.`,
+            timestamp: 10 + index,
+          })),
+        ],
+      },
+    ]);
+    const searchTool = createPastChatReadTool(
+      searchSource,
+    ) as AgentToolDefinition<unknown, unknown>;
+    const search = async (args: Record<string, unknown>) => {
+      const input = searchTool.validate({ chat: "upstream:40", ...args });
+      if (!input.ok) throw new Error(input.error);
+      return (await searchTool.execute(
+        input.value,
+        context([ref(40)]),
+      )) as Record<string, any>;
+    };
+
+    it("returns the messages that contain every word, with a snippet around the first", async function () {
+      const result = await search({ query: "SPACING grid" });
+      assert.isTrue(result.ok);
+      assert.equal(result.query, "SPACING grid");
+      assert.deepEqual(
+        result.matches.map((match: any) => [match.message, match.role]),
+        [[2, "assistant"]],
+      );
+      const snippet = result.matches[0].snippet as string;
+      assert.include(snippet, "Grid cells fire on a triangular lattice");
+      assert.isTrue(snippet.startsWith("…") && snippet.endsWith("…"));
+      assert.isAtMost(snippet.length, 242);
+      assert.equal(result.totalMatches, 1);
+      assert.notProperty(result, "partial");
+      assert.notProperty(result, "omittedMatches");
+      assert.equal(result.hint, "Read one with message: <number>.");
+      const onSuccess = searchTool.presentation?.summaries
+        ?.onSuccess as (input: { label: string; content: unknown }) => string;
+      assert.equal(
+        onSuccess({ label: "Read Past Chat", content: result }),
+        "Searched past chat “Search chat”, 1 match",
+      );
+    });
+
+    it("never cuts a surrogate pair at either end of a snippet", async function () {
+      // Position 200 puts the cut at 80 and 320: an emoji straddles each.
+      const emoji = "\u{1F600}";
+      const text =
+        "a".repeat(79) +
+        emoji +
+        "b".repeat(119) +
+        "zzkey" +
+        "b".repeat(114) +
+        emoji +
+        "c".repeat(200);
+      assert.equal(text.indexOf("zzkey"), 200);
+      const emojiSource = createFakePastConversationSource([
+        {
+          conversationKey: 41,
+          entry: { title: "Emoji chat" },
+          messages: [{ role: "assistant", text, timestamp: 1 }],
+        },
+      ]);
+      const tool = createPastChatReadTool(emojiSource) as AgentToolDefinition<
+        unknown,
+        unknown
+      >;
+      const input = tool.validate({ chat: "upstream:41", query: "zzkey" });
+      if (!input.ok) throw new Error(input.error);
+      const result = (await tool.execute(
+        input.value,
+        context([ref(41)]),
+      )) as Record<string, any>;
+      const snippet = result.matches[0].snippet as string;
+      assert.include(snippet, "zzkey");
+      // Well-formed UTF-16: JSON round trip keeps every code unit.
+      assert.isFalse(
+        /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(
+          snippet,
+        ),
+      );
+    });
+
+    it("falls back to the messages with the most words, marked partial", async function () {
+      const result = await search({ query: "place grid fire" });
+      // No message holds all three words; messages 2 and 4 hold two each
+      // (grid+fire, place+fire), messages 1 and 3 one each.
+      assert.isTrue(result.partial);
+      assert.deepEqual(
+        result.matches.map((match: any) => match.message),
+        [1, 2, 3, 4],
+      );
+      assert.equal(result.totalMatches, 4);
+      assert.match(result.hint, /these contain the most/);
+    });
+
+    it("ranks partial hits by words matched, keeps eight, and lists them in message order", async function () {
+      const result = await search({ query: "theta detail grid" });
+      // The ten theta messages hold two words each, messages 1 and 2 one
+      // ("grid"): the eight kept are theta messages, though 1 and 2 come
+      // first in the chat.
+      assert.isTrue(result.partial);
+      assert.lengthOf(result.matches, 8);
+      assert.deepEqual(
+        result.matches.map((match: any) => match.message),
+        [7, 8, 9, 10, 11, 12, 13, 14],
+      );
+      assert.equal(result.totalMatches, 12);
+      assert.equal(result.omittedMatches, 4);
+      const few = await search({ query: "theta grid" });
+      // One word each: ties go to the lower message number.
+      assert.deepEqual(
+        few.matches.map((match: any) => match.message),
+        [1, 2, 7, 8, 9, 10, 11, 12],
+      );
+    });
+
+    it("keeps more than eight complete hits out and says how many", async function () {
+      const result = await search({ query: "theta rhythm" });
+      assert.notProperty(result, "partial");
+      assert.deepEqual(
+        result.matches.map((match: any) => match.message),
+        [7, 8, 9, 10, 11, 12, 13, 14],
+      );
+      assert.equal(result.totalMatches, 10);
+      assert.equal(result.omittedMatches, 2);
+    });
+
+    it("finds text without spaces (Chinese) by substring", async function () {
+      const result = await search({ query: "间距" });
+      assert.deepEqual(
+        result.matches.map((match: any) => match.message),
+        [5, 6],
+      );
+    });
+
+    it("returns no hits as an ok result with a hint, not an error", async function () {
+      const result = await search({ query: "hippocampus" });
+      assert.isTrue(result.ok);
+      assert.deepEqual(result.matches, []);
+      assert.equal(result.totalMatches, 0);
+      assert.match(result.hint, /No message in this chat contains these words/);
+    });
+
+    it("refuses query with message or textOffset, and an empty or long query", function () {
+      const conflict = searchTool.validate({
+        chat: "upstream:40",
+        query: "grid",
+        message: 2,
+      });
+      assert.isFalse(conflict.ok);
+      if (!conflict.ok)
+        assert.match(
+          conflict.error,
+          /query cannot be combined with message or textOffset/,
+        );
+      assert.isFalse(
+        searchTool.validate({
+          chat: "upstream:40",
+          query: "grid",
+          textOffset: 5,
+        }).ok,
+      );
+      assert.isFalse(
+        searchTool.validate({ chat: "upstream:40", query: "  " }).ok,
+      );
+      assert.isFalse(
+        searchTool.validate({ chat: "upstream:40", query: "x".repeat(201) }).ok,
+      );
+      assert.isFalse(searchTool.validate({ chat: "upstream:40", query: 3 }).ok);
+    });
+
+    it("checks the scope before it searches", async function () {
+      const input = searchTool.validate({ chat: "upstream:40", query: "grid" });
+      if (!input.ok) throw new Error(input.error);
+      const result = (await searchTool.execute(
+        input.value,
+        context([ref(10)]),
+      )) as Record<string, any>;
+      assert.isFalse(result.ok);
+      assert.match(result.error, /was not attached in this conversation/);
+    });
   });
 });

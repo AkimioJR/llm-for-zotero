@@ -326,8 +326,15 @@ import {
   normalizeAttachedConversationRefs,
   normalizeAttachmentContentHash,
 } from "../../services/context/normalizers";
-import { collectConversationAttachedRefs } from "../../services/pastConversations/pastConversationText";
-import { addAttachedPastChatsToSimpleChatHistory } from "./pastChatSimpleChatHistory";
+import {
+  collectConversationAttachedRefs,
+  normalizeAttachedConversationScope,
+} from "../../services/pastConversations/pastConversationText";
+import {
+  addAttachedPastChatsToSimpleChatHistory,
+  pastChatHistoryCurrentMessage,
+  renderCodexCurrentTurnPastChatText,
+} from "./pastChatSimpleChatHistory";
 import {
   formatAttachedConversationLabel,
   refreshAttachedConversationExistence,
@@ -4180,7 +4187,10 @@ type CodexSendRequestSite = {
   conversationGeneration?: number;
   userMessage: Pick<
     Message,
-    "timestamp" | "citationPaperContexts" | "pinnedPaperContexts"
+    | "timestamp"
+    | "citationPaperContexts"
+    | "pinnedPaperContexts"
+    | "attachedConversations"
   >;
   item: Zotero.Item;
   shownQuestion: string;
@@ -4243,6 +4253,7 @@ function codexSendRequestContext({
     citationPaperContexts: userMessage.citationPaperContexts,
     selectedCollectionContexts: selectedCollectionContextsForMessage,
     selectedTagContexts: selectedTagContextsForMessage,
+    attachedConversations: userMessage.attachedConversations,
     attachments: modelAttachments || attachments,
     skillAttachments: attachments,
     localDocuments,
@@ -4287,6 +4298,7 @@ type CodexRetryRequestSite = {
       | "citationPaperContexts"
       | "forcedSkillIds"
       | "pinnedPaperContexts"
+      | "attachedConversations"
     >;
   };
   item: Zotero.Item;
@@ -4334,6 +4346,7 @@ function codexRetryRequestContext({
     citationPaperContexts: retryPair.userMessage.citationPaperContexts,
     selectedCollectionContexts,
     selectedTagContexts,
+    attachedConversations: retryPair.userMessage.attachedConversations,
     attachments,
     skillAttachments: attachments,
     localDocuments: retryLocalDocuments,
@@ -6643,15 +6656,37 @@ export async function retryLatestAssistantResponse(
     // (the chat messages) stays as it is for the retry bookkeeping. The
     // retried question is the prompt, so its chats go last, unless the
     // retry continues an answer and the question is still in the history.
+    const pastChatReadAvailable = shouldUseCodexNativeLightContext({
+      isCodexNativeTurn,
+    });
+    const retriedMessage = continueIncomplete
+      ? undefined
+      : retryPair.userMessage;
     const llmHistory = await addAttachedPastChatsToSimpleChatHistory({
       conversationKey,
       conversationSystem: effectiveConversationSystem,
+      includeCodex: isCodexNativeTurn,
+      pastChatReadAvailable,
       libraryID: item.libraryID,
       messages: historyForLLM,
       rawHistory: rawLLMHistory,
-      currentMessage: continueIncomplete ? undefined : retryPair.userMessage,
+      currentMessage: pastChatHistoryCurrentMessage(
+        isCodexNativeTurn,
+        retriedMessage,
+      ),
       effectiveRequestConfig,
     });
+    // A retry sends the block into the thread again, as it sends the
+    // question again.
+    const codexPastChatText = isCodexNativeTurn
+      ? await renderCodexCurrentTurnPastChatText({
+          conversationKey,
+          libraryID: item.libraryID,
+          message: retriedMessage,
+          pastChatReadAvailable,
+          effectiveRequestConfig,
+        })
+      : null;
     if (await stopRetryPreparation()) return;
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
     if (effectiveConversationSystem === "upstream") {
@@ -6873,6 +6908,7 @@ export async function retryLatestAssistantResponse(
             conversationGeneration,
             model: effectiveRequestConfig.model,
             messages: finalPrepared.messages,
+            attachedPastChatText: codexPastChatText || undefined,
             reasoning: effectiveRequestConfig.reasoning,
             signal: getAbortController(conversationKey)?.signal,
             codexPath: getEffectiveCodexAppServerBinaryPath(
@@ -8009,6 +8045,10 @@ async function buildAgentRuntimeRequest(
     params.conversationKey,
     attachedConversations,
   );
+  // A carried-over list can hold more than one message's three chats.
+  const deliveredConversations = normalizeAttachedConversationScope(
+    params.deliveredConversations,
+  );
   return {
     conversationKey: params.conversationKey,
     conversationGeneration: params.conversationGeneration,
@@ -8047,6 +8087,9 @@ async function buildAgentRuntimeRequest(
     selectedTagContexts: normalizeTagContexts(params.selectedTagContexts),
     attachedConversations: attachedConversations.length
       ? attachedConversations
+      : undefined,
+    deliveredConversations: deliveredConversations.length
+      ? deliveredConversations
       : undefined,
     attachedConversationScope: attachedConversationScope.length
       ? attachedConversationScope
@@ -9515,17 +9558,35 @@ export async function sendQuestion(
       applyHistoryCompression(conversationKey, rawLLMHistory) ?? rawLLMHistory;
     // Attached past chats go into the model messages only, never into
     // historyForLLM or the summary input. The question being sent is the
-    // prompt, so its own chats go last in the history.
+    // prompt, so its own chats go last in the history; a native Codex turn
+    // puts them into its turn input instead (codexPastChatText).
+    const pastChatReadAvailable = shouldUseCodexNativeLightContext({
+      isCodexNativeTurn,
+    });
     const llmHistory = await addAttachedPastChatsToSimpleChatHistory({
       conversationKey,
       conversationSystem: effectiveConversationSystem,
+      includeCodex: isCodexNativeTurn,
+      pastChatReadAvailable,
       libraryID: item.libraryID,
       messages: historyForLLM,
       rawHistory: rawLLMHistory,
       history: compressedLLMHistory,
-      currentMessage: userMessage,
+      currentMessage: pastChatHistoryCurrentMessage(
+        isCodexNativeTurn,
+        userMessage,
+      ),
       effectiveRequestConfig,
     });
+    const codexPastChatText = isCodexNativeTurn
+      ? await renderCodexCurrentTurnPastChatText({
+          conversationKey,
+          libraryID: item.libraryID,
+          message: userMessage,
+          pastChatReadAvailable,
+          effectiveRequestConfig,
+        })
+      : null;
     if (await stopInactiveRequest()) return;
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
 
@@ -9747,6 +9808,7 @@ export async function sendQuestion(
             conversationGeneration,
             model: effectiveRequestConfig.model,
             messages: finalPrepared.messages,
+            attachedPastChatText: codexPastChatText || undefined,
             reasoning: effectiveRequestConfig.reasoning,
             signal: getAbortController(conversationKey)?.signal,
             codexPath: getEffectiveCodexAppServerBinaryPath(

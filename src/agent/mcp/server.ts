@@ -12,6 +12,7 @@ import { normalizeExcludedItemIds } from "../../services/context/normalizers";
 
 import { config } from "../../../package.json";
 import type {
+  AttachedConversationRef,
   CollectionContextRef,
   PaperContentSourceMode,
   PaperContextRef,
@@ -77,6 +78,10 @@ import {
 import { resolveActiveLibraryID } from "../../utils/zoteroLibraryScope";
 import { resolveAgentToolCallWorkCategory } from "../workCategory";
 import { getNotesDirectoryConfig } from "../../utils/notesDirectoryConfig";
+import {
+  PAST_CHAT_READ_TOOL_NAME,
+  normalizeAttachedConversationScope,
+} from "../../services/pastConversations/pastConversationText";
 
 export const ZOTERO_MCP_SERVER_NAME = "llm_for_zotero";
 export const ZOTERO_MCP_ENDPOINT_PATH = "/llm-for-zotero/mcp";
@@ -95,6 +100,9 @@ export const ZOTERO_MCP_SAFE_READ_TOOL_NAMES = [
   "library_retrieve",
   "paper_read",
   "literature_search",
+  // Always listed, so the tool list (and the client's prompt cache) stays the
+  // same; it opens only the chats in the scope's attachedConversationScope.
+  "past_chat_read",
 ] as const;
 export const ZOTERO_MCP_PLAN_TOOL_NAMES = [
   "request_user_input",
@@ -135,11 +143,6 @@ export const ZOTERO_MCP_EXCLUDED_TOOL_NAMES: Record<string, string> = {
   // and handle reads are gated on a metadata flag the MCP path never sets.
   context_read:
     "context_read reads the in-plugin conversation transcript and its stored tool-result handles; an external MCP client has neither, and handle reads are gated on an in-plugin metadata flag the MCP path does not set.",
-  // Its scope is the past chats attached in the calling conversation
-  // (request.attachedConversationScope), which the MCP scope builder never
-  // sets, so over MCP every call would be refused.
-  past_chat_read:
-    "Steps 4-5 expose it with an attached-chat scope check; not on the bridge yet.",
 };
 const CURATED_READ_TOOL_NAMES = new Set<string>([
   ...ZOTERO_MCP_SAFE_READ_TOOL_NAMES,
@@ -241,6 +244,13 @@ type ZoteroMcpScopeMetadata = {
   executionContext?: AgentRuntimeRequest["executionContext"];
   documentReadObservations?: AgentRuntimeRequest["documentReadObservations"];
   documentArtifactObservations?: AgentRuntimeRequest["documentArtifactObservations"];
+  /**
+   * The past chats attached anywhere in the calling conversation: the only
+   * chats past_chat_read may open. Host-set by the Codex and Claude Code
+   * scope builders; a scope without it (a fork's provisional scope, a
+   * standalone client) makes the tool refuse.
+   */
+  attachedConversationScope?: AttachedConversationRef[];
   exhaustiveReadBackend?: Extract<
     ExhaustiveReadBackend,
     "codex_responses" | "unavailable"
@@ -763,6 +773,9 @@ function normalizeActiveScope(
       "conflicting_paper_scope: turnPaperScope belongs to a different Zotero library.",
     );
   }
+  const attachedConversationScope = normalizeAttachedConversationScope(
+    scope.attachedConversationScope,
+  );
   const metadata: ZoteroMcpScopeMetadata = {
     runtimeAuthority:
       scope.runtimeAuthority === "claude" || scope.runtimeAuthority === "codex"
@@ -810,6 +823,10 @@ function normalizeActiveScope(
       : undefined,
     documentArtifactObservations: scope.documentArtifactObservations
       ? cloneToolArtifacts(scope.documentArtifactObservations)
+      : undefined,
+    // Uncapped: every chat attached in the conversation stays readable.
+    attachedConversationScope: attachedConversationScope.length
+      ? attachedConversationScope
       : undefined,
     exhaustiveReadBackend:
       scope.exhaustiveReadBackend === "codex_responses"
@@ -1483,6 +1500,7 @@ type ResolvedMcpCallScope = {
   scopeArgs: ReturnType<typeof extractMcpScopeArgs>;
   scope: ZoteroMcpActiveScope | null;
   libraryID: number;
+  libraryMismatch?: string;
   activeItemId?: number;
   activeContextItemId?: number;
 };
@@ -1518,15 +1536,28 @@ function resolveMcpCallScope(params: {
       `Conflicting Zotero library IDs: top-level libraryID=${scopeArgs.libraryID} but library_retrieve scope.libraryID=${retrievalLibraryID}.`,
     );
   }
+  // past_chat_read is pinned to the scope's library: it ignores the library
+  // selected in Zotero, and a model-supplied libraryID that differs from the
+  // scope's is refused (libraryMismatch) instead of overriding it.
+  const pinnedToScopeLibrary = params.toolName === PAST_CHAT_READ_TOOL_NAME;
+  const scopeLibraryID = normalizePositiveInt(scope?.libraryID) || 0;
+  const libraryMismatch =
+    pinnedToScopeLibrary &&
+    scopeArgs.libraryID &&
+    scopeArgs.libraryID !== scopeLibraryID
+      ? `Only past chats from this library can be read (libraryID ${scopeArgs.libraryID} is not the conversation's library).`
+      : undefined;
   return {
     scopeArgs,
     scope,
-    libraryID:
-      scopeArgs.libraryID ||
-      retrievalLibraryID ||
-      normalizePositiveInt(scope?.libraryID) ||
-      resolveActiveLibraryID() ||
-      0,
+    libraryMismatch,
+    libraryID: pinnedToScopeLibrary
+      ? scopeLibraryID
+      : scopeArgs.libraryID ||
+        retrievalLibraryID ||
+        scopeLibraryID ||
+        resolveActiveLibraryID() ||
+        0,
     activeItemId:
       scopeArgs.activeItemId ||
       scope?.activeItemId ||
@@ -1822,6 +1853,11 @@ function createToolContext(
     clarificationHistory: scope?.clarificationHistory,
     documentReadObservations: scope?.documentReadObservations,
     documentArtifactObservations: scope?.documentArtifactObservations,
+    // past_chat_read checks every chat against this list and the call's
+    // library (an explicit libraryID other than the scope's is refused).
+    attachedConversationScope: scope?.attachedConversationScope?.length
+      ? scope.attachedConversationScope
+      : undefined,
     exhaustiveReadBackend,
     activeNoteContext,
     metadata: {
@@ -2233,6 +2269,18 @@ async function handleToolsCall(
       ? Number(scope?.conversationGeneration)
       : getConversationWriteGeneration(scopeConversationKey)
     : 0;
+  if (callScope.libraryMismatch) {
+    completeActivity({ ok: false, error: callScope.libraryMismatch });
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ ok: false, error: callScope.libraryMismatch }),
+        },
+      ],
+      isError: true,
+    };
+  }
   const nativeFilesystemViolation = getRawPdfNativeFilesystemViolation({
     toolName: name,
     scope,

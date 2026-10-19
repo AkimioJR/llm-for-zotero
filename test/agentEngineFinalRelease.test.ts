@@ -3206,6 +3206,76 @@ describe("agent request sites (golden)", function () {
     assert.strictEqual(params.localDocuments, localDocuments);
   });
 
+  it("send carries the chats of the slash messages before a Claude Code turn, and none on a slash turn", async function () {
+    const pastChat = (conversationKey: number) => ({
+      system: "upstream" as const,
+      conversationKey,
+      conversationID: `conv-${conversationKey}`,
+      title: `Chat ${conversationKey}`,
+      libraryID: 1,
+    });
+    const captured: any[] = [];
+    const run = async (
+      conversationKey: number,
+      question: string,
+      stored: any[],
+    ) => {
+      const deps = createDeps({
+        runtime: completedRuntime(),
+        pendingWrites: [],
+        idleRestores: [],
+        statuses: [],
+      });
+      deps.getConversationSystem = () => "claude_code";
+      deps.buildAgentRuntimeRequest = (params) => {
+        captured.push(params);
+        return { conversationKey: params.conversationKey } as any;
+      };
+      deps.chatHistory.set(conversationKey, stored);
+      await sendAgentTurn(
+        {
+          body: {} as Element,
+          item: fakeItem(conversationKey),
+          question,
+          attachedConversations: [pastChat(4)],
+        },
+        deps,
+      ).catch(() => undefined);
+    };
+    const storedSlashTurn = () => [
+      {
+        role: "user",
+        text: "first",
+        timestamp: 10,
+        attachedConversations: [pastChat(1)],
+      },
+      { role: "assistant", text: "a", timestamp: 11 },
+      {
+        role: "user",
+        text: "/review",
+        timestamp: 20,
+        attachedConversations: [pastChat(2)],
+      },
+      { role: "assistant", text: "review", timestamp: 21 },
+    ];
+    await run(134, "Compare them", storedSlashTurn());
+    await run(135, "/cost", storedSlashTurn());
+    assert.deepEqual(
+      captured[0].deliveredConversations?.map(
+        (entry: { conversationKey: number }) => entry.conversationKey,
+      ),
+      [4, 2],
+    );
+    assert.deepEqual(
+      captured[0].attachedConversations?.map(
+        (entry: { conversationKey: number }) => entry.conversationKey,
+      ),
+      [4],
+      "the message's own chats are unchanged",
+    );
+    assert.notProperty(captured[1], "deliveredConversations");
+  });
+
   it("send falls back to the visible attachments only when no model attachments are given", async function () {
     const deps = createDeps({
       runtime: completedRuntime(),

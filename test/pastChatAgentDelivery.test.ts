@@ -598,12 +598,14 @@ describe("attached past chats reach the built-in agent", function () {
     assert.equal(prompt.filter(isPastChat).length, 1, "copy kept, not doubled");
   });
 
-  it("gives Claude Code and Codex conversations no past-chat history message", async function () {
+  it("gives Codex conversations no past-chat history message", async function () {
+    // Codex gets its chats through chat.ts (pastChatSimpleChatHistory.ts);
+    // Claude Code is covered in claudePastChatDelivery.test.ts.
     const plainHistory: ChatMessage[] = [
       { role: "user", content: "Q" },
       { role: "assistant", content: "A" },
     ];
-    for (const conversationSystem of ["claude_code", "codex"]) {
+    for (const conversationSystem of ["codex"]) {
       const history = await injectAttachedPastChatsIntoAgentHistory({
         conversationKey: 7108,
         conversationSystem,

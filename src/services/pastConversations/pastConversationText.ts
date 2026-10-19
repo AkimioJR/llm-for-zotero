@@ -140,6 +140,72 @@ export function collectConversationAttachedRefs(
 }
 
 /**
+ * The chats past_chat_read may open, from a list of references sent as one
+ * value (the MCP scope). Like collectConversationAttachedRefs, there is no cap
+ * on the union: each reference is normalized on its own, so the per-message
+ * limit of three never cuts the scope.
+ */
+export function normalizeAttachedConversationScope(
+  value: unknown,
+): AttachedConversationRef[] {
+  if (!Array.isArray(value)) return [];
+  return collectConversationAttachedRefs(
+    value.map((ref) => ({ attachedConversations: [ref] })),
+  );
+}
+
+/**
+ * True when a user message is a slash command ("/compact", "/review …"):
+ * its trimmed text starts with "/". Claude Code passes such a message to its
+ * own command handling, so a past chat is never put in front of it.
+ */
+export function isSlashCommandText(text: unknown): boolean {
+  return typeof text === "string" && text.trim().startsWith("/");
+}
+
+/**
+ * The past chats the user message at `index` delivers to the model, in the
+ * order they are rendered. No database access; the agent engine (Claude Code
+ * resume-fallback history) and the Claude Code current-turn prefix both call
+ * it, so the two always agree on which turn carries which chat.
+ *
+ * - "upstream" and "codex": the message's own chats.
+ * - "claude_code": a slash message delivers nothing, because Claude Code
+ *   takes it as a command. The next non-slash user message carries the chats
+ *   of that run of slash messages: its own chats first, then those of the
+ *   slash messages since the previous non-slash user message, oldest first,
+ *   one entry per chat.
+ *
+ * Callers pass the text the slash test should read: a stored row's `text`
+ * (displayQuestion || question) for history, and the runtime userText
+ * (question) for the current turn.
+ */
+export function resolveDeliveredPastChatRefs(
+  messages: ReadonlyArray<{
+    role?: unknown;
+    text?: unknown;
+    attachedConversations?: unknown;
+  } | null>,
+  index: number,
+  system: string,
+): AttachedConversationRef[] {
+  const message = messages[index];
+  if (!message || message.role !== "user") return [];
+  if (system !== "claude_code") {
+    return collectConversationAttachedRefs([message]);
+  }
+  if (isSlashCommandText(message.text)) return [];
+  const slashRun: Array<{ attachedConversations?: unknown }> = [];
+  for (let previous = index - 1; previous >= 0; previous -= 1) {
+    const candidate = messages[previous];
+    if (!candidate || candidate.role !== "user") continue;
+    if (!isSlashCommandText(candidate.text)) break;
+    slashRun.unshift(candidate);
+  }
+  return collectConversationAttachedRefs([message, ...slashRun]);
+}
+
+/**
  * Full-text tokens one agent turn may spend on past chats:
  * min(12,000, 15% of the context window).
  */
@@ -291,7 +357,7 @@ export function formatPastConversationOutline(
     formatHeader(chat),
     `This chat is long (${chat.messages.length} messages, about ${chat.tokenEstimate} tokens), so only the user's questions are listed:`,
   ].join("\n\n");
-  const footer = `Open messages with ${PAST_CHAT_READ_TOOL_NAME} (chat: "${chat.id}", message: <number>).`;
+  const footer = `Open messages with ${PAST_CHAT_READ_TOOL_NAME} (chat: "${chat.id}", message: <number>), or search with query.`;
   let used = estimateTextTokens(head) + estimateTextTokens(footer) + 12;
   const lines: string[] = [];
   for (const question of questions) {
