@@ -93,7 +93,13 @@ import {
 } from "./state";
 import { loadAllConversationHistory } from "./historyLoader";
 import {
+  isUnifiedHistoryRowListed,
+  listUnifiedHistoryEntries,
+  resolveUnifiedHistorySystems,
+} from "./unifiedHistorySource";
+import {
   formatGlobalHistoryTimestamp,
+  getHistoryRowRuntimeLabel,
   groupHistoryEntriesByDay,
   isOrphanHistoryEntry,
   maybeSelectPaperHistoryTarget,
@@ -971,6 +977,12 @@ export function openStandaloneChat(options?: {
       exportPopup.append(exportPopupCopyBtn, exportPopupNoteBtn);
 
       let standaloneSidebarEntriesByKey = new Map<number, SidebarConv>();
+      // Counts history row opens, so only the newest click mounts its chat.
+      let standaloneHistoryOpenSeq = 0;
+      // Set once the runtime switch code exists (see adoptStandaloneRuntime).
+      let adoptStandaloneRuntime: (
+        system: ConversationSystem,
+      ) => Promise<boolean> = async () => false;
 
       // -- Content area --
       const contentWrapper = doc.createElementNS(
@@ -1587,19 +1599,23 @@ export function openStandaloneChat(options?: {
         }
       };
 
+      // The window's own runtime (never the sidebar's saved one) decides the
+      // portal item, unless a history row names its own runtime.
       const buildStandalonePortalItem = (params: {
         mode: "open" | "paper";
         conversationKey: number;
         paperItem?: Zotero.Item | null;
         sessionVersion?: number;
+        system?: ConversationSystem;
       }): Zotero.Item | null => {
+        const system = params.system || currentConversationSystem;
         if (params.mode === "open") {
-          return isClaudeConversationSystem()
+          return system === "claude_code"
             ? (createClaudeGlobalPortalItem(
                 getCurrentLibraryScopeID(),
                 params.conversationKey,
               ) as Zotero.Item)
-            : isCodexConversationSystem()
+            : system === "codex"
               ? (createCodexGlobalPortalItem(
                   getCurrentLibraryScopeID(),
                   params.conversationKey,
@@ -1610,12 +1626,12 @@ export function openStandaloneChat(options?: {
                 );
         }
         if (!params.paperItem) return null;
-        return isClaudeConversationSystem()
+        return system === "claude_code"
           ? (createClaudePaperPortalItem(
               params.paperItem,
               params.conversationKey,
             ) as Zotero.Item)
-          : isCodexConversationSystem()
+          : system === "codex"
             ? (createCodexPaperPortalItem(
                 params.paperItem,
                 params.conversationKey,
@@ -1795,6 +1811,16 @@ export function openStandaloneChat(options?: {
       // -----------------------------------------------------------------------
       // Sidebar rendering — supports both open chat and paper chat
       // -----------------------------------------------------------------------
+      // The runtimes whose chats the window's lists show: the built-in one and
+      // the ones on in Preferences; a note session shows only its own.
+      const getStandaloneHistorySystems = (): ConversationSystem[] =>
+        resolveUnifiedHistorySystems({
+          activeSystem: currentConversationSystem,
+          codexEnabled: isCodexAppServerModeEnabled(),
+          claudeEnabled: getClaudeCodeModeEnabled(),
+          singleSystem: Boolean(resolveActiveNoteSession(activeItem)),
+        });
+
       const renderSidebarItems = (conversations: SidebarConv[]) => {
         clearSidebarList();
         const visibleConversations =
@@ -1843,6 +1869,8 @@ export function openStandaloneChat(options?: {
             btn.setAttribute("role", "button");
             btn.tabIndex = 0;
             btn.dataset.conversationKey = String(conv.conversationKey);
+            btn.dataset.conversationSystem =
+              conv.conversationSystem || currentConversationSystem;
             if (conv.sessionVersion !== undefined) {
               btn.dataset.sessionVersion = String(conv.sessionVersion);
             }
@@ -1877,9 +1905,20 @@ export function openStandaloneChat(options?: {
                 t("Working"),
               ),
               titleSpan,
-              renameBtn,
-              deleteBtn,
             );
+            const runtimeLabel = getHistoryRowRuntimeLabel(
+              conv.conversationSystem || currentConversationSystem,
+            );
+            if (runtimeLabel) {
+              const labelSpan = doc.createElementNS(
+                HTML_NS,
+                "span",
+              ) as HTMLSpanElement;
+              labelSpan.className = "llm-history-runtime-label";
+              labelSpan.textContent = runtimeLabel;
+              btn.appendChild(labelSpan);
+            }
+            btn.append(renameBtn, deleteBtn);
             btn.title = conv.title || t("Untitled chat");
             sidebarList.appendChild(btn);
           }
@@ -1908,12 +1947,12 @@ export function openStandaloneChat(options?: {
               });
             }
             const conversations = (
-              await conversationRepository.listCatalogEntries({
-                system: currentConversationSystem,
-                kind: "global",
+              await listUnifiedHistoryEntries({
                 libraryID: currentLibraryID,
+                scope: "global",
+                systems: getStandaloneHistorySystems(),
+                activeSystem: currentConversationSystem,
                 limit: 50,
-                includeEmpty: true,
               })
             ).map(toSidebarConversation);
             if (cancelled) return;
@@ -1943,13 +1982,13 @@ export function openStandaloneChat(options?: {
               paperItemID: paperID,
             });
             const conversations = (
-              await conversationRepository.listCatalogEntries({
-                system: currentConversationSystem,
-                kind: "paper",
+              await listUnifiedHistoryEntries({
                 libraryID: paperLibID,
+                scope: "paper",
                 paperItemID: paperID,
+                systems: getStandaloneHistorySystems(),
+                activeSystem: currentConversationSystem,
                 limit: 50,
-                includeEmpty: true,
               })
             ).map(toSidebarConversation);
             if (cancelled) return;
@@ -2028,6 +2067,7 @@ export function openStandaloneChat(options?: {
           (id) => Zotero.Items.get(id) as Zotero.Item | null,
         );
         return {
+          system: entry.conversationSystem || currentConversationSystem,
           kind: isPaper ? "paper" : "global",
           sourceState,
           section: isPaper ? "paper" : "open",
@@ -2053,65 +2093,90 @@ export function openStandaloneChat(options?: {
         };
       };
 
+      // Every chat of the listed runtimes in this library: the Search history
+      // popup and the side panel's History tab read it. Empty chats of other
+      // runtimes are left out.
       const loadAllStandaloneSearchEntries = async (): Promise<
         ConversationHistoryEntry[]
       > => {
         const libraryID = getCurrentLibraryScopeID();
         const limit = 100;
-        let entries: SidebarConv[];
-        if (isClaudeConversationSystem()) {
-          entries = (
-            await loadAllClaudeConversationHistory({ libraryID, limit })
-          ).map((entry) => ({
-            conversationKey: entry.conversationKey,
-            conversationID: entry.conversationID,
-            libraryID,
-            lastActivityAt: entry.lastActivityAt,
-            title: entry.title,
-            userTurnCount: entry.userTurnCount,
-            paperItemID: entry.paperItemID,
-            providerSessionId: entry.providerSessionId,
-            scopedConversationKey: entry.scopedConversationKey,
-            mode: entry.kind === "paper" ? "paper" : "open",
-          }));
-        } else if (isCodexConversationSystem()) {
-          entries = (
-            await loadAllCodexConversationHistory({ libraryID, limit })
-          ).map((entry) => ({
-            conversationKey: entry.conversationKey,
-            conversationID: entry.conversationID,
-            libraryID,
-            lastActivityAt: entry.lastActivityAt,
-            title: entry.title,
-            userTurnCount: entry.userTurnCount,
-            paperItemID: entry.paperItemID,
-            providerSessionId: entry.providerSessionId,
-            scopedConversationKey: entry.scopedConversationKey,
-            mode: entry.kind === "paper" ? "paper" : "open",
-          }));
-        } else {
-          entries = (
-            await loadAllConversationHistory({ libraryID, limit })
-          ).map((entry) => ({
-            conversationKey: entry.conversationKey,
-            conversationID: entry.conversationID,
-            libraryID,
-            lastActivityAt: entry.lastActivityAt,
-            title: entry.title,
-            userTurnCount: entry.userTurnCount,
-            sessionVersion: entry.sessionVersion,
-            paperItemID: entry.paperItemID,
-            mode: entry.mode,
-          }));
-        }
-        return entries
+        const activeSystem = currentConversationSystem;
+        const loadSystemEntries = async (
+          system: ConversationSystem,
+        ): Promise<SidebarConv[]> => {
+          if (system === "claude_code" || system === "codex") {
+            const summaries =
+              system === "claude_code"
+                ? await loadAllClaudeConversationHistory({ libraryID, limit })
+                : await loadAllCodexConversationHistory({ libraryID, limit });
+            return summaries.map((entry) => ({
+              conversationKey: entry.conversationKey,
+              conversationID: entry.conversationID,
+              conversationSystem: system,
+              libraryID,
+              lastActivityAt: entry.lastActivityAt,
+              title: entry.title,
+              userTurnCount: entry.userTurnCount,
+              paperItemID: entry.paperItemID,
+              providerSessionId: entry.providerSessionId,
+              scopedConversationKey: entry.scopedConversationKey,
+              mode: entry.kind === "paper" ? "paper" : "open",
+            }));
+          }
+          return (await loadAllConversationHistory({ libraryID, limit })).map(
+            (entry) => ({
+              conversationKey: entry.conversationKey,
+              conversationID: entry.conversationID,
+              conversationSystem: "upstream" as const,
+              libraryID,
+              lastActivityAt: entry.lastActivityAt,
+              title: entry.title,
+              userTurnCount: entry.userTurnCount,
+              sessionVersion: entry.sessionVersion,
+              paperItemID: entry.paperItemID,
+              mode: entry.mode,
+            }),
+          );
+        };
+        const perSystem = await Promise.all(
+          getStandaloneHistorySystems().map(async (system) => {
+            try {
+              return await loadSystemEntries(system);
+            } catch (err) {
+              appLogger.warn("LLM: standalone history rows failed", {
+                system,
+                error: err,
+              });
+              return [] as SidebarConv[];
+            }
+          }),
+        );
+        return perSystem
+          .flat()
+          .filter((entry) =>
+            isUnifiedHistoryRowListed(
+              {
+                system: entry.conversationSystem || activeSystem,
+                userTurnCount: entry.userTurnCount,
+              },
+              activeSystem,
+            ),
+          )
+          .sort((a, b) => {
+            if (b.lastActivityAt !== a.lastActivityAt) {
+              return b.lastActivityAt - a.lastActivityAt;
+            }
+            return b.conversationKey - a.conversationKey;
+          })
           .map(toStandaloneHistoryEntry)
           .filter(
             (entry) =>
               !pendingDeletionStore.isConversationPendingDeletion(
                 entry.conversationKey,
               ),
-          );
+          )
+          .slice(0, limit);
       };
 
       const loadStandaloneSearchDocument = async (
@@ -2121,7 +2186,7 @@ export function openStandaloneChat(options?: {
         const cached = searchDocCache.get(entry.conversationKey);
         if (cached?.fingerprint === fingerprint) return cached.document;
         const messages = await conversationRepository.loadMessages({
-          system: currentConversationSystem,
+          system: entry.system,
           conversationKey: entry.conversationKey,
           limit: 200,
         });
@@ -2159,6 +2224,32 @@ export function openStandaloneChat(options?: {
       const selectStandaloneSearchEntry = async (
         entry: ConversationHistoryEntry,
       ): Promise<boolean> => {
+        // A row of another runtime opens in that runtime: the window adopts
+        // it (leaving WebChat first) right before it mounts the row's chat.
+        // The sidebar's runtime stays as it is.
+        const targetSystem = entry.system;
+        if (
+          targetSystem !== currentConversationSystem &&
+          !getStandaloneHistorySystems().includes(targetSystem)
+        ) {
+          return false;
+        }
+        // The open claims its sequence number once every refusal check has
+        // passed, before its first await, so a refused click never cancels an
+        // earlier open and a later click always wins over this one.
+        let openSeq = 0;
+        const claimOpen = () => {
+          openSeq = ++standaloneHistoryOpenSeq;
+        };
+        const isNewestOpen = () =>
+          openSeq === standaloneHistoryOpenSeq && !cancelled && !newWin.closed;
+        const adoptTargetRuntime = async (): Promise<boolean> => {
+          if (!isNewestOpen()) return false;
+          // Read at this moment: an earlier open may have moved the window.
+          if (targetSystem === currentConversationSystem) return true;
+          const adopted = await adoptStandaloneRuntime(targetSystem);
+          return adopted && isNewestOpen();
+        };
         try {
           if (entry.kind === "paper") {
             if (isOrphanHistoryEntry(entry)) {
@@ -2211,10 +2302,11 @@ export function openStandaloneChat(options?: {
               conversationKey: entry.conversationKey,
               paperItem,
               sessionVersion: sv,
+              system: targetSystem,
             });
             if (!portalItem) return false;
             const targetModeSnapshot = primeHistoryNavigationMode({
-              system: currentConversationSystem,
+              system: targetSystem,
               libraryID:
                 Number(entry.libraryID || 0) ||
                 Number(paperItem.libraryID || 0) ||
@@ -2225,6 +2317,7 @@ export function openStandaloneChat(options?: {
               paperItemID: paperItem.id,
             });
             let mounted = false;
+            claimOpen();
             try {
               if (navigationDecision === "select-target-paper") {
                 const selected = await maybeSelectStandaloneHistoryPaperItem(
@@ -2244,7 +2337,9 @@ export function openStandaloneChat(options?: {
                   }
                   return false;
                 }
+                if (!isNewestOpen()) return false;
               }
+              if (!(await adoptTargetRuntime())) return false;
               standaloneMode = "paper";
               currentPaperItem = paperItem;
               currentBasePaperItem = paperItem;
@@ -2261,10 +2356,11 @@ export function openStandaloneChat(options?: {
             const portalItem = buildStandalonePortalItem({
               mode: "open",
               conversationKey: entry.conversationKey,
+              system: targetSystem,
             });
             if (!portalItem) return false;
             const targetModeSnapshot = primeHistoryNavigationMode({
-              system: currentConversationSystem,
+              system: targetSystem,
               libraryID:
                 Number(entry.libraryID || 0) || getCurrentLibraryScopeID(),
               surface: "standalone",
@@ -2272,7 +2368,9 @@ export function openStandaloneChat(options?: {
               conversationKey: entry.conversationKey,
             });
             let mounted = false;
+            claimOpen();
             try {
+              if (!(await adoptTargetRuntime())) return false;
               standaloneMode = "open";
               paperTab.classList.remove("active");
               openTab.classList.add("active");
@@ -2292,6 +2390,7 @@ export function openStandaloneChat(options?: {
       // The list sources the Search history popup and the side panel's
       // History list share.
       const standaloneHistoryListSources = {
+        showRuntimeLabel: true,
         loadEntries: loadAllStandaloneSearchEntries,
         loadDocument: loadStandaloneSearchDocument,
         translate: t,
@@ -2358,6 +2457,7 @@ export function openStandaloneChat(options?: {
             return buildStandalonePortalItem({
               mode: "open",
               conversationKey: entry.conversationKey,
+              system: entry.system,
             });
           }
           const paperItem = resolveStandaloneHistoryEntryPaper(entry);
@@ -2368,6 +2468,7 @@ export function openStandaloneChat(options?: {
             conversationKey: entry.conversationKey,
             paperItem,
             sessionVersion: sessionVersion > 0 ? sessionVersion : 1,
+            system: entry.system,
           });
         },
         resolveHistoryEntryPaper: resolveStandaloneHistoryEntryPaper,
@@ -3142,7 +3243,7 @@ export function openStandaloneChat(options?: {
         conversationID: entry.conversationID,
         conversationKey: entry.conversationKey,
         kind: entry.kind,
-        conversationSystem: currentConversationSystem,
+        conversationSystem: entry.system,
         libraryID: entry.libraryID || getCurrentLibraryScopeID(),
         lastActivityAt: entry.lastActivityAt,
         title: entry.title,
@@ -3336,43 +3437,68 @@ export function openStandaloneChat(options?: {
           return;
         const key = Number(target.dataset.conversationKey);
         if (!key || key === activeConversationKey) return;
+        const openSeq = ++standaloneHistoryOpenSeq;
+        const rowSystem =
+          standaloneSidebarEntriesByKey.get(key)?.conversationSystem ||
+          currentConversationSystem;
 
-        activeConversationKey = key;
+        const openRow = () => {
+          activeConversationKey = key;
 
-        // Update active class
-        const conversationItems = Array.from(
-          sidebarList.querySelectorAll(".llm-standalone-conv-item"),
-        ) as HTMLElement[];
-        for (const el of conversationItems) {
-          el.classList.remove("active");
-        }
-        target.classList.add("active");
-
-        if (standaloneMode === "open") {
-          const currentLibraryID = getCurrentLibraryScopeID();
-          rememberStandaloneGlobalConversation(
-            currentConversationSystem,
-            currentLibraryID,
-            key,
-          );
-          const newItem = buildStandalonePortalItem({
-            mode: "open",
-            conversationKey: key,
-          });
-          if (newItem) mountChatPanel(newItem);
-        } else {
-          if (currentBasePaperItem) {
-            const sessionVersion = Number(target.dataset.sessionVersion || "0");
-            const newItem = buildStandalonePortalItem({
-              mode: "paper",
-              conversationKey: key,
-              paperItem: currentBasePaperItem,
-              sessionVersion,
-            });
-            currentPaperItem = currentBasePaperItem;
-            if (newItem) mountChatPanel(newItem);
+          // Update active class
+          const conversationItems = Array.from(
+            sidebarList.querySelectorAll(".llm-standalone-conv-item"),
+          ) as HTMLElement[];
+          for (const el of conversationItems) {
+            el.classList.remove("active");
           }
+          target.classList.add("active");
+
+          if (standaloneMode === "open") {
+            const currentLibraryID = getCurrentLibraryScopeID();
+            rememberStandaloneGlobalConversation(
+              currentConversationSystem,
+              currentLibraryID,
+              key,
+            );
+            const newItem = buildStandalonePortalItem({
+              mode: "open",
+              conversationKey: key,
+            });
+            if (newItem) mountChatPanel(newItem);
+          } else {
+            if (currentBasePaperItem) {
+              const sessionVersion = Number(
+                target.dataset.sessionVersion || "0",
+              );
+              const newItem = buildStandalonePortalItem({
+                mode: "paper",
+                conversationKey: key,
+                paperItem: currentBasePaperItem,
+                sessionVersion,
+              });
+              currentPaperItem = currentBasePaperItem;
+              if (newItem) mountChatPanel(newItem);
+            }
+          }
+        };
+
+        if (rowSystem === currentConversationSystem) {
+          openRow();
+          return;
         }
+        // A row of another runtime: the window adopts that runtime first.
+        void adoptStandaloneRuntime(rowSystem).then((adopted) => {
+          if (
+            !adopted ||
+            openSeq !== standaloneHistoryOpenSeq ||
+            cancelled ||
+            newWin.closed
+          ) {
+            return;
+          }
+          openRow();
+        });
       });
 
       sidebarList.addEventListener("keydown", (e: Event) => {
@@ -3816,6 +3942,36 @@ export function openStandaloneChat(options?: {
           );
         }
         updateStandaloneSystemToggles();
+      };
+
+      /**
+       * Makes `system` the window's runtime for a history row of that runtime,
+       * without mounting anything: the caller mounts the row's chat next.
+       * Leaves WebChat first. The sidebar's saved runtime is not touched.
+       * Resolves false when the runtime is off or a newer switch started.
+       */
+      adoptStandaloneRuntime = async (
+        system: ConversationSystem,
+      ): Promise<boolean> => {
+        if (
+          (system === "codex" && !isCodexAppServerModeEnabled()) ||
+          (system === "claude_code" && !getClaudeCodeModeEnabled())
+        ) {
+          return false;
+        }
+        const switchSeq = ++systemSwitchSeq;
+        if (isInWebChatMode) {
+          await currentChatHooks?.leaveWebChatMode?.();
+          if (switchSeq !== systemSwitchSeq || cancelled || newWin.closed) {
+            return false;
+          }
+        }
+        if (system !== currentConversationSystem) {
+          surfaceChoices.conversationSystem.set(system, "standalone");
+          currentConversationSystem = system;
+        }
+        updateStandaloneSystemToggles();
+        return true;
       };
 
       for (const system of RUNTIME_CONVERSATION_SYSTEMS) {

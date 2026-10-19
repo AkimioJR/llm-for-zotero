@@ -204,6 +204,7 @@ import {
 } from "./chat";
 import { scheduleConversationQuoteRevalidation } from "./quoteValidation/scheduling";
 import {
+  getWorkflowTestHistoryOpenFailure,
   getWorkflowTestSendInterceptor,
   notifyWorkflowTestSendSettled,
 } from "./workflowTestHooks";
@@ -532,7 +533,9 @@ import {
   createHistoryLifecycleController,
   disposePendingDeletionSubscriptionForBody,
   disposeConversationCatalogSubscriptionForBody,
+  type RuntimeHistoryTarget,
 } from "./setupHandlers/controllers/historyLifecycleController";
+import { resolveUnifiedHistorySystems } from "./unifiedHistorySource";
 import { attachComposePreviewInteractionController } from "./setupHandlers/controllers/composePreviewInteractionController";
 import { attachFontScaleShortcutController } from "./setupHandlers/controllers/fontScaleShortcutController";
 import { updateHeaderSpacing } from "./setupHandlers/controllers/headerSpacing";
@@ -1494,6 +1497,10 @@ export function setupHandlers(
   ) => Promise<boolean> = async () => false;
   let switchPaperConversation: (
     nextConversationKey?: number,
+    options?: {
+      paperItem?: Zotero.Item | null;
+      allowedCatalogPaperItemID?: number;
+    },
   ) => Promise<boolean | void> = async () => {};
   let createAndSwitchGlobalConversation: (
     forceFresh?: boolean,
@@ -1521,40 +1528,50 @@ export function setupHandlers(
   let clearForcedSkill = () => {};
   let renderWebChatHistoryMenu: () => Promise<void> = async () => {};
   let isWebChatMode = () => isWebChatModeActive();
+  /**
+   * Moves this panel to `nextSystem`. Without a target it opens that runtime's
+   * remembered conversation (or a fresh draft with `forceFresh`). With a
+   * `target` (a history row of that runtime) it opens the target directly and
+   * never loads the remembered conversation first. Resolves true when the
+   * panel ended on the requested runtime.
+   */
   const switchConversationSystem = async (
     nextSystem: ConversationSystem,
-    options?: { forceFresh?: boolean },
-  ) => {
+    options?: { forceFresh?: boolean; target?: RuntimeHistoryTarget },
+  ): Promise<boolean> => {
     if (
       !item ||
       !requireCurrentPanelOwnership(body, item, "switch-provider-system")
     ) {
-      return;
+      return false;
     }
     const ownershipLease = capturePanelOperationLease(body);
-    if (!ownershipLease) return;
+    if (!ownershipLease) return false;
     // WebChat is an upstream-only provider mode. Restore a non-webchat model
     // entry before the runtime changes so a later return to upstream (or the
     // next Zotero start) cannot silently re-enter webchat. The runtime switch
     // below replaces the conversation, so no paper conversation restore here.
     if (isWebChatModeActive()) {
       await leaveWebChatMode({ restoreConversation: false });
-      if (!isPanelOperationLeaseCurrent(ownershipLease)) return;
+      if (!isPanelOperationLeaseCurrent(ownershipLease)) return false;
     }
     const noteSession = resolveCurrentNoteSession();
     if (noteSession) {
+      // A note lists only its own runtime's chats, so no history row of
+      // another runtime can ask to open here.
+      if (options?.target) return false;
       const resolvedNextSystem = resolveNoteFocusSystemSwitch({
         nextSystem,
         codexAvailable: isCodexModeAvailable(),
         claudeAvailable: isClaudeModeAvailable(),
       });
-      if (!resolvedNextSystem) return;
-      if (resolvedNextSystem === getConversationSystem()) return;
+      if (!resolvedNextSystem) return false;
+      if (resolvedNextSystem === getConversationSystem()) return true;
       persistDraftInputForCurrentConversation();
       const nextKey = resolveConversationKeyForNoteFocus(item, {
         conversationSystem: resolvedNextSystem,
       });
-      if (!nextKey) return;
+      if (!nextKey) return false;
       const nextItem = createNoteConversationItem(
         item,
         resolvedNextSystem,
@@ -1568,7 +1585,7 @@ export function setupHandlers(
           ownershipLease,
         )
       )
-        return;
+        return false;
       item = nextItem;
       panelChoices.setConversationSystem(resolvedNextSystem);
       currentConversationSystem = resolvedNextSystem;
@@ -1581,7 +1598,7 @@ export function setupHandlers(
       updateRuntimeSystemToggles();
       if (options?.forceFresh === true) {
         await createAndSwitchPaperConversation(true);
-        return;
+        return true;
       }
       await ensureConversationLoaded(item, { body });
       restoreDraftInputForCurrentConversation();
@@ -1589,12 +1606,13 @@ export function setupHandlers(
       resetComposePreviewUI();
       updateModelButton();
       updateReasoningButton();
-      return;
+      return true;
     }
-    if (nextSystem === getConversationSystem()) return;
+    if (nextSystem === getConversationSystem()) return true;
     const libraryID = getCurrentLibraryID();
-    if (!libraryID) return;
+    if (!libraryID) return false;
     const forceFresh = options?.forceFresh === true;
+    const previousSystem = getConversationSystem();
     persistDraftInputForCurrentConversation();
     panelChoices.setConversationSystem(nextSystem);
     currentConversationSystem = nextSystem;
@@ -1610,10 +1628,89 @@ export function setupHandlers(
     if (nextSystem === "claude_code") {
       warmClaudeModeCaches();
     }
+    const target = options?.target;
+    if (target) {
+      // The panel has not left its conversation yet: put the runtime back.
+      const restorePreviousSystem = () => {
+        panelChoices.setConversationSystem(previousSystem);
+        currentConversationSystem = previousSystem;
+        syncQueuedFollowUpRegistration();
+        updateRuntimeSystemToggles();
+        updateRuntimeModeButton();
+      };
+      if (target.kind === "global") {
+        const loaded = getWorkflowTestHistoryOpenFailure()?.({
+          system: nextSystem,
+          conversationKey: target.conversationKey,
+        })
+          ? false
+          : await switchGlobalConversation(target.conversationKey);
+        if (
+          !loaded &&
+          item &&
+          (resolveConversationSystemForItem(item) || "upstream") !== nextSystem
+        ) {
+          restorePreviousSystem();
+        }
+        return loaded;
+      }
+      const rawBaseItem = target.paperItem || resolveCurrentPaperBaseItem();
+      if (!rawBaseItem) {
+        restorePreviousSystem();
+        return false;
+      }
+      const resolvedState = resolveInitialPanelItemState(rawBaseItem, {
+        conversationSystem: nextSystem,
+        surface: selectionSurface(),
+      });
+      const nextItem = resolvedState.item || item;
+      const nextBasePaperItem = resolvedState.basePaperItem || basePaperItem;
+      if (
+        !isPanelOperationLeaseCurrent(ownershipLease) ||
+        !canCommitPanelConversation(
+          body,
+          nextItem,
+          "switch-provider-system-commit",
+          ownershipLease,
+        ) ||
+        (nextBasePaperItem &&
+          !isPanelHostCompatibleWithPaper(body, nextBasePaperItem))
+      ) {
+        restorePreviousSystem();
+        return false;
+      }
+      const previousItem = item;
+      const previousBasePaperItem = basePaperItem;
+      item = nextItem;
+      basePaperItem = nextBasePaperItem;
+      syncConversationIdentity();
+      const loaded = await switchPaperConversation(target.conversationKey, {
+        paperItem: target.paperItem || nextBasePaperItem,
+        allowedCatalogPaperItemID: target.allowedCatalogPaperItemID,
+      });
+      if (loaded) return true;
+      // The target could not open. Put the previous runtime and chat back; the
+      // caller restores the remembered keys, so they agree with the panel.
+      if (!isPanelOperationLeaseCurrent(ownershipLease)) return false;
+      restorePreviousSystem();
+      item = previousItem;
+      basePaperItem = previousBasePaperItem;
+      syncConversationIdentity();
+      await ensureConversationLoaded(item as Zotero.Item, { body });
+      if (!isPanelOperationLeaseCurrent(ownershipLease)) return false;
+      restoreDraftInputForCurrentConversation();
+      refreshChatPreservingScroll();
+      resetComposePreviewUI();
+      updateModelButton();
+      updateReasoningButton();
+      updateRuntimeSystemToggles();
+      void refreshGlobalHistoryHeader();
+      return false;
+    }
     if (isGlobalMode()) {
       if (forceFresh) {
         await createAndSwitchGlobalConversation(true);
-        return;
+        return true;
       }
       const surface = selectionSurface();
       const nextConversationKey =
@@ -1650,11 +1747,11 @@ export function setupHandlers(
       } else {
         await createAndSwitchGlobalConversation();
       }
-      return;
+      return true;
     }
     if (forceFresh) {
       const rawBaseItem = resolveCurrentPaperBaseItem();
-      if (!rawBaseItem) return;
+      if (!rawBaseItem) return false;
       const resolvedState = resolveInitialPanelItemState(rawBaseItem, {
         conversationSystem: nextSystem,
         surface: selectionSurface(),
@@ -1672,16 +1769,16 @@ export function setupHandlers(
         (nextBasePaperItem &&
           !isPanelHostCompatibleWithPaper(body, nextBasePaperItem))
       ) {
-        return;
+        return false;
       }
       item = nextItem;
       basePaperItem = nextBasePaperItem;
       syncConversationIdentity();
       await createAndSwitchPaperConversation(true);
-      return;
+      return true;
     }
     const rawBaseItem = resolveCurrentPaperBaseItem();
-    if (!rawBaseItem) return;
+    if (!rawBaseItem) return false;
     const resolvedState = resolveInitialPanelItemState(rawBaseItem, {
       conversationSystem: nextSystem,
       surface: selectionSurface(),
@@ -1699,7 +1796,7 @@ export function setupHandlers(
       (nextBasePaperItem &&
         !isPanelHostCompatibleWithPaper(body, nextBasePaperItem))
     ) {
-      return;
+      return false;
     }
     item = nextItem;
     basePaperItem = nextBasePaperItem;
@@ -1708,7 +1805,7 @@ export function setupHandlers(
       warmClaudeModeCaches();
     }
     await ensureConversationLoaded(item as Zotero.Item, { body });
-    if (!isPanelOperationLeaseCurrent(ownershipLease)) return;
+    if (!isPanelOperationLeaseCurrent(ownershipLease)) return false;
     await renderShortcuts(
       body,
       item as Zotero.Item,
@@ -1721,6 +1818,7 @@ export function setupHandlers(
     updateReasoningButton();
     updateRuntimeSystemToggles();
     void refreshGlobalHistoryHeader();
+    return true;
   };
   const isClaudeConversationDraft = async (conversationKey: number) => {
     const summary = await conversationRepository.getCatalogEntry({
@@ -5092,6 +5190,25 @@ export function setupHandlers(
     moveToOwnWebChatSession: () => moveToOwnWebChatSession(),
     updateImagePreviewPreservingScroll,
     switchConversationSystem,
+    getHistorySystems: () =>
+      resolveUnifiedHistorySystems({
+        activeSystem: getConversationSystem(),
+        codexEnabled: isCodexModeAvailable(),
+        claudeEnabled: isClaudeModeAvailable(),
+        singleSystem: isSidePanel || isNoteSession(),
+      }),
+    isRuntimeSystemSwitchInFlight: () => runtimeSystemSwitchInFlight,
+    openHistoryEntryInSystem: (system, target) =>
+      openHistoryEntryInSystem(system, target),
+    setSurfaceConversationSystem: (system) => {
+      const previous = panelChoices.getConversationSystem();
+      panelChoices.setConversationSystem(system);
+      return () => {
+        if (panelChoices.getConversationSystem() === system) {
+          panelChoices.setConversationSystem(previous);
+        }
+      };
+    },
     setActiveEditSession: (value) => {
       activeEditSession = value;
     },
@@ -5177,6 +5294,38 @@ export function setupHandlers(
     } finally {
       runtimeSystemSwitchInFlight = false;
       updateRuntimeSystemToggles();
+    }
+  };
+  /**
+   * Opens a history row of another runtime: switches this panel to `system`
+   * and opens the row's conversation directly. Runs inside the same in-flight
+   * guard as the badge and the header buttons, so they show busy and a second
+   * row click is refused until this one ends.
+   */
+  const openHistoryEntryInSystem = async (
+    system: ConversationSystem,
+    target: RuntimeHistoryTarget,
+  ): Promise<boolean> => {
+    if (
+      runtimeSystemSwitchInFlight ||
+      !item ||
+      (system === "codex" && !isCodexModeAvailable()) ||
+      (system === "claude_code" && !isClaudeModeAvailable())
+    ) {
+      return false;
+    }
+    recoverDriftedPanelScopeForRuntimeToggle();
+    runtimeSystemSwitchInFlight = true;
+    updateRuntimeSystemToggles();
+    try {
+      return await switchConversationSystem(system, { target });
+    } catch (err) {
+      appLogger.warn("LLM: Failed to open a history row in its runtime", err);
+      return false;
+    } finally {
+      runtimeSystemSwitchInFlight = false;
+      updateRuntimeSystemToggles();
+      updateRuntimeModeButton();
     }
   };
   for (const system of RUNTIME_CONVERSATION_SYSTEMS) {

@@ -48,6 +48,68 @@ export type PastConversationSearchFilters = {
 };
 
 /**
+ * The index result of each system for one library, with its status: the
+ * matches, and whether the index was ready, empty, stale, truncated or
+ * unavailable. An empty or stale index is refreshed once; a refresh that
+ * finds the index unavailable keeps the first result. A system whose index
+ * throws gives `result: null`, so a caller can fall back for that system.
+ * `limit` is per system; without it the index's own limit applies.
+ */
+export async function searchPastConversationIndexBySystem(
+  params: {
+    libraryID: number;
+    query: string;
+    limit?: number;
+    matchAllWords?: boolean;
+  } & PastConversationSearchFilters,
+) {
+  const { searchConversationIndexWithStatus } =
+    await import("../../shared/conversationSearchIndex");
+  type IndexResult = Awaited<
+    ReturnType<typeof searchConversationIndexWithStatus>
+  >;
+  const systems = params.systems || PAST_CONVERSATION_SYSTEMS;
+  return await Promise.all(
+    systems.map(
+      async (
+        system,
+      ): Promise<{
+        system: ConversationSystem;
+        result: IndexResult | null;
+      }> => {
+        try {
+          const request = {
+            system,
+            libraryID: params.libraryID,
+            query: params.query,
+            ...(params.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params.matchAllWords ? { matchAllWords: true } : {}),
+            ...(params.paperItemID ? { paperItemID: params.paperItemID } : {}),
+            ...(params.minLastActivityAt
+              ? { minLastActivityAt: params.minLastActivityAt }
+              : {}),
+          };
+          let indexed = await searchConversationIndexWithStatus({
+            ...request,
+            refresh: false,
+          });
+          if (indexed.status === "empty" || indexed.status === "stale") {
+            const refreshed = await searchConversationIndexWithStatus({
+              ...request,
+              refresh: true,
+            });
+            if (refreshed.status !== "unavailable") indexed = refreshed;
+          }
+          return { system, result: indexed };
+        } catch {
+          return { system, result: null };
+        }
+      },
+    ),
+  );
+}
+
+/**
  * Index matches of every system for one library: chats whose title or text
  * contains any of the query's words (or, with `matchAllWords`, every word),
  * newest first per system, at most `limit` per system, inside the filters.
@@ -63,41 +125,8 @@ export async function searchPastConversationIndex(
     matchAllWords?: boolean;
   } & PastConversationSearchFilters,
 ) {
-  const { searchConversationIndexWithStatus } =
-    await import("../../shared/conversationSearchIndex");
-  const systems = params.systems || PAST_CONVERSATION_SYSTEMS;
-  const perSystem = await Promise.all(
-    systems.map(async (system) => {
-      try {
-        const request = {
-          system,
-          libraryID: params.libraryID,
-          query: params.query,
-          limit: params.limit,
-          ...(params.matchAllWords ? { matchAllWords: true } : {}),
-          ...(params.paperItemID ? { paperItemID: params.paperItemID } : {}),
-          ...(params.minLastActivityAt
-            ? { minLastActivityAt: params.minLastActivityAt }
-            : {}),
-        };
-        let indexed = await searchConversationIndexWithStatus({
-          ...request,
-          refresh: false,
-        });
-        if (indexed.status === "empty" || indexed.status === "stale") {
-          const refreshed = await searchConversationIndexWithStatus({
-            ...request,
-            refresh: true,
-          });
-          if (refreshed.status !== "unavailable") indexed = refreshed;
-        }
-        return indexed.matches;
-      } catch {
-        return [];
-      }
-    }),
-  );
-  return perSystem.flat();
+  const perSystem = await searchPastConversationIndexBySystem(params);
+  return perSystem.flatMap(({ result }) => result?.matches || []);
 }
 
 /**

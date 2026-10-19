@@ -170,6 +170,7 @@ export type StandaloneSidePanelDeps = {
     | "log"
     | "resolveLabel"
     | "resolveScopeLabel"
+    | "showRuntimeLabel"
   >;
   /** The portal item a history entry's conversation renders on. */
   buildHistoryEntryItem: (

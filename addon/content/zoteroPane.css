@@ -2011,6 +2011,19 @@
   background: var(--llm-history-orphan-chip-bg);
 }
 
+/* The runtime name ("Codex", "Claude") on a history row: plain small text. */
+.llm-history-runtime-label {
+  flex: 0 0 auto;
+  font-size: var(--llm-fs-10);
+  line-height: 1.5;
+  color: var(--fill-secondary);
+  white-space: nowrap;
+}
+
+.llm-standalone-conv-item > .llm-history-runtime-label {
+  margin-inline-start: 6px;
+}
+
 .llm-standalone-search-title {
   flex: 1;
   min-width: 0;

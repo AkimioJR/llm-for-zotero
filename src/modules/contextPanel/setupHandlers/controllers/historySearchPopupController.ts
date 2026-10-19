@@ -6,6 +6,7 @@ import {
 import {
   formatGlobalHistoryTimestamp,
   getHistoryEntryLabelType,
+  getHistoryRowRuntimeLabel,
   groupHistoryEntriesByDay,
   type ConversationHistoryEntry,
 } from "./conversationHistoryController";
@@ -52,6 +53,8 @@ export type HistorySearchPopupControllerDeps = {
   log?: (...args: unknown[]) => void;
   resolveLabel?: (entry: ConversationHistoryEntry) => string;
   resolveScopeLabel?: (entry: ConversationHistoryEntry) => string;
+  /** Names the runtime ("Codex", "Claude") on rows of those runtimes. */
+  showRuntimeLabel?: boolean;
   /** Search box hint; defaults to "Search history". */
   searchPlaceholder?: string;
   /** Conversation keys to hide from every list the popup shows. */
@@ -301,6 +304,8 @@ export type HistorySearchListViewDeps = {
   log?: (...args: unknown[]) => void;
   resolveLabel?: (entry: ConversationHistoryEntry) => string;
   resolveScopeLabel?: (entry: ConversationHistoryEntry) => string;
+  /** Names the runtime ("Codex", "Claude") on rows of those runtimes. */
+  showRuntimeLabel?: boolean;
 };
 
 export const HISTORY_SEARCH_EMBEDDED_CLASS = "llm-standalone-search-embedded";
@@ -411,6 +416,7 @@ export function createHistorySearchListView(
         item.setAttribute("role", "button");
         item.setAttribute("tabindex", "0");
         item.dataset.conversationKey = String(entry.conversationKey);
+        item.dataset.conversationSystem = entry.system;
 
         const textWrap = createElement(
           doc,
@@ -444,6 +450,16 @@ export function createHistorySearchListView(
           ),
           title,
         );
+        const runtimeLabel = deps.showRuntimeLabel
+          ? getHistoryRowRuntimeLabel(entry.system)
+          : "";
+        if (runtimeLabel) {
+          textWrap.appendChild(
+            createElement(doc, "span", "llm-history-runtime-label", {
+              textContent: runtimeLabel,
+            }),
+          );
+        }
         if (deps.onDelete && entry.deletable) {
           const deleteButton = createElement(
             doc,
@@ -871,6 +887,7 @@ export function createHistorySearchPopupController(
     log,
     resolveLabel: deps.resolveLabel,
     resolveScopeLabel: deps.resolveScopeLabel,
+    showRuntimeLabel: deps.showRuntimeLabel,
     getExcludedConversationKeys: deps.getExcludedConversationKeys,
     onSelect: (entry) =>
       Promise.resolve(deps.onSelect(entry))

@@ -755,6 +755,38 @@ export type WorkflowTestPendingSendDeleteResult = {
 export type WorkflowTestHistoryRow = {
   conversationKey: number;
   title: string;
+  /** The runtime the row belongs to ("upstream", "codex", "claude_code"). */
+  system?: string;
+  /** The small runtime name on the row ("Codex", "Claude"; "" for Agent). */
+  runtimeLabel?: string;
+  /** The row's time text ("Draft" for an empty draft). */
+  isDraft?: boolean;
+};
+
+/** A chat written straight into one runtime's catalog and message store. */
+export type WorkflowTestSeededHistoryConversation = {
+  system: ConversationSystem;
+  kind: "global" | "paper";
+  conversationKey: number;
+  libraryID: number;
+};
+
+/** Two history rows clicked in one task, before either switch ends. */
+export type WorkflowTestRapidHistoryClicks = {
+  diagnostics: WorkflowTestDiagnostics;
+  /** Uncaught errors and rejected promises seen while the clicks settled. */
+  errors: string[];
+};
+
+/** A history search typed into the panel's search popup, then a row opened. */
+export type WorkflowTestHistorySearchOpen = {
+  /** Conversation keys the popup listed for the query. */
+  resultKeys: number[];
+  /** The listed rows' runtimes, in the same order. */
+  resultSystems: string[];
+  /** The listed rows' runtime names, in the same order. */
+  resultRuntimeLabels: string[];
+  opened: boolean;
 };
 
 export type WorkflowTestSeededTurn = {
@@ -1741,7 +1773,83 @@ export type WorkflowTestApi = {
       | WorkflowTestNoteFixture
       | WorkflowTestStandaloneNoteFixture,
   ) => Promise<void>;
-  listPanelHistory: (panelId: string) => Promise<WorkflowTestHistoryRow[]>;
+  listPanelHistory: (
+    panelId: string,
+    /** `reopen`: close an open menu first, so the list is read again. */
+    options?: { reopen?: boolean },
+  ) => Promise<WorkflowTestHistoryRow[]>;
+  /**
+   * Writes a chat (one user turn and one answer) into a runtime's catalog
+   * and message store directly, as a finished chat of that runtime would be
+   * stored; no Codex or Claude Code process takes part.
+   */
+  seedHistoryConversation: (input: {
+    system: ConversationSystem;
+    kind: "global" | "paper";
+    /** The paper (or note) a paper chat belongs to. */
+    paperItemId?: number;
+    userText: string;
+    assistantText?: string;
+  }) => Promise<WorkflowTestSeededHistoryConversation>;
+  /** Removes a seeded chat's local rows (catalog, messages, index). */
+  deleteSeededHistoryConversation: (
+    seeded: WorkflowTestSeededHistoryConversation,
+  ) => Promise<void>;
+  /** Clicks a row of the panel's history menu; waits for the open to end. */
+  clickPanelHistoryRow: (
+    panelId: string,
+    conversationKey: number,
+  ) => Promise<WorkflowTestDiagnostics>;
+  /**
+   * Clicks the visible row of `conversationKey` while a test-only hook forces
+   * that open to fail, waits for the open to settle, and clears the hook.
+   * `interceptorHit` records whether the hook was consulted for that key.
+   */
+  clickPanelHistoryRowWithForcedOpenFailure: (
+    panelId: string,
+    conversationKey: number,
+    system: ConversationSystem,
+  ) => Promise<{
+    diagnostics: WorkflowTestDiagnostics;
+    interceptorHit: boolean;
+  }>;
+  /** Clicks several history rows in one task, then waits for the panel. */
+  clickPanelHistoryRowsRapidly: (
+    panelId: string,
+    conversationKeys: number[],
+  ) => Promise<WorkflowTestRapidHistoryClicks>;
+  /**
+   * Opens the panel's Search history popup, searches `query`, and clicks the
+   * row of `conversationKey` (when `conversationKey` is 0, only lists).
+   */
+  searchAndOpenPanelHistory: (
+    panelId: string,
+    query: string,
+    conversationKey: number,
+  ) => Promise<WorkflowTestHistorySearchOpen>;
+  /**
+   * Renames a history row through its rename button and dialog. Resolves
+   * with the title each runtime's catalog holds for that key afterwards.
+   */
+  renamePanelHistoryConversation: (
+    panelId: string,
+    conversationKey: number,
+    title: string,
+  ) => Promise<Record<ConversationSystem, string | null>>;
+  /** Rows of the standalone window's own history list (left sidebar). */
+  listStandaloneSidebarHistory: () => Promise<WorkflowTestHistoryRow[]>;
+  /** Clicks a row of the window's history list; waits for the mount. */
+  clickStandaloneSidebarHistoryRow: (
+    conversationKey: number,
+  ) => Promise<WorkflowTestStandaloneDiagnostics>;
+  /**
+   * Opens the window's Search history popup, searches `query`, and clicks
+   * the row of `conversationKey`.
+   */
+  searchAndOpenStandaloneHistory: (
+    query: string,
+    conversationKey: number,
+  ) => Promise<WorkflowTestHistorySearchOpen>;
   deletePanelHistoryConversation: (
     panelId: string,
     conversationKey: number,

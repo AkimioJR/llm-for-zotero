@@ -122,7 +122,10 @@ import type {
   WorkflowTestPermissionSurfaceDiagnostics,
   WorkflowTestConfirmationDialogDiagnostics,
   WorkflowTestHistoryRow,
+  WorkflowTestHistorySearchOpen,
   WorkflowTestHistorySearchResult,
+  WorkflowTestRapidHistoryClicks,
+  WorkflowTestSeededHistoryConversation,
   WorkflowTestSeededTurn,
   WorkflowTestConversationPersistenceSnapshot,
   WorkflowTestEphemeralConversationRowCounts,
@@ -207,6 +210,7 @@ import {
 import {
   getWorkflowTestSendSettledSequence,
   getWorkflowTestSendInterceptor,
+  setWorkflowTestHistoryOpenFailure,
   getWorkflowTestFinalRequestInterceptor,
   setWorkflowTestFinalRequestInterceptor,
   setWorkflowTestSendInterceptor,
@@ -254,6 +258,7 @@ import type {
 } from "../../shared/types";
 import { clearPaperRestoreTargetsForWorkflowTests } from "../../shared/paperConversationRestore";
 import { relayGetStateSnapshot } from "../../webchat/relayServer";
+import { conversationRepository } from "../../core/conversations/repository";
 import {
   bindEmbeddedPanelHost,
   bindTestPanelHost,
@@ -7642,8 +7647,26 @@ async function openPanelHistoryMenu(panelId: string): Promise<HTMLElement> {
 
 async function listPanelHistory(
   panelId: string,
+  options?: { reopen?: boolean },
 ): Promise<WorkflowTestHistoryRow[]> {
   assertWorkflowTestEnabled();
+  if (options?.reopen) {
+    const panel = getPanel(panelId);
+    const menu = panel.body.querySelector(
+      "#llm-history-menu",
+    ) as HTMLElement | null;
+    if (menu && menu.style.display !== "none") {
+      dispatchWorkflowClick(
+        panel.body,
+        "#llm-history-toggle",
+        "History toggle",
+      );
+      const deadline = Date.now() + 5000;
+      while (menu.style.display !== "none" && Date.now() < deadline) {
+        await Zotero.Promise.delay(50);
+      }
+    }
+  }
   const body = await openPanelHistoryMenu(panelId);
   const rows = Array.from(
     body.querySelectorAll(".llm-history-item[data-conversation-key]"),
@@ -7652,12 +7675,467 @@ async function listPanelHistory(
   for (const row of rows) {
     const conversationKey = Number(row.dataset.conversationKey || 0);
     if (!conversationKey) continue;
-    seen.set(conversationKey, {
-      conversationKey,
-      title: (row.textContent || "").trim(),
-    });
+    seen.set(conversationKey, readWorkflowHistoryRow(row, conversationKey));
   }
   return Array.from(seen.values());
+}
+
+/** One history row as the reader sees it: title, runtime name, draft. */
+function readWorkflowHistoryRow(
+  row: HTMLElement,
+  conversationKey: number,
+): WorkflowTestHistoryRow {
+  const title =
+    row.querySelector(
+      ".llm-history-item-title, .llm-standalone-conv-title, .llm-standalone-search-title",
+    )?.textContent ||
+    row.textContent ||
+    "";
+  return {
+    conversationKey,
+    title: title.trim(),
+    system: row.dataset.conversationSystem || "",
+    runtimeLabel: (
+      row.querySelector(".llm-history-runtime-label")?.textContent || ""
+    ).trim(),
+    isDraft: row.dataset.historyDraft === "true",
+  };
+}
+
+async function waitForWorkflowElement(
+  root: ParentNode,
+  selector: string,
+  timeoutMs = 8000,
+): Promise<HTMLElement | null> {
+  const deadline = Date.now() + timeoutMs;
+  let element = root.querySelector(selector) as HTMLElement | null;
+  while (!element && Date.now() < deadline) {
+    await Zotero.Promise.delay(50);
+    element = root.querySelector(selector) as HTMLElement | null;
+  }
+  return element;
+}
+
+function dispatchWorkflowMouseClick(element: HTMLElement): void {
+  const eventCtor = element.ownerDocument.defaultView?.MouseEvent;
+  if (eventCtor) {
+    element.dispatchEvent(
+      new eventCtor("click", { bubbles: true, cancelable: true }),
+    );
+    return;
+  }
+  element.click();
+}
+
+/**
+ * Polls the panel until `done` holds or the time runs out; resolves with the
+ * last diagnostics either way, so a test can assert on a refused open.
+ */
+async function waitForPanelDiagnostics(
+  panelId: string,
+  done: (diagnostics: WorkflowTestDiagnostics) => boolean,
+  timeoutMs = 10000,
+): Promise<WorkflowTestDiagnostics> {
+  const deadline = Date.now() + timeoutMs;
+  let diagnostics = await getDiagnostics(panelId);
+  while (!done(diagnostics) && Date.now() < deadline) {
+    await Zotero.Promise.delay(50);
+    diagnostics = await getDiagnostics(panelId);
+  }
+  return diagnostics;
+}
+
+async function seedHistoryConversation(input: {
+  system: ConversationSystem;
+  kind: "global" | "paper";
+  paperItemId?: number;
+  userText: string;
+  assistantText?: string;
+}): Promise<WorkflowTestSeededHistoryConversation> {
+  assertWorkflowTestEnabled();
+  const paperItem = input.paperItemId
+    ? (Zotero.Items.get(input.paperItemId) as Zotero.Item | null)
+    : null;
+  if (input.kind === "paper" && !paperItem) {
+    throw new Error(`Unable to find paper item ${input.paperItemId}`);
+  }
+  const libraryID =
+    Number(paperItem?.libraryID || 0) || Zotero.Libraries.userLibraryID;
+  const entry = await conversationRepository.createCatalogEntry({
+    system: input.system,
+    kind: input.kind,
+    libraryID,
+    ...(input.kind === "paper" && paperItem
+      ? { paperItemID: paperItem.id }
+      : {}),
+  });
+  if (!entry?.conversationKey) {
+    throw new Error(`Could not create a ${input.system} ${input.kind} chat`);
+  }
+  const now = Date.now();
+  await appendWorkflowStoredMessage(input.system, entry.conversationKey, {
+    role: "user",
+    text: input.userText,
+    timestamp: now,
+  });
+  await appendWorkflowStoredMessage(input.system, entry.conversationKey, {
+    role: "assistant",
+    text: input.assistantText || "Seeded answer.",
+    timestamp: now + 1,
+  });
+  return {
+    system: input.system,
+    kind: input.kind,
+    conversationKey: entry.conversationKey,
+    libraryID,
+  };
+}
+
+async function deleteSeededHistoryConversation(
+  seeded: WorkflowTestSeededHistoryConversation,
+): Promise<void> {
+  assertWorkflowTestEnabled();
+  await conversationRepository
+    .deleteLocalConversationRows({
+      system: seeded.system,
+      conversationKey: seeded.conversationKey,
+      kind: seeded.kind,
+    })
+    .catch((error) => {
+      appLogger.warn("LLM: workflow seeded chat cleanup failed", error);
+    });
+}
+
+async function findPanelHistoryRow(
+  panelId: string,
+  conversationKey: number,
+): Promise<HTMLElement> {
+  const body = await openPanelHistoryMenu(panelId);
+  const row = await waitForWorkflowElement(
+    body,
+    `.llm-history-item[data-conversation-key="${conversationKey}"]`,
+  );
+  if (!row) {
+    const renderedKeys = Array.from(
+      body.querySelectorAll(".llm-history-item[data-conversation-key]"),
+    ).map((element) => (element as HTMLElement).dataset.conversationKey);
+    throw new Error(
+      `History row ${conversationKey} not rendered; renderedKeys=[${renderedKeys.join(",")}]`,
+    );
+  }
+  return row;
+}
+
+async function clickPanelHistoryRow(
+  panelId: string,
+  conversationKey: number,
+): Promise<WorkflowTestDiagnostics> {
+  assertWorkflowTestEnabled();
+  const row = await findPanelHistoryRow(panelId, conversationKey);
+  dispatchWorkflowMouseClick(row);
+  const diagnostics = await waitForPanelDiagnostics(
+    panelId,
+    (state) =>
+      state.conversationKey === conversationKey &&
+      !(state.runtimeSystemToggles || []).some(
+        (toggle) => toggle.visible && toggle.disabled,
+      ),
+  );
+  await Zotero.Promise.delay(150);
+  return (await getDiagnostics(panelId)) || diagnostics;
+}
+
+async function clickPanelHistoryRowWithForcedOpenFailure(
+  panelId: string,
+  conversationKey: number,
+  system: ConversationSystem,
+): Promise<{ diagnostics: WorkflowTestDiagnostics; interceptorHit: boolean }> {
+  assertWorkflowTestEnabled();
+  const row = await findPanelHistoryRow(panelId, conversationKey);
+  if (!row.isConnected) {
+    throw new Error(
+      `History row ${conversationKey} is not connected; the refusal path was not exercised`,
+    );
+  }
+  let interceptorHit = false;
+  setWorkflowTestHistoryOpenFailure((target) => {
+    if (target.conversationKey !== conversationKey || target.system !== system)
+      return false;
+    interceptorHit = true;
+    return true;
+  });
+  try {
+    dispatchWorkflowMouseClick(row);
+    const deadline = Date.now() + 2000;
+    let diagnostics = await getDiagnostics(panelId);
+    await Zotero.Promise.delay(150);
+    while (Date.now() < deadline) {
+      diagnostics = await getDiagnostics(panelId);
+      if (
+        !(diagnostics.runtimeSystemToggles || []).some(
+          (toggle) => toggle.visible && toggle.disabled,
+        )
+      )
+        break;
+      await Zotero.Promise.delay(50);
+    }
+    await Zotero.Promise.delay(150);
+    return { diagnostics: await getDiagnostics(panelId), interceptorHit };
+  } finally {
+    setWorkflowTestHistoryOpenFailure(null);
+  }
+}
+
+async function clickPanelHistoryRowsRapidly(
+  panelId: string,
+  conversationKeys: number[],
+): Promise<WorkflowTestRapidHistoryClicks> {
+  assertWorkflowTestEnabled();
+  const rows: HTMLElement[] = [];
+  for (const key of conversationKeys) {
+    rows.push(await findPanelHistoryRow(panelId, key));
+  }
+  const win = getPanel(panelId).body.ownerDocument.defaultView;
+  const errors: string[] = [];
+  const onError = (event: Event) => {
+    errors.push(String((event as ErrorEvent).message || event.type));
+  };
+  const onRejection = (event: Event) => {
+    errors.push(
+      String(
+        (event as PromiseRejectionEvent).reason?.message ||
+          (event as PromiseRejectionEvent).reason ||
+          event.type,
+      ),
+    );
+  };
+  win?.addEventListener("error", onError);
+  win?.addEventListener("unhandledrejection", onRejection);
+  try {
+    // One task: the second click lands before the first switch can end.
+    for (const row of rows) dispatchWorkflowMouseClick(row);
+    let previousKey = -1;
+    let stableSince = Date.now();
+    const deadline = Date.now() + 10000;
+    let diagnostics = await getDiagnostics(panelId);
+    while (Date.now() < deadline) {
+      const key = Number(diagnostics.conversationKey || 0);
+      const busy = (diagnostics.runtimeSystemToggles || []).some(
+        (toggle) => toggle.visible && toggle.disabled,
+      );
+      if (key !== previousKey || busy) {
+        previousKey = key;
+        stableSince = Date.now();
+      } else if (
+        conversationKeys.includes(key) &&
+        Date.now() - stableSince >= 600
+      ) {
+        break;
+      }
+      await Zotero.Promise.delay(50);
+      diagnostics = await getDiagnostics(panelId);
+    }
+    return { diagnostics, errors };
+  } finally {
+    win?.removeEventListener("error", onError);
+    win?.removeEventListener("unhandledrejection", onRejection);
+  }
+}
+
+/**
+ * Types `query` into an open Search history popup under `root` and, when
+ * `conversationKey` is set, clicks its row once the search has drawn it
+ * (a searched row carries a preview line).
+ */
+async function searchAndOpenHistoryPopup(
+  root: ParentNode,
+  query: string,
+  conversationKey: number,
+): Promise<WorkflowTestHistorySearchOpen> {
+  const overlay = Array.from(
+    root.querySelectorAll(".llm-standalone-search-overlay"),
+  ).find((element) => (element as HTMLElement).style.display !== "none") as
+    | HTMLElement
+    | undefined;
+  const input = overlay?.querySelector(
+    ".llm-standalone-search-input",
+  ) as HTMLInputElement | null;
+  if (!overlay || !input) {
+    throw new Error("The Search history popup did not open");
+  }
+  input.value = query;
+  const EventCtor = input.ownerDocument.defaultView?.Event || Event;
+  input.dispatchEvent(new EventCtor("input", { bubbles: true }));
+  const rowSelector = `.llm-standalone-search-item[data-conversation-key="${conversationKey}"]`;
+  const searchedRow = await waitForWorkflowElement(
+    overlay,
+    `${rowSelector} .llm-standalone-search-preview`,
+  );
+  const rows = Array.from(
+    overlay.querySelectorAll(".llm-standalone-search-item"),
+  ) as HTMLElement[];
+  const result: WorkflowTestHistorySearchOpen = {
+    resultKeys: rows.map((row) => Number(row.dataset.conversationKey || 0)),
+    resultSystems: rows.map((row) => row.dataset.conversationSystem || ""),
+    resultRuntimeLabels: rows.map((row) =>
+      (
+        row.querySelector(".llm-history-runtime-label")?.textContent || ""
+      ).trim(),
+    ),
+    opened: false,
+  };
+  const row = searchedRow?.closest(
+    ".llm-standalone-search-item",
+  ) as HTMLElement | null;
+  if (!row) {
+    // Close the popup so the next step starts from a closed popup.
+    input.dispatchEvent(
+      new (input.ownerDocument.defaultView?.KeyboardEvent || KeyboardEvent)(
+        "keydown",
+        { key: "Escape", bubbles: true },
+      ),
+    );
+    return result;
+  }
+  dispatchWorkflowMouseClick(row);
+  // The popup closes once the open has finished.
+  const deadline = Date.now() + 10000;
+  while (overlay.style.display !== "none" && Date.now() < deadline) {
+    await Zotero.Promise.delay(50);
+  }
+  result.opened = overlay.style.display === "none";
+  await Zotero.Promise.delay(200);
+  return result;
+}
+
+async function searchAndOpenPanelHistory(
+  panelId: string,
+  query: string,
+  conversationKey: number,
+): Promise<WorkflowTestHistorySearchOpen> {
+  assertWorkflowTestEnabled();
+  const body = await openPanelHistoryMenu(panelId);
+  dispatchWorkflowClick(
+    body as HTMLElement,
+    ".llm-history-menu-search-trigger",
+    "History search trigger",
+  );
+  return searchAndOpenHistoryPopup(body, query, conversationKey);
+}
+
+async function renamePanelHistoryConversation(
+  panelId: string,
+  conversationKey: number,
+  title: string,
+): Promise<Record<ConversationSystem, string | null>> {
+  assertWorkflowTestEnabled();
+  const row = await findPanelHistoryRow(panelId, conversationKey);
+  const renameButton = row.querySelector(
+    ".llm-history-item-rename",
+  ) as HTMLElement | null;
+  if (!renameButton) {
+    throw new Error(`History row ${conversationKey} has no rename button`);
+  }
+  dispatchWorkflowMouseClick(renameButton);
+  const doc = row.ownerDocument;
+  const input = (await waitForWorkflowElement(
+    doc,
+    ".llm-conversation-rename-input",
+  )) as HTMLInputElement | null;
+  if (!input) throw new Error("The rename dialog did not open");
+  input.value = title;
+  input.dispatchEvent(
+    new (doc.defaultView?.Event || Event)("input", { bubbles: true }),
+  );
+  (
+    doc.querySelector(
+      ".llm-conversation-rename-dialog .llm-modal-primary",
+    ) as HTMLButtonElement | null
+  )?.click();
+  const deadline = Date.now() + 5000;
+  while (
+    doc.querySelector(".llm-conversation-rename-dialog") &&
+    Date.now() < deadline
+  ) {
+    await Zotero.Promise.delay(50);
+  }
+  await Zotero.Promise.delay(300);
+  const titles = {} as Record<ConversationSystem, string | null>;
+  for (const system of ["upstream", "codex", "claude_code"] as const) {
+    const entry = await conversationRepository
+      .getCatalogEntry({ system, conversationKey })
+      .catch(() => null);
+    titles[system] = entry ? entry.title || "" : null;
+  }
+  return titles;
+}
+
+async function listStandaloneSidebarHistory(): Promise<
+  WorkflowTestHistoryRow[]
+> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  await waitForWorkflowElement(
+    doc,
+    ".llm-standalone-conv-item[data-conversation-key], .llm-standalone-sidebar-empty",
+  );
+  return (
+    Array.from(
+      doc.querySelectorAll(".llm-standalone-conv-item[data-conversation-key]"),
+    ) as HTMLElement[]
+  ).map((row) =>
+    readWorkflowHistoryRow(row, Number(row.dataset.conversationKey || 0)),
+  );
+}
+
+async function waitForStandaloneDiagnostics(
+  done: (diagnostics: WorkflowTestStandaloneDiagnostics) => boolean,
+  timeoutMs = 10000,
+): Promise<WorkflowTestStandaloneDiagnostics> {
+  const deadline = Date.now() + timeoutMs;
+  let diagnostics = readStandaloneDiagnostics();
+  while (!done(diagnostics) && Date.now() < deadline) {
+    await Zotero.Promise.delay(50);
+    diagnostics = readStandaloneDiagnostics();
+  }
+  return diagnostics;
+}
+
+async function clickStandaloneSidebarHistoryRow(
+  conversationKey: number,
+): Promise<WorkflowTestStandaloneDiagnostics> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const row = await waitForWorkflowElement(
+    doc,
+    `.llm-standalone-conv-item[data-conversation-key="${conversationKey}"]`,
+  );
+  if (!row) {
+    throw new Error(`Window history row ${conversationKey} not rendered`);
+  }
+  dispatchWorkflowMouseClick(row);
+  await waitForStandaloneDiagnostics(
+    (state) => state.conversationKey === conversationKey,
+  );
+  await Zotero.Promise.delay(200);
+  return readStandaloneDiagnostics();
+}
+
+async function searchAndOpenStandaloneHistory(
+  query: string,
+  conversationKey: number,
+): Promise<WorkflowTestHistorySearchOpen> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const opener = doc
+    .querySelector(".llm-standalone-sidebar .llm-standalone-nav-icon-search")
+    ?.closest(
+      "button, [role='button'], .llm-standalone-nav-row",
+    ) as HTMLElement | null;
+  if (!opener) throw new Error("The Search history nav row was not rendered");
+  opener.click();
+  await waitForWorkflowElement(doc, ".llm-standalone-search-overlay");
+  return searchAndOpenHistoryPopup(doc, query, conversationKey);
 }
 
 async function deletePanelHistoryConversation(
@@ -9157,6 +9635,16 @@ export function installWorkflowTestHarness(targetAddon: {
     exerciseAssistantSelectionPromptDismissal,
     cleanupFixture,
     listPanelHistory,
+    seedHistoryConversation,
+    deleteSeededHistoryConversation,
+    clickPanelHistoryRow,
+    clickPanelHistoryRowWithForcedOpenFailure,
+    clickPanelHistoryRowsRapidly,
+    searchAndOpenPanelHistory,
+    renamePanelHistoryConversation,
+    listStandaloneSidebarHistory,
+    clickStandaloneSidebarHistoryRow,
+    searchAndOpenStandaloneHistory,
     deletePanelHistoryConversation,
     clickPanelDelete,
     exercisePanelDeleteDuringPendingSend,

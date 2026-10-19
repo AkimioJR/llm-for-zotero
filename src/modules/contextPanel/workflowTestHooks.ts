@@ -32,6 +32,23 @@ export type WorkflowTestFinalRequestInterceptor = (
   snapshot: WorkflowTestFinalRequestSnapshot,
 ) => Promise<boolean | void> | boolean | void;
 
+export type WorkflowTestHistoryOpenFailure = (target: {
+  system: string;
+  conversationKey: number;
+}) => boolean;
+
+let historyOpenFailure: WorkflowTestHistoryOpenFailure | null = null;
+
+export function setWorkflowTestHistoryOpenFailure(
+  fn: WorkflowTestHistoryOpenFailure | null,
+): void {
+  historyOpenFailure = fn;
+}
+
+export function getWorkflowTestHistoryOpenFailure(): WorkflowTestHistoryOpenFailure | null {
+  return historyOpenFailure;
+}
+
 let sendInterceptor: WorkflowTestSendInterceptor | null = null;
 let finalRequestInterceptor: WorkflowTestFinalRequestInterceptor | null = null;
 let sendSettledSequence = 0;
