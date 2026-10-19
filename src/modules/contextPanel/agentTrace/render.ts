@@ -4131,7 +4131,15 @@ function appendImageArtifactGrid(
   artifacts: unknown,
   keyPrefix: string,
 ): boolean {
-  const images = imageArtifactsToGeneratedImages(artifacts, keyPrefix);
+  const images = imageArtifactsToGeneratedImages(artifacts, keyPrefix).filter(
+    (image) => {
+      const key = (image.path || "").replace(/\\/g, "/");
+      if (!key) return true;
+      if (ctx.shownImagePaths.has(key)) return false;
+      ctx.shownImagePaths.add(key);
+      return true;
+    },
+  );
   if (images.length) {
     ctx.items.push({ type: "image_grid", images });
     return true;
@@ -4318,6 +4326,8 @@ type AgentTraceAdapterContext = {
   finalizedMaterials: Map<string, TraceMaterialAnnouncement>;
   /** Documents whose note write failed in this run. */
   failedMaterialWrites: Set<string>;
+  /** Image files already shown in this trace (separators normalized to "/"). */
+  shownImagePaths: Set<string>;
 };
 
 /**
@@ -5625,6 +5635,7 @@ function projectAgentTrace(
     intermediateInlineTextItems: new Set(),
     finalizedMaterials: new Map<string, TraceMaterialAnnouncement>(),
     failedMaterialWrites: new Set<string>(),
+    shownImagePaths: new Set<string>(),
   };
 
   items.push({
