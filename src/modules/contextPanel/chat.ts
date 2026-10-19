@@ -2241,9 +2241,12 @@ async function publishPersistedPlanDocumentIfPresent(params: {
       ? Math.floor(Number(params.timestamp))
       : Date.now(),
     documentId: params.documentId || params.planDocumentId,
+    // Announce before the delivered mark commits: a failure here leaves the
+    // outbox entry pending, so the next first load repairs the trace.
+    beforeDelivered: (pending) =>
+      announceFinalizedMaterialForRun(params.agentRunId, pending),
   });
   if (!document) return;
-  await announceFinalizedMaterialForRun(params.agentRunId, document);
   // Delivery is what announces the finalized material. Refresh this
   // conversation's views once it is durable, so the trace paints the material
   // row, without rebuilding unrelated chats that the user may be reading.
