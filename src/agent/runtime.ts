@@ -1022,7 +1022,7 @@ export class AgentRuntime {
         if (!records.length) return false;
         const sanitized = turnPathRedactor.redactTerminalValue(records);
         // A temporary side chat keeps its handles in memory (the store skips
-        // the database for its key), so tool_result_read can still open them.
+        // the database for its key), so context_read can still open them.
         if (isEphemeralConversationKey(request.conversationKey)) {
           if (writeAllowed()) await upsertAgentToolResultHandles(sanitized);
           return false;
