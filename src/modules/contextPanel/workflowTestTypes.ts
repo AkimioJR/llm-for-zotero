@@ -1318,6 +1318,8 @@ export type WorkflowTestApi = {
     slashItemVisible: boolean;
     rowTitles: string[];
     rowLabels: string[];
+    rowMetas: string[];
+    rowRuntimeLabels: string[];
     picked: boolean;
   }>;
   /**

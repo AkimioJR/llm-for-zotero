@@ -2,6 +2,7 @@ import { assert } from "chai";
 import type {
   WorkflowTestApi,
   WorkflowTestFixture,
+  WorkflowTestSeededHistoryConversation,
 } from "../src/modules/contextPanel/workflowTestTypes";
 
 function getWorkflowTestApi(): WorkflowTestApi {
@@ -88,6 +89,7 @@ describe("workflow: add past conversation", function () {
 
   let api: WorkflowTestApi;
   const fixtures: WorkflowTestFixture[] = [];
+  const seeded: WorkflowTestSeededHistoryConversation[] = [];
 
   beforeEach(async function () {
     api = getWorkflowTestApi();
@@ -95,6 +97,9 @@ describe("workflow: add past conversation", function () {
   });
 
   afterEach(async function () {
+    while (seeded.length) {
+      await api.deleteSeededHistoryConversation(seeded.pop()!);
+    }
     while (fixtures.length) {
       const fixture = fixtures.pop();
       if (fixture) await api.cleanupFixture(fixture);
@@ -108,6 +113,14 @@ describe("workflow: add past conversation", function () {
       pdfTitle: "Workflow Past Conversation PDF",
     });
     fixtures.push(fixture);
+    // A creator and a year, so the row can show "(Creator, year)" as the
+    // history search does.
+    const paper = Zotero.Items.get(fixture.parentItemId);
+    paper.setCreators([
+      { creatorType: "author", firstName: "Test", lastName: "Fixture" },
+    ]);
+    paper.setField("date", "2024");
+    await paper.saveTx();
     const panel = await api.renderPanelForItem(fixture.parentItemId);
 
     // A past chat (it has one user turn), then a new current chat that also
@@ -126,6 +139,17 @@ describe("workflow: add past conversation", function () {
     const current = await api.startNewPanelConversation(panel.panelId);
     assert.notEqual(current.conversationKey, pastKey);
     await api.seedPanelStoredUserMessage(panel.panelId, currentMarker);
+    // A Codex library chat: its row carries the small "Codex" label, as in
+    // the history search.
+    const codexMarker = `PASTPICK ${runTag} codex chat`;
+    seeded.push(
+      await api.seedHistoryConversation({
+        system: "codex",
+        kind: "global",
+        userText: codexMarker,
+        assistantText: `Answer to: ${codexMarker}`,
+      }),
+    );
 
     const picker = await api.pickPastConversationInPanel(panel.panelId, {
       title: pastMarker,
@@ -143,11 +167,29 @@ describe("workflow: add past conversation", function () {
       picker.rowTitles.some((title) => title.includes(currentMarker)),
       `the current chat is not listed: ${diagnosticsMessage(picker)}`,
     );
+    // The row reads like the history search: "(Creator, year)", the paper
+    // title in the meta line, and no runtime label for an Agent chat.
     assert.equal(
       picker.rowLabels[pastRows[0]!],
-      "Chat",
+      "Fixture, 2024",
       diagnosticsMessage(picker),
     );
+    assert.include(
+      picker.rowMetas[pastRows[0]!],
+      "Workflow Past Conversation Paper",
+      diagnosticsMessage(picker),
+    );
+    assert.equal(
+      picker.rowRuntimeLabels[pastRows[0]!],
+      "",
+      diagnosticsMessage(picker),
+    );
+    const codexRow = picker.rowTitles.findIndex((title) =>
+      title.includes(codexMarker),
+    );
+    assert.isAtLeast(codexRow, 0, diagnosticsMessage(picker));
+    assert.equal(picker.rowLabels[codexRow], "Library chat");
+    assert.equal(picker.rowRuntimeLabels[codexRow], "Codex");
     assert.isTrue(picker.picked, diagnosticsMessage(picker));
 
     const attached = await api.getDiagnostics(panel.panelId);

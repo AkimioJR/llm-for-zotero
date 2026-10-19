@@ -5533,6 +5533,10 @@ async function pickPastConversationInPanel(
   slashItemVisible: boolean;
   rowTitles: string[];
   rowLabels: string[];
+  /** The meta line under each row: scope label and time. */
+  rowMetas: string[];
+  /** Each row's small runtime label ("Codex", "Claude", or "" for Agent). */
+  rowRuntimeLabels: string[];
   picked: boolean;
 }> {
   assertWorkflowTestEnabled();
@@ -5585,6 +5589,12 @@ async function pickPastConversationInPanel(
   const rowLabels = rows.map((row) =>
     textOf(row, ".llm-standalone-search-label"),
   );
+  const rowMetas = rows.map((row) =>
+    textOf(row, ".llm-standalone-search-meta"),
+  );
+  const rowRuntimeLabels = rows.map((row) =>
+    textOf(row, ".llm-history-runtime-label"),
+  );
   let picked = false;
   if (input.title || input.rowIndex !== undefined) {
     const index =
@@ -5597,7 +5607,14 @@ async function pickPastConversationInPanel(
       await Zotero.Promise.delay(250);
     }
   }
-  return { slashItemVisible, rowTitles, rowLabels, picked };
+  return {
+    slashItemVisible,
+    rowTitles,
+    rowLabels,
+    rowMetas,
+    rowRuntimeLabels,
+    picked,
+  };
 }
 
 /**

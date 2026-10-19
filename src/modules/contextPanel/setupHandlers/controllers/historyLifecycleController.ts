@@ -4497,6 +4497,10 @@ export function createHistoryLifecycleController(
       return ensureWebChatSessionPaperConversation();
     },
     runExplicitNewChatAction,
+    // Row labels of the history search, for other lists of past chats that
+    // must read the same: "(Creator, year)" or "Library chat", then the title.
+    resolveHistoryScopeChipLabel,
+    resolveHistoryScopeLabel,
     queueCurrentConversationDeletion,
     queueTurnDeletion,
     forkConversationFromTurn,
