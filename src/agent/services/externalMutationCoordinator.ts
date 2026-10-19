@@ -8,6 +8,7 @@ import {
   claimJournalAction,
   claimJournalStep,
   createJournalId,
+  inJournalTransaction,
   isAgentChangeJournalAvailable,
   prepareJournalAction,
   prepareJournalStep,
@@ -126,38 +127,42 @@ export async function executeJournaledStep<T>(params: {
     const action = params.prepareAction?.(plan);
     if (actionId && stepId) {
       try {
-        if (action && !params.resume) {
-          await prepareJournalAction({
-            actionId,
-            ...action,
-            effect: "write",
-          });
-        }
-        if (!params.resume)
-          await prepareJournalStep({
-            stepId,
-            actionId,
-            sequence,
-            operation: plan.operation,
-            forward: plan.forward,
-            inverse: plan.inverse,
-            precondition: plan.precondition,
-            reversibility: plan.reversibility,
-            status: "prepared",
-            error: plan.reason,
-          });
-        await registerJournalRecoveryPayloads({
-          actionId,
-          stepId,
-          value: plan.forward,
-        });
-        if (plan.inverse !== undefined) {
+        // Its own transaction: rows written inside another flow's
+        // transaction vanish with its rollback, and the claim then fails.
+        await inJournalTransaction(async () => {
+          if (action && !params.resume) {
+            await prepareJournalAction({
+              actionId,
+              ...action,
+              effect: "write",
+            });
+          }
+          if (!params.resume)
+            await prepareJournalStep({
+              stepId,
+              actionId,
+              sequence,
+              operation: plan.operation,
+              forward: plan.forward,
+              inverse: plan.inverse,
+              precondition: plan.precondition,
+              reversibility: plan.reversibility,
+              status: "prepared",
+              error: plan.reason,
+            });
           await registerJournalRecoveryPayloads({
             actionId,
             stepId,
-            value: plan.inverse,
+            value: plan.forward,
           });
-        }
+          if (plan.inverse !== undefined) {
+            await registerJournalRecoveryPayloads({
+              actionId,
+              stepId,
+              value: plan.inverse,
+            });
+          }
+        });
         const claimed = await claimJournalStep({
           stepId,
           from: params.resume

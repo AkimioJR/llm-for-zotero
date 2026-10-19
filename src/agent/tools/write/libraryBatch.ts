@@ -19,6 +19,7 @@ import {
 } from "../../store/batchJobStore";
 import {
   createJournalId,
+  inJournalTransaction,
   isAgentChangeJournalAvailable,
   prepareJournalAction,
   updateJournalAction,
@@ -288,17 +289,21 @@ export function createLibraryBatchTool(deps: {
       if (isAgentChangeJournalAvailable()) {
         journalActionId = createJournalId("action");
         try {
-          await prepareJournalAction({
-            actionId: journalActionId,
-            runId: context.runId || prepared.jobId,
-            conversationKey: context.request.conversationKey,
-            toolName: context.journalToolName || "library_batch",
-            description: `${prepared.resumed ? "Resume" : "Run"} ${prepared.job} batch job`,
-            effect: "write",
-            reversibility: "partial",
-            recovery:
-              "The durable batch checkpoint and each applied mutation step are recorded separately.",
-          });
+          const actionId = journalActionId;
+          // Its own transaction, so another flow's rollback cannot drop the row.
+          await inJournalTransaction(() =>
+            prepareJournalAction({
+              actionId,
+              runId: context.runId || prepared.jobId,
+              conversationKey: context.request.conversationKey,
+              toolName: context.journalToolName || "library_batch",
+              description: `${prepared.resumed ? "Resume" : "Run"} ${prepared.job} batch job`,
+              effect: "write",
+              reversibility: "partial",
+              recovery:
+                "The durable batch checkpoint and each applied mutation step are recorded separately.",
+            }),
+          );
         } catch (error) {
           await store.finishBatchJob({
             jobId: prepared.jobId,

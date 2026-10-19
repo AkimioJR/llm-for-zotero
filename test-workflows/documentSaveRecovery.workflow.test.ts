@@ -11,7 +11,10 @@ import {
   sha256Bytes,
   sha256Text,
 } from "../src/agent/store/journalRecoveryBlobStore";
-import { initAgentChangeJournal } from "../src/agent/store/changeJournal";
+import {
+  initAgentChangeJournal,
+  listJournalSteps,
+} from "../src/agent/store/changeJournal";
 
 describe("workflow: document save recovery", function () {
   this.timeout(60000);
@@ -305,4 +308,69 @@ describe("workflow: document save recovery", function () {
         "Retry must not import images again",
       );
     });
+
+  it("keeps its journal step when another transaction rolls back during the save", async function () {
+    await storeDocument();
+    await initAgentChangeJournal();
+    const tool = (Zotero as any).LLMForZotero.api.agent.getToolDefinition(
+      "note_write",
+    );
+    const input = tool.validate({
+      mode: "create",
+      documentId: document.documentId,
+      targetItemId: parent.id,
+    });
+    assert.isTrue(input.ok);
+
+    // Another flow holds a transaction and then rolls it back. A plain
+    // query issued meanwhile runs inside that transaction, so the journal
+    // step must be written in a transaction of its own.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    (Zotero.DB as any).queryAsync = async function (
+      sql: string,
+      ...args: any[]
+    ) {
+      const result = await (originalQuery as any).call(this, sql, ...args);
+      if (/INSERT INTO llm_for_zotero_agent_journal_steps_v2\b/.test(sql))
+        release();
+      return result;
+    };
+    let started!: () => void;
+    const begun = new Promise<void>((resolve) => (started = resolve));
+    const foreign = Zotero.DB.executeTransaction(async () => {
+      await originalQuery.call(Zotero.DB, "SELECT 1");
+      started();
+      await gate;
+      throw new Error("Workflow foreign transaction rolled back");
+    }).catch((error: unknown) => error);
+    await begun;
+    const save = tool.execute(input.value, {
+      request: {
+        conversationKey: parent.id,
+        mode: "agent",
+        libraryID: parent.libraryID,
+      },
+      item: parent,
+      modelName: "workflow",
+      currentAnswerText: "",
+    });
+    // Without its own transaction the step joins the foreign one and releases
+    // the gate at once; with it, the step waits, so release it after a while.
+    const timer = setTimeout(release, 1000);
+    try {
+      assert.match(String(await foreign), /foreign transaction rolled back/);
+      const result = await save;
+      assert.equal(result.content.status, "created");
+      assert.equal(result.content.documentId, document.documentId);
+      // The journal kept the step through the rollback and closed it.
+      assert.isOk(result.journalStep, "the save was journalled");
+      const steps = await listJournalSteps(result.journalStep.actionId);
+      assert.lengthOf(steps, 1);
+      assert.equal(steps[0]!.status, "applied");
+    } finally {
+      clearTimeout(timer);
+      Zotero.DB.queryAsync = originalQuery;
+    }
+  });
 });

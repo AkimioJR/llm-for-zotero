@@ -21,6 +21,7 @@ import {
   claimJournalAction,
   claimJournalStep,
   createJournalId,
+  inJournalTransaction,
   isAgentChangeJournalAvailable,
   listJournalActions,
   listJournalSteps,
@@ -261,11 +262,11 @@ async function executeComposite(params: {
   const run = async () => {
     const plan = await stepPlanFor(service, operation, context);
     if (actionId && params.prepareAction) {
-      await prepareJournalAction({
-        actionId,
-        ...params.prepareAction(plan),
-        effect: "write",
-      });
+      const action = params.prepareAction(plan);
+      // Its own transaction, so another flow's rollback cannot drop the row.
+      await inJournalTransaction(() =>
+        prepareJournalAction({ actionId, ...action, effect: "write" }),
+      );
     }
     const stepOutcomes: AgentJournalStepOutcome[] = [];
     const scope: AgentJournalActionScope | undefined = actionId
