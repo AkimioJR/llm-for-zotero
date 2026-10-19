@@ -1827,19 +1827,21 @@ export function syncUserContextAlignmentWidths(body: Element): void {
       ".llm-message-wrapper.user.llm-user-context-aligned",
     ),
   ) as HTMLDivElement[];
-  for (const wrapper of wrappers) {
+  // Read every width first, then write: a layout read after each style
+  // write forced a synchronous reflow per message. A wrapper's width only
+  // sizes its own context rows, so batching does not change the result.
+  const widths = wrappers.map((wrapper) => {
     const bubble = getUserBubbleElement(wrapper);
-    if (!bubble) {
-      wrapper.style.removeProperty("--llm-user-bubble-width");
-      continue;
-    }
-    const bubbleWidth = Math.round(bubble.getBoundingClientRect().width);
+    return bubble ? Math.round(bubble.getBoundingClientRect().width) : 0;
+  });
+  wrappers.forEach((wrapper, index) => {
+    const bubbleWidth = widths[index];
     if (bubbleWidth > 0) {
       wrapper.style.setProperty("--llm-user-bubble-width", `${bubbleWidth}px`);
     } else {
       wrapper.style.removeProperty("--llm-user-bubble-width");
     }
-  }
+  });
 }
 
 /** Legacy cumulative API token usage per conversation key for this UI session. */
