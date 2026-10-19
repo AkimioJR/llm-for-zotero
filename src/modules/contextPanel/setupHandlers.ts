@@ -526,7 +526,6 @@ import {
 import { resolveRuntimeBadgeState } from "./runtimeBadge";
 import { attachFooterQuotaControl } from "./footerQuotaControl";
 import { readFooterQuota } from "./footerQuotaReader";
-import { shouldRevalidateCatalogOnMenuOpen } from "./setupHandlers/controllers/modelMenuRefreshPolicy";
 import { resolveQuotaTarget } from "../../providers/quota";
 import { createWebChatHistoryController } from "./setupHandlers/controllers/webChatHistoryController";
 import {
@@ -1086,7 +1085,6 @@ export function setupHandlers(
   let codexModelCatalogInFlight: Promise<void> | null = null;
   let codexModelCatalogPath = "";
   let codexModelCatalogRequestId = 0;
-  let codexModelCatalogLoadedAt = 0;
   const resolveClaudeModelCatalogContext = ():
     | ClaudeModelCatalogRequestContext
     | undefined => {
@@ -1273,7 +1271,6 @@ export function setupHandlers(
       return codexModelCatalogInFlight;
     if (pathChanged) {
       codexModelCatalogModels = [];
-      codexModelCatalogLoadedAt = 0;
     }
     const requestId = ++codexModelCatalogRequestId;
     const isCurrentRequest = () =>
@@ -1290,7 +1287,6 @@ export function setupHandlers(
         codexModelCatalogModels = catalog.models;
         codexModelCatalogStatus = "ready";
         codexModelCatalogError = "";
-        codexModelCatalogLoadedAt = Date.now();
         reconcileSelectedCodexReasoningMode();
       })
       .catch((error: unknown) => {
@@ -8548,14 +8544,8 @@ export function setupHandlers(
     void refreshConfiguredProviderModelCatalogs();
     if (isCodexConversationSystem()) {
       // A loaded catalog can change while this chat stays mounted. Revalidate
-      // on a user opening once the list is a minute old, and update the menu
-      // when model/list returns.
-      void ensureCodexModelCatalogLoaded(
-        shouldRevalidateCatalogOnMenuOpen(
-          codexModelCatalogLoadedAt,
-          Date.now(),
-        ),
-      );
+      // on each user opening and update the menu when model/list returns.
+      void ensureCodexModelCatalogLoaded(true);
     } else if (isClaudeConversationSystem()) {
       // Force: the catalog cache identity (bridge URL, prefs, profile-dir
       // hash, scope) cannot see in-place ~/.claude/settings.json profile

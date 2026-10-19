@@ -2,10 +2,6 @@ import { assert } from "chai";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  MODEL_MENU_CATALOG_REVALIDATE_MS,
-  shouldRevalidateCatalogOnMenuOpen,
-} from "../src/modules/contextPanel/setupHandlers/controllers/modelMenuRefreshPolicy";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 
@@ -16,20 +12,7 @@ function functionBlock(source: string, start: string, end: string): string {
   return source.slice(open, close === -1 ? undefined : close);
 }
 
-describe("model menu catalog refresh policy", function () {
-  it("revalidates a runtime catalog on open only when the last load is a minute old", function () {
-    const now = 10_000_000;
-    assert.isTrue(shouldRevalidateCatalogOnMenuOpen(0, now));
-    assert.isFalse(shouldRevalidateCatalogOnMenuOpen(now - 1_000, now));
-    assert.isTrue(
-      shouldRevalidateCatalogOnMenuOpen(
-        now - MODEL_MENU_CATALOG_REVALIDATE_MS,
-        now,
-      ),
-    );
-    assert.equal(MODEL_MENU_CATALOG_REVALIDATE_MS, 60_000);
-  });
-
+describe("model menu catalog refresh", function () {
   it("starts provider catalog refreshes when the menu opens, never on a rebuild", function () {
     const source = readFileSync(
       resolve(testDir, "../src/modules/contextPanel/setupHandlers.ts"),
@@ -51,9 +34,6 @@ describe("model menu catalog refresh policy", function () {
     );
     assert.match(open, /refreshModelCapabilityRegistry\(\)/);
     assert.match(open, /refreshConfiguredProviderModelCatalogs\(\)/);
-    assert.match(
-      open,
-      /ensureCodexModelCatalogLoaded\(\s*shouldRevalidateCatalogOnMenuOpen\(\s*codexModelCatalogLoadedAt,/,
-    );
+    assert.match(open, /ensureCodexModelCatalogLoaded\(true\)/);
   });
 });
