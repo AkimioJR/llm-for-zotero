@@ -11965,6 +11965,9 @@ function renderChatForPanel(
       const agentTraceReplacesAssistantTurn =
         agentTraceEl?.dataset.llmAssistantTurnReplacement === "true";
       let answerHost: HTMLElement | undefined;
+      // renderAssistantRichText decorates citations inside the answer host;
+      // the whole-bubble pass below is only needed for other content.
+      let answerCitationsDecorated = false;
       if (hasAnswerText && !agentUsesInterleavedText) {
         const safeText = buildAssistantDisplayMarkdownForRender(
           msg,
@@ -11995,6 +11998,7 @@ function renderChatForPanel(
                 scheduleChatScrollReconciliation(conversationKey, chatBox);
               },
             });
+            answerCitationsDecorated = true;
           } catch (err) {
             appLogger.warn("LLM render error:", err);
             answerHost.textContent = safeText;
@@ -12118,7 +12122,16 @@ function renderChatForPanel(
         }
       }
 
-      if (!agentTraceReplacesAssistantTurn) {
+      // A second, whole-bubble pass covers citations that live outside the
+      // answer host: trace text (including interleaved answer text), the
+      // reasoning panel, and generated images. When the answer host is the
+      // only content, it was already decorated while it rendered.
+      const bubbleHasOnlyDecoratedAnswer =
+        answerCitationsDecorated &&
+        !agentTraceEl &&
+        !mountedReasoning &&
+        !hasGeneratedImages;
+      if (!agentTraceReplacesAssistantTurn && !bubbleHasOnlyDecoratedAnswer) {
         decorateCompletedAssistantCitationLinks({
           body,
           panelItem: item,
