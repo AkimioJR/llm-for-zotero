@@ -758,6 +758,7 @@ describe("assistantCitationLinks", function () {
       ".llm-citation-text",
       ".llm-citation-icon",
       ".llm-quote-card",
+      ".katex-mathml",
     ]) {
       assert.include(INLINE_CITATION_SKIP_SELECTOR, selector);
     }

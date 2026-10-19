@@ -120,6 +120,7 @@ import {
 } from "../../modelCapabilities";
 import {
   applyModelInputTokenCap,
+  resolveModelInputTokenLimit,
   type ModelInputTokenLimitSource,
 } from "../../utils/modelInputCap";
 import { subscribeModelProviderGroups } from "../../utils/modelProviders";
@@ -437,7 +438,10 @@ import {
 } from "../../agent/store/traceStore";
 import { deliverPendingPlanDocumentMessage } from "../../agent/documents/publication";
 import { materialRefFromDocument } from "../../agent/documents/workflowMaterial";
-import { loadDocumentIdForMessageOwner } from "../../agent/documents/store";
+import {
+  listPlanDocumentOutboxForConversation,
+  loadDocumentIdsForMessageOwners,
+} from "../../agent/documents/store";
 import type { PlanDocument } from "../../agent/documents/types";
 import {
   applyHistoryCompression,
@@ -1823,19 +1827,21 @@ export function syncUserContextAlignmentWidths(body: Element): void {
       ".llm-message-wrapper.user.llm-user-context-aligned",
     ),
   ) as HTMLDivElement[];
-  for (const wrapper of wrappers) {
+  // Read every width first, then write: a layout read after each style
+  // write forced a synchronous reflow per message. A wrapper's width only
+  // sizes its own context rows, so batching does not change the result.
+  const widths = wrappers.map((wrapper) => {
     const bubble = getUserBubbleElement(wrapper);
-    if (!bubble) {
-      wrapper.style.removeProperty("--llm-user-bubble-width");
-      continue;
-    }
-    const bubbleWidth = Math.round(bubble.getBoundingClientRect().width);
+    return bubble ? Math.round(bubble.getBoundingClientRect().width) : 0;
+  });
+  wrappers.forEach((wrapper, index) => {
+    const bubbleWidth = widths[index];
     if (bubbleWidth > 0) {
       wrapper.style.setProperty("--llm-user-bubble-width", `${bubbleWidth}px`);
     } else {
       wrapper.style.removeProperty("--llm-user-bubble-width");
     }
-  }
+  });
 }
 
 /** Legacy cumulative API token usage per conversation key for this UI session. */
@@ -1922,36 +1928,106 @@ function renderContextUsageSnapshot(
   );
 }
 
+/**
+ * Last display estimate per conversation. Every full render recomputes the
+ * gauge, and the estimate walks the whole history (and, above the soft limit,
+ * drops messages one by one), so switching back to a long conversation paid
+ * for it again although nothing had changed. The cap result depends only on
+ * the history messages and the resolved limit, so the key holds both.
+ */
+const historyContextUsageEstimates = new Map<
+  number,
+  { signature: string; snapshot: ContextUsageSnapshot | undefined }
+>();
+const HISTORY_CONTEXT_USAGE_ESTIMATE_LIMIT = 64;
+
+function buildHistoryContextUsageSignature(
+  history: Message[],
+  limitTokens: number,
+  limitSource: ModelInputTokenLimitSource,
+): string {
+  let totalTextLength = 0;
+  for (const message of history) totalTextLength += message.text?.length || 0;
+  const last = history[history.length - 1];
+  return [
+    limitTokens,
+    limitSource,
+    history.length,
+    history[0]?.timestamp ?? "",
+    last?.timestamp ?? "",
+    last?.role ?? "",
+    last?.text?.length ?? 0,
+    totalTextLength,
+  ].join("\u0000");
+}
+
 function estimateHistoryContextUsageSnapshot(
   item: Zotero.Item,
   history: Message[],
   surface?: SelectionSurface,
+  conversationKey?: number,
 ): ContextUsageSnapshot | undefined {
   if (!history.length) return undefined;
   const effectiveRequestConfig = resolveEffectiveRequestConfig({
     item,
     surface,
   });
+  const modelName = effectiveRequestConfig.model || "";
+  const inputTokenCap = effectiveRequestConfig.advanced?.inputTokenCap;
+  const identity = {
+    apiBase: effectiveRequestConfig.apiBase,
+    protocol: effectiveRequestConfig.providerProtocol,
+    authMode: effectiveRequestConfig.authMode,
+    profileOverride: effectiveRequestConfig.advanced?.profileOverride,
+  };
+  let signature = "";
+  if (typeof conversationKey === "number") {
+    const resolvedLimit = resolveModelInputTokenLimit(
+      modelName,
+      inputTokenCap,
+      identity,
+    );
+    signature = buildHistoryContextUsageSignature(
+      history,
+      resolvedLimit.limitTokens,
+      resolvedLimit.source,
+    );
+    const cached = historyContextUsageEstimates.get(conversationKey);
+    if (cached && cached.signature === signature) {
+      return cached.snapshot ? { ...cached.snapshot } : undefined;
+    }
+  }
   const messages = buildLLMHistoryMessages(history);
   const inputCap = applyModelInputTokenCap(
     messages,
-    effectiveRequestConfig.model || "",
-    effectiveRequestConfig.advanced?.inputTokenCap,
-    {
-      apiBase: effectiveRequestConfig.apiBase,
-      protocol: effectiveRequestConfig.providerProtocol,
-      authMode: effectiveRequestConfig.authMode,
-      profileOverride: effectiveRequestConfig.advanced?.profileOverride,
-    },
+    modelName,
+    inputTokenCap,
+    identity,
   );
-  if (inputCap.estimatedAfterTokens <= 0) return undefined;
-  return {
-    contextTokens: inputCap.estimatedAfterTokens,
-    contextWindow: inputCap.limitTokens,
-    inputLimitSource: inputCap.limitSource,
-    estimated: true,
-    source: "estimated",
-  };
+  const snapshot: ContextUsageSnapshot | undefined =
+    inputCap.estimatedAfterTokens <= 0
+      ? undefined
+      : {
+          contextTokens: inputCap.estimatedAfterTokens,
+          contextWindow: inputCap.limitTokens,
+          inputLimitSource: inputCap.limitSource,
+          estimated: true,
+          source: "estimated",
+        };
+  if (typeof conversationKey === "number") {
+    historyContextUsageEstimates.delete(conversationKey);
+    if (
+      historyContextUsageEstimates.size >= HISTORY_CONTEXT_USAGE_ESTIMATE_LIMIT
+    ) {
+      const oldest = historyContextUsageEstimates.keys().next().value;
+      if (oldest !== undefined) historyContextUsageEstimates.delete(oldest);
+    }
+    historyContextUsageEstimates.set(conversationKey, {
+      signature,
+      snapshot: snapshot ? { ...snapshot } : undefined,
+    });
+  }
+  return snapshot;
 }
 
 export function refreshActiveConversationPanels(
@@ -2934,35 +3010,54 @@ export async function ensureConversationLoaded(
         PERSISTED_HISTORY_LIMIT,
         conversationSystem,
       );
-      for (const storedMessage of storedMessages) {
-        if (
-          storedMessage.role !== "assistant" ||
-          storedMessage.documentId ||
-          !Number.isFinite(storedMessage.timestamp)
-        ) {
-          continue;
+      const ownerlessAssistantMessages = storedMessages.filter(
+        (storedMessage) =>
+          storedMessage.role === "assistant" &&
+          !storedMessage.documentId &&
+          Number.isFinite(storedMessage.timestamp),
+      );
+      if (ownerlessAssistantMessages.length) {
+        // One query for the conversation instead of one per message.
+        const documentIdsByTimestamp = await loadDocumentIdsForMessageOwners({
+          conversationKey,
+          sourceMessageTimestamps: ownerlessAssistantMessages.map(
+            (storedMessage) => Math.floor(storedMessage.timestamp),
+          ),
+        });
+        for (const storedMessage of ownerlessAssistantMessages) {
+          storedMessage.documentId =
+            documentIdsByTimestamp.get(Math.floor(storedMessage.timestamp)) ||
+            undefined;
         }
-        storedMessage.documentId =
-          (await loadDocumentIdForMessageOwner({
-            conversationKey,
-            sourceMessageTimestamp: Math.floor(storedMessage.timestamp),
-          })) || undefined;
       }
       // A saved quote location holds only while its PDF is the file it was
       // found in; drop the others in memory so the gate checks them again.
       await reconcilePersistedQuoteLocations(storedMessages);
       // Recover the application-level document outbox after a crash between
       // durable message insertion and publication evidence/event delivery.
-      for (const storedMessage of storedMessages) {
-        if (storedMessage.role !== "assistant" || !storedMessage.text) continue;
-        await publishPersistedPlanDocumentIfPresent({
-          conversationKey,
-          text: storedMessage.text,
-          timestamp: storedMessage.timestamp,
-          agentRunId: storedMessage.agentRunId,
-          documentId: storedMessage.documentId,
-          planDocumentId: storedMessage.planDocumentId,
-        });
+      // Only a pending outbox entry needs recovery. Delivering an already
+      // delivered document again opened a transaction and refreshed every
+      // panel showing this chat, an extra full render on each first load.
+      const publishableMessages = storedMessages.filter(
+        (storedMessage) =>
+          storedMessage.role === "assistant" && Boolean(storedMessage.text),
+      );
+      const hasPendingDocumentDelivery =
+        publishableMessages.length > 0 &&
+        (await listPlanDocumentOutboxForConversation(conversationKey)).some(
+          (entry) => entry.status === "pending",
+        );
+      if (hasPendingDocumentDelivery) {
+        for (const storedMessage of publishableMessages) {
+          await publishPersistedPlanDocumentIfPresent({
+            conversationKey,
+            text: storedMessage.text,
+            timestamp: storedMessage.timestamp,
+            agentRunId: storedMessage.agentRunId,
+            documentId: storedMessage.documentId,
+            planDocumentId: storedMessage.planDocumentId,
+          });
+        }
       }
       // Render reads the existence result from a cache; fill it before the
       // freshness check so no await sits between that check and the write.
@@ -10611,6 +10706,7 @@ function renderChatForPanel(
       item,
       history,
       resolveSelectionSurfaceForBody(body),
+      conversationKey,
     );
     const configuredLimitIsUserAuthoritative =
       recomputedSnapshot?.inputLimitSource === "advanced" ||
@@ -10899,7 +10995,9 @@ function renderChatForPanel(
         previewWrap.appendChild(previewImg);
 
         const thumbButtons: HTMLButtonElement[] = [];
-        screenshotImages.forEach((imageUrl, index) => {
+        const thumbImages: HTMLImageElement[] = [];
+        let thumbSourcesSet = false;
+        screenshotImages.forEach((_imageUrl, index) => {
           const thumbBtn = doc.createElementNS(
             HTML_NS,
             "button",
@@ -10910,8 +11008,10 @@ function renderChatForPanel(
 
           const thumbImg = doc.createElement("img") as HTMLImageElement;
           thumbImg.className = "llm-user-screenshot-thumb-img";
-          thumbImg.src = imageUrl;
+          // The source is set on first expand (see applyScreenshotState):
+          // decoding base64 images for a collapsed strip slowed every render.
           thumbImg.alt = `Screenshot ${index + 1}`;
+          thumbImages.push(thumbImg);
           thumbBtn.appendChild(thumbImg);
 
           const activateScreenshotThumb = (e: Event) => {
@@ -10959,7 +11059,15 @@ function renderChatForPanel(
           );
           screenshotExpandedEl.hidden = !expanded;
           screenshotExpandedEl.style.display = expanded ? "flex" : "none";
-          previewImg.src = screenshotImages[activeIndex];
+          if (expanded) {
+            if (!thumbSourcesSet) {
+              thumbSourcesSet = true;
+              thumbImages.forEach((thumbImg, index) => {
+                thumbImg.src = screenshotImages[index];
+              });
+            }
+            previewImg.src = screenshotImages[activeIndex];
+          }
           thumbButtons.forEach((btn, index) => {
             btn.classList.toggle("active", index === activeIndex);
           });
@@ -11893,6 +12001,9 @@ function renderChatForPanel(
       const agentTraceReplacesAssistantTurn =
         agentTraceEl?.dataset.llmAssistantTurnReplacement === "true";
       let answerHost: HTMLElement | undefined;
+      // renderAssistantRichText decorates citations inside the answer host;
+      // the whole-bubble pass below is only needed for other content.
+      let answerCitationsDecorated = false;
       if (hasAnswerText && !agentUsesInterleavedText) {
         const safeText = buildAssistantDisplayMarkdownForRender(
           msg,
@@ -11923,6 +12034,7 @@ function renderChatForPanel(
                 scheduleChatScrollReconciliation(conversationKey, chatBox);
               },
             });
+            answerCitationsDecorated = true;
           } catch (err) {
             appLogger.warn("LLM render error:", err);
             answerHost.textContent = safeText;
@@ -12046,7 +12158,16 @@ function renderChatForPanel(
         }
       }
 
-      if (!agentTraceReplacesAssistantTurn) {
+      // A second, whole-bubble pass covers citations that live outside the
+      // answer host: trace text (including interleaved answer text), the
+      // reasoning panel, and generated images. When the answer host is the
+      // only content, it was already decorated while it rendered.
+      const bubbleHasOnlyDecoratedAnswer =
+        answerCitationsDecorated &&
+        !agentTraceEl &&
+        !mountedReasoning &&
+        !hasGeneratedImages;
+      if (!agentTraceReplacesAssistantTurn && !bubbleHasOnlyDecoratedAnswer) {
         decorateCompletedAssistantCitationLinks({
           body,
           panelItem: item,
