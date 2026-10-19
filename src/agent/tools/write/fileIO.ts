@@ -33,7 +33,10 @@ import {
 } from "../../store/journalRecoveryBlobStore";
 import { FILE_IO_CONTENT_FIELDS } from "../../toolArgumentFields";
 import { isMalformedToolArgumentsDiagnostic } from "../../toolArgumentDiagnostics";
-import { stripMineruSourceImageEmbedsFromMarkdown } from "../../../services/mineru/mineruCache";
+import {
+  getMineruCacheDir,
+  stripMineruSourceImageEmbedsFromMarkdown,
+} from "../../../services/mineru/mineruCache";
 import { collectRequestPaperContexts } from "../requestPaperContexts";
 
 type FileIOInput = {
@@ -239,6 +242,32 @@ function readFirstNamedStringField(
     if (typeof value === "string" && value.trim()) return { field, value };
   }
   return null;
+}
+
+/**
+ * Whether a file_io call reads from the plugin's own data folder (the MinerU
+ * cache, which holds parsed text and figure crops). That is evidence the agent
+ * gathered, not an action on the user's system. Works on the raw model
+ * arguments because the trace labels a call before it is validated.
+ */
+export function isPluginDataReadCall(args: unknown): boolean {
+  const a =
+    args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  const filePath = readFirstStringField(a, FILE_IO_PATH_FIELDS) || "";
+  if (!filePath) return false;
+  const hasContent = readFirstStringField(a, FILE_IO_CONTENT_FIELDS) !== null;
+  if (normalizeFileIOActionFromArgs(a, { filePath, hasContent }) !== "read") {
+    return false;
+  }
+  let cacheDir = "";
+  try {
+    cacheDir = normalizePathForPrefix(getMineruCacheDir());
+  } catch {
+    return false;
+  }
+  if (!cacheDir) return false;
+  const normalized = normalizePathForPrefix(filePath);
+  return normalized === cacheDir || normalized.startsWith(`${cacheDir}/`);
 }
 
 export function summarizeFileIOCall(args: unknown): string | null {
@@ -636,6 +665,8 @@ export function createFileIOTool(): AgentWriteToolDefinition<
   unknown
 > {
   return {
+    resolveWorkCategory: (args) =>
+      isPluginDataReadCall(args) ? "retrieval" : undefined,
     describeAction: async (input, context) => {
       if (input.action !== "write") return [];
       const bundle = await resolveFileWriteBundle(input, context);
