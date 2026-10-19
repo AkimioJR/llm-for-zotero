@@ -24,6 +24,22 @@ const IMAGE = '<img data-attachment-key="IMG1" width="400" height="300">';
 const ROOT =
   '<div data-schema-version="9" data-citation-items="%5B%7B%22uris%22%3A%5B%22http%3A%2F%2Fzotero.org%2Fusers%2Flocal%2Fabc%2Fitems%2FITEM1%22%5D%7D%5D">';
 
+/** A citation of the work with this item key, shown as "(Smith, 2020)", so
+ * two different works can show the same label. */
+function smithChip(key: string): string {
+  const data = encodeURIComponent(
+    JSON.stringify({
+      citationItems: [
+        { uris: [`http://zotero.org/users/local/abc/items/${key}`] },
+      ],
+      properties: {},
+    }),
+  );
+  return `<span class="citation" data-citation="${data}">(<span class="citation-item">Smith, 2020</span>)</span>`;
+}
+/** Two works that both show "(Smith, 2020)": one per paragraph. */
+const TWO_SMITHS = `${ROOT}<p>Intro cites ${smithChip("AAAA1111")} here.</p><p>Later claim ${smithChip("BBBB2222")} matters.</p></div>`;
+
 const NOTE =
   `${ROOT}<h1>Study note</h1>` +
   `<p>Drift is driven by turnover ${CITATION}.</p>` +
@@ -170,6 +186,39 @@ describe("embedded note items as placeholders", function () {
     assert.include(input.content, `Turnover {{citation:${t.ids.citation}}}.`);
   });
 
+  it("adopts a retyped label for every copy of the same item", function () {
+    const twice = `${ROOT}<p>A ${CITATION}.</p><p>B ${CITATION}.</p></div>`;
+    const html = saved(
+      {
+        content:
+          "A (Devalle and Roxin, 2022, p. 42).\n\nB (Devalle and Roxin, 2022, p. 42).",
+      },
+      twice,
+    );
+    assert.equal(html.split('class="citation"').length - 1, 2);
+    assert.include(html, `A ${CITATION}.`);
+    assert.include(html, `B ${CITATION}.`);
+  });
+
+  it("refuses a rewrite that retypes a label two different works show, naming both", function () {
+    const html = TWO_SMITHS;
+    const [first, second] = collectNoteEmbeds(html);
+    assert.notEqual(first.id, second.id);
+    assert.throws(
+      () =>
+        edit(
+          {
+            content:
+              "Intro cites (Smith, 2020) here.\n\nLater claim (Smith, 2020) matters.",
+          },
+          html,
+        ),
+      new RegExp(
+        `would delete 2 embedded items[\\s\\S]*"\\(Smith, 2020\\)" is shown by several items: \\{\\{citation:${first.id}\\}\\}, \\{\\{citation:${second.id}\\}\\}`,
+      ),
+    );
+  });
+
   it("still refuses a rewrite that drops an item without retyping it", function () {
     const t = tokens();
     assert.throws(
@@ -192,14 +241,47 @@ describe("embedded note items as placeholders", function () {
     );
   });
 
-  it("removes a listed item even when the model left its placeholder in", function () {
+  it("keeps a listed item whose placeholder the model left in", function () {
     const t = tokens();
-    const html = saved({
+    const { input, pending } = edit({
       content: noteHtmlToModelText(NOTE),
       removeEmbeds: [`{{image:${t.ids.image}}}`],
     });
-    assert.notInclude(html, "IMG1");
-    assert.include(html, CITATION);
+    assert.include(input._patchedHtml, IMAGE);
+    assert.include(input._patchedHtml, CITATION);
+    assert.notInclude(pending.description, "deletes");
+  });
+
+  it("removes only the copies whose placeholders the model omitted", function () {
+    const twice = `${ROOT}<p>First claim ${CITATION}.</p><p>Second claim ${CITATION}.</p></div>`;
+    const id = collectNoteEmbeds(twice)[0].id;
+    const { input, pending } = edit(
+      {
+        content: `First claim {{citation:${id}}}.\n\nSecond claim.`,
+        removeEmbeds: [id],
+      },
+      twice,
+    );
+    const html = input._patchedHtml!;
+    assert.equal(html.split('class="citation"').length - 1, 1);
+    assert.include(html, `First claim ${CITATION}.`);
+    assert.include(html, "<p>Second claim.</p>");
+    assert.lengthOf(findMissingNoteEmbeds(twice, html), 1);
+    assert.include(
+      pending.description,
+      `deletes 1 embedded item: {{citation:${id}`,
+    );
+  });
+
+  it("counts every removed copy of an item in the review", function () {
+    const twice = `${ROOT}<p>First claim ${CITATION}.</p><p>Second claim ${CITATION}.</p></div>`;
+    const id = collectNoteEmbeds(twice)[0].id;
+    const { input, pending } = edit(
+      { content: "First claim.\n\nSecond claim.", removeEmbeds: [id] },
+      twice,
+    );
+    assert.notInclude(input._patchedHtml, "data-citation=");
+    assert.include(pending.description, "deletes 2 embedded items");
   });
 
   it("refuses removeEmbeds ids the note does not have, and outside edit mode", function () {
@@ -363,6 +445,110 @@ describe("text edits never hollow out an embedded item", function () {
     assert.equal(stripNoteHtml(html).split("Devalle and Roxin").length - 1, 1);
   });
 
+  it("uses the citation inside the patched passage when another work shows the same label", function () {
+    const html = saved(
+      {
+        patches: [
+          {
+            find: "Later claim (Smith, 2020) matters.",
+            replace: "A later, reworded claim (Smith, 2020) matters.",
+          },
+        ],
+      },
+      TWO_SMITHS,
+    );
+    assert.include(
+      html,
+      `<p>Intro cites ${smithChip("AAAA1111")} here.</p><p>A later, reworded claim ${smithChip("BBBB2222")} matters.</p>`,
+    );
+    assert.equal(html.split("AAAA1111").length - 1, 1);
+    assert.equal(html.split("BBBB2222").length - 1, 1);
+  });
+
+  it("deletes a citation a patch omits when its id is listed in removeEmbeds", function () {
+    const id = tokens().ids.citation;
+    const { input, pending } = edit({
+      patches: [
+        {
+          find: `Drift is driven by turnover {{citation:${id}}}.`,
+          replace: "Drift is driven by turnover.",
+        },
+      ],
+      removeEmbeds: [id],
+    });
+    const html = input._patchedHtml!;
+    assert.notInclude(html, "data-citation=");
+    assert.include(html, "Drift is driven by turnover.");
+    assert.include(html, HIGHLIGHT);
+    assert.include(pending.description, "deletes 1 embedded item");
+  });
+
+  it("deletes a citation when the patch's only effect is removing it", function () {
+    const id = tokens().ids.citation;
+    const html = saved({
+      patches: [{ find: "(Devalle and Roxin, 2022, p. 42)", replace: "" }],
+      removeEmbeds: [id],
+    });
+    assert.notInclude(html, "data-citation=");
+    assert.include(html, "<p>Drift is driven by turnover .</p>");
+  });
+
+  it("keeps a listed citation when the patch's replace keeps its placeholder", function () {
+    const t = tokens();
+    const { input, pending } = edit({
+      patches: [
+        {
+          find: `turnover ${t.citation}.`,
+          replace: `turnover {{citation:${t.ids.citation}}}, as shown.`,
+        },
+      ],
+      removeEmbeds: [t.ids.citation],
+    });
+    assert.include(input._patchedHtml, CITATION);
+    assert.include(input._patchedHtml, "as shown.");
+    assert.notInclude(pending.description, "deletes");
+  });
+
+  it("still keeps or refuses a touched citation that is not listed", function () {
+    const t = tokens();
+    // Another item is listed; the touched citation is not, so it stays.
+    const html = saved({
+      patches: [
+        {
+          find: "Drift is driven by turnover (Devalle and Roxin, 2022, p. 42).",
+          replace: "Drift follows turnover.",
+        },
+      ],
+      removeEmbeds: [t.ids.image],
+    });
+    assert.include(html, CITATION);
+    assert.include(html, "Drift follows turnover.");
+    // Nothing but the citation is matched and it is not listed: refused.
+    assert.throws(
+      () =>
+        edit({
+          patches: [{ find: "(Devalle and Roxin, 2022, p. 42)", replace: "" }],
+          removeEmbeds: [t.ids.image],
+        }),
+      /belongs to an embedded citation/,
+    );
+  });
+
+  it("does not re-adopt a listed item's label retyped as plain text", function () {
+    const id = tokens().ids.citation;
+    const html = saved({
+      patches: [
+        {
+          find: `turnover {{citation:${id}}}.`,
+          replace: "turnover (Devalle and Roxin, 2022, p. 42).",
+        },
+      ],
+      removeEmbeds: [id],
+    });
+    assert.notInclude(html, "data-citation=");
+    assert.include(html, "turnover (Devalle and Roxin, 2022, p. 42).");
+  });
+
   it("refuses a patch that edits text inside a citation", function () {
     assert.throws(
       () => replaceTextContentInHtml(NOTE, "2022, p. 42", "2022, p. 43"),
@@ -385,14 +571,19 @@ describe("text edits never hollow out an embedded item", function () {
 });
 
 describe("selection rewrites with embedded items", function () {
-  function selectionEdit(replacement: string, selected: string) {
+  function selectionEdit(
+    replacement: string,
+    selected: string,
+    html = NOTE,
+    removeEmbeds?: string[],
+  ) {
     const tool = createNoteWriteTool({
       getActiveNoteSnapshot: () => ({
         noteId: 71,
         libraryID: 1,
         title: "Study note",
-        html: NOTE,
-        text: noteHtmlToModelText(NOTE),
+        html,
+        text: noteHtmlToModelText(html),
         noteKind: "standalone",
       }),
     } as never);
@@ -406,7 +597,7 @@ describe("selection rewrites with embedded items", function () {
         noteId: 71,
         title: "Study note",
         noteKind: "standalone",
-        noteText: noteHtmlToModelText(NOTE),
+        noteText: noteHtmlToModelText(html),
       },
       selectedTexts: [selected],
       selectedTextSources: ["note-edit"],
@@ -430,10 +621,13 @@ describe("selection rewrites with embedded items", function () {
     const input = tool.validate({
       mode: "edit",
       selection: { index: 1, replacement },
+      ...(removeEmbeds ? { removeEmbeds } : {}),
     });
     if (!input.ok) throw new Error("invalid");
-    tool.createPendingAction!(input.value, context);
-    return { html: input.value._patchedHtml!, request };
+    const pending = tool.createPendingAction!(input.value, context) as {
+      description: string;
+    };
+    return { html: input.value._patchedHtml!, request, pending };
   }
   const SENTENCE =
     "Drift is driven by turnover (Devalle and Roxin, 2022, p. 42).";
@@ -462,6 +656,45 @@ describe("selection rewrites with embedded items", function () {
     );
     assert.include(html, `Turnover drives drift ${CITATION}.`);
     assert.equal(stripNoteHtml(html).split("Devalle and Roxin").length - 1, 1);
+  });
+
+  it("uses the selected citation when another work in the note shows the same label", function () {
+    const { html } = selectionEdit(
+      "A later, reworded claim (Smith, 2020) matters.",
+      "Later claim (Smith, 2020) matters.",
+      TWO_SMITHS,
+    );
+    assert.include(
+      html,
+      `<p>Intro cites ${smithChip("AAAA1111")} here.</p><p>A later, reworded claim ${smithChip("BBBB2222")} matters.</p>`,
+    );
+    assert.equal(html.split("AAAA1111").length - 1, 1);
+    assert.equal(html.split("BBBB2222").length - 1, 1);
+  });
+
+  it("deletes a selected citation the user asked to remove, when the replacement omits it", function () {
+    const id = tokens().ids.citation;
+    const { html, pending } = selectionEdit(
+      "Turnover drives drift.",
+      SENTENCE,
+      NOTE,
+      [id],
+    );
+    assert.notInclude(html, "data-citation=");
+    assert.include(html, "Turnover drives drift.");
+    assert.include(pending.description, "deletes 1 embedded item");
+  });
+
+  it("keeps a selected citation that is listed when the replacement keeps its placeholder", function () {
+    const t = tokens();
+    const { html, pending } = selectionEdit(
+      `Per ${t.citation}, turnover drives drift.`,
+      SENTENCE,
+      NOTE,
+      [t.ids.citation],
+    );
+    assert.include(html, CITATION);
+    assert.notInclude(pending.description, "deletes");
   });
 
   it("tells the model which placeholders a selected passage contains", async function () {

@@ -166,7 +166,7 @@ export function noteEmbedRegistry(html: string): Map<string, NoteEmbed> {
 }
 
 export const NOTE_EMBED_PLACEHOLDER_GUIDANCE =
-  "Embedded note items: {{citation:id …}}, {{highlight:id …}}, {{image:id …}} and {{embed:id …}} stand for a clickable Zotero citation, a highlight linked to the PDF, a picture, or other media in this note. The text after the id is a read-only label. When you edit the note, keep every placeholder in the text you write, where its item belongs; moving it moves the item, and {{kind:id}} without the label is enough. Never change a label, never write the label as plain text instead of the placeholder, and never invent a placeholder. Delete an item only when the user asks, by listing its id in note_write removeEmbeds. To add a new citation, write {{cite item=<regular item's itemId> page=<pageLabel from paper_read>}}.";
+  "Embedded note items: {{citation:id …}}, {{highlight:id …}}, {{image:id …}} and {{embed:id …}} stand for a clickable Zotero citation, a highlight linked to the PDF, a picture, or other media in this note. The text after the id is a read-only label. When you edit the note, keep every placeholder in the text you write, where its item belongs; moving it moves the item, and {{kind:id}} without the label is enough. Never change a label, never write the label as plain text instead of the placeholder, and never invent a placeholder. Delete an item only when the user asks: list its id in note_write removeEmbeds and omit its placeholder. To add a new citation, write {{cite item=<regular item's itemId> page=<pageLabel from paper_read>}}.";
 
 /**
  * Placeholders of the note text whose items a selected passage shows. A
@@ -255,6 +255,24 @@ export function adoptRetypedNoteEmbedLabels(
   return out;
 }
 
+/**
+ * The distinct items, by id, that show each text. Copies of one item share
+ * an id, so they count once; two different works that both show
+ * "(Smith, 2020)" count twice, and retyped text cannot tell them apart.
+ */
+export function noteEmbedsByVisibleText(
+  embeds: readonly NoteEmbed[],
+): Map<string, NoteEmbed[]> {
+  const owners = new Map<string, NoteEmbed[]>();
+  for (const embed of embeds) {
+    const visible = noteEmbedVisibleText(embed);
+    const ids = owners.get(visible) || [];
+    if (!ids.some((entry) => entry.id === embed.id)) ids.push(embed);
+    owners.set(visible, ids);
+  }
+  return owners;
+}
+
 /** Replace each item in note HTML by its placeholder, escaped as HTML text. */
 export function replaceNoteEmbedsWithTokens(html: string): string {
   const embeds = collectNoteEmbeds(html);
@@ -319,43 +337,22 @@ export function createNoteEmbedCarrier(
   };
 }
 
-/** Items the original note holds more copies of than the next version,
- * leaving aside items the caller was asked to remove. */
+/** Copies of items the original note holds and the next version lacks: one
+ * entry per lost copy, so two lost copies of one item count twice. */
 export function findMissingNoteEmbeds(
   originalHtml: string,
   nextHtml: string,
-  removedIds: readonly string[] = [],
 ): NoteEmbed[] {
-  const removed = new Set(removedIds);
   const have = new Map<string, number>();
   for (const embed of collectNoteEmbeds(nextHtml))
     have.set(embed.key, (have.get(embed.key) || 0) + 1);
   const missing: NoteEmbed[] = [];
   for (const embed of collectNoteEmbeds(originalHtml)) {
-    if (removed.has(embed.id)) continue;
     const count = have.get(embed.key) || 0;
     if (count > 0) have.set(embed.key, count - 1);
     else missing.push(embed);
   }
   return missing;
-}
-
-/** Remove every copy of the named items from note HTML. */
-export function removeNoteEmbeds(html: string, ids: readonly string[]): string {
-  if (!ids.length) return html;
-  const keys = new Set(
-    collectNoteEmbeds(html)
-      .filter((embed) => ids.includes(embed.id))
-      .map((embed) => embed.key),
-  );
-  let out = "";
-  let cursor = 0;
-  for (const embed of collectNoteEmbeds(html)) {
-    if (!keys.has(embed.key)) continue;
-    out += html.slice(cursor, embed.start);
-    cursor = embed.end;
-  }
-  return out + html.slice(cursor);
 }
 
 /** The opening tag of Zotero's root note container, when the note has one. */

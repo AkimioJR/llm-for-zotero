@@ -17,6 +17,7 @@ import { resolveParentItemForNoteTarget } from "../../../services/notes/noteTarg
 import {
   replaceTextContentInHtml,
   replaceNoteSelectionHtml,
+  type NoteRangeReplacement,
 } from "../../../utils/noteEdit";
 import { synthesizeSelectedTextContexts } from "../../../services/context/normalizers";
 import { noteHtmlMatches } from "../../../utils/noteHtml";
@@ -26,12 +27,11 @@ import {
   createNoteEmbedCarrier,
   findMissingNoteEmbeds,
   formatNoteEmbedToken,
-  hasNoteEmbedTokens,
   NOTE_EMBED_TOKEN_PATTERN,
   noteEmbedRegistry,
+  noteEmbedsByVisibleText,
   noteEmbedVisibleText,
   preserveNoteRoot,
-  removeNoteEmbeds,
   replaceNoteEmbedTokensWithLabels,
   restoreNoteEmbedTokensInHtml,
   type NoteEmbed,
@@ -95,7 +95,7 @@ export const NOTE_WRITE_GUIDANCE: NonNullable<AgentToolDefinition["guidance"]> =
         request.forcedSkillIds?.includes(WRITE_NOTE_SKILL_ID),
       ),
     instruction:
-      "Use note_write mode:'edit' against the exact note target. For a bound Selected text passage, pass selection:{index:<1-based Selected text number>,replacement:<final Markdown>}. The host binds its owning note, replaces the selected structure, preserves surrounding content and embedded assets, and saves and verifies in one action. Preserve headings and list structure unless the user requests changing them. For precise edits without a bound selection, use patches with plain replacement text; findFormat:'markdown' interprets Markdown copied from library_read. Use mode:'append' to append and mode:'create' for a new note. Keep every {{kind:id}} placeholder of an embedded citation, highlight or image where its item belongs; remove one only via removeEmbeds when the user asks. To add a clickable Zotero citation, write {{cite item=<regular item's itemId> page=<pageLabel from paper_read>}}, or {{cite item=1 page=4; item=2 page=9}} for several works; omit page to cite a whole work. Resolve a named parent or collection before proposing the write. Pass finalized material by documentId so retries reuse exact content. Safe reviews every note write, including creation; Auto may apply routine same-library note changes directly. After verified success, do not claim that a diff is still awaiting review. " +
+      "Use note_write mode:'edit' against the exact note target. For a bound Selected text passage, pass selection:{index:<1-based Selected text number>,replacement:<final Markdown>}. The host binds its owning note, replaces the selected structure, preserves surrounding content and embedded assets, and saves and verifies in one action. Preserve headings and list structure unless the user requests changing them. For precise edits without a bound selection, use patches with plain replacement text; findFormat:'markdown' interprets Markdown copied from library_read. Use mode:'append' to append and mode:'create' for a new note. Keep every {{kind:id}} placeholder of an embedded citation, highlight or image where its item belongs; to delete one the user names, list its id in removeEmbeds and omit its placeholder. To add a clickable Zotero citation, write {{cite item=<regular item's itemId> page=<pageLabel from paper_read>}}, or {{cite item=1 page=4; item=2 page=9}} for several works; omit page to cite a whole work. Resolve a named parent or collection before proposing the write. Pass finalized material by documentId so retries reuse exact content. Safe reviews every note write, including creation; Auto may apply routine same-library note changes directly. After verified success, do not claim that a diff is still awaiting review. " +
       SOURCE_NOTE_COPY_GUIDANCE,
   };
 
@@ -123,18 +123,25 @@ function sanitizeNoteHtml(html: string): string {
   return s;
 }
 
+/** Placeholders of the given item copies, each item once with its count. */
 function describeEmbeds(embeds: NoteEmbed[]): string {
-  return embeds
-    .map((embed) =>
+  const copies = new Map<string, { embed: NoteEmbed; count: number }>();
+  for (const embed of embeds) {
+    const entry = copies.get(embed.id);
+    if (entry) entry.count++;
+    else copies.set(embed.id, { embed, count: 1 });
+  }
+  return Array.from(
+    copies.values(),
+    ({ embed, count }) =>
       formatNoteEmbedToken({
         ...embed,
         label:
           embed.label.length > 80
             ? `${embed.label.slice(0, 80).trimEnd()}…`
             : embed.label,
-      }),
-    )
-    .join(", ");
+      }) + (count > 1 ? ` (${count} copies)` : ""),
+  ).join(", ");
 }
 
 /** A review-card sentence naming the citations this write adds. */
@@ -194,15 +201,6 @@ function expandCitations(
   return expanded.text;
 }
 
-/** Items of a note whose label shows inside a passage of its visible text. */
-function embedsShownIn(html: string, passage: string): NoteEmbed[] {
-  const text = passage.replace(/\s+/g, " ");
-  return collectNoteEmbeds(html).filter((embed) => {
-    const visible = noteEmbedVisibleText(embed);
-    return visible.length >= 3 && text.includes(visible);
-  });
-}
-
 /** The original note's items, plus the chips this write adds. */
 function embedRegistryFor(originalHtml: string, input: NoteWriteInput) {
   const registry = noteEmbedRegistry(originalHtml);
@@ -243,20 +241,18 @@ function renderContentWithEmbeds(
   return rendered.html;
 }
 
-/** The final HTML of an edit: requested removals applied, and the note's root
- * container (which holds its citation registry) kept. */
-function finishEditHtml(
-  html: string,
-  originalHtml: string,
-  removeEmbeds: string[] | undefined,
-): string {
-  return preserveNoteRoot(
-    originalHtml,
-    removeNoteEmbeds(html, removeEmbeds || []),
-  );
+/** The final HTML of an edit: the note's root container (which holds its
+ * citation registry) kept. An item is deleted only by leaving out its
+ * placeholder, never by its id alone. */
+function finishEditHtml(html: string, originalHtml: string): string {
+  return preserveNoteRoot(originalHtml, html);
 }
 
-/** Refuse an edit that would lose an embedded item nobody asked to remove. */
+/**
+ * Refuse an edit that would lose a copy of an embedded item nobody asked to
+ * remove. An id in removeEmbeds lets that item lose copies; the copies whose
+ * placeholders the edit left out are deleted, and the rest are kept.
+ */
 function assertEmbedsKept(
   originalHtml: string,
   nextHtml: string,
@@ -268,11 +264,55 @@ function assertEmbedsKept(
     throw new Error(
       `removeEmbeds names ${strangers.join(", ")}, which is not an embedded item of this note. Use ids from the note's {{kind:id}} placeholders. No content was changed.`,
     );
-  const missing = findMissingNoteEmbeds(originalHtml, nextHtml, removeEmbeds);
-  if (!missing.length) return;
-  throw new Error(
-    `This edit would delete ${missing.length} embedded item${missing.length === 1 ? "" : "s"} from the note: ${describeEmbeds(missing)}. Put each placeholder back where its item belongs in the new text (moving it is fine, and {{kind:id}} without the label is enough). Only if the user asked to delete an item, list its id in removeEmbeds. No content was changed.`,
+  const missing = findMissingNoteEmbeds(originalHtml, nextHtml).filter(
+    (embed) => !removeEmbeds?.includes(embed.id),
   );
+  if (!missing.length) return;
+  // Retyped text that several different items show cannot name one of them.
+  const shown = noteEmbedsByVisibleText(collectNoteEmbeds(originalHtml));
+  const ambiguous = Array.from(shown.entries())
+    .filter(
+      ([visible, owners]) =>
+        visible.length >= 3 &&
+        owners.length > 1 &&
+        missing.some((embed) => owners.some((owner) => owner.id === embed.id)),
+    )
+    .map(
+      ([visible, owners]) =>
+        ` "${visible}" is shown by several items: ${owners
+          .map((owner) => formatNoteEmbedToken(owner, { label: false }))
+          .join(
+            ", ",
+          )}; write the placeholder of the one you mean, not its text.`,
+    )
+    .join("");
+  throw new Error(
+    `This edit would delete ${missing.length} embedded item${missing.length === 1 ? "" : "s"} from the note: ${describeEmbeds(missing)}. Put each placeholder back where its item belongs in the new text (moving it is fine, and {{kind:id}} without the label is enough).${ambiguous} Only if the user asked to delete an item, list its id in removeEmbeds and omit its placeholder. No content was changed.`,
+  );
+}
+
+/**
+ * The replacement for an edited range: a label retyped as plain text means
+ * an item inside that range, never an item elsewhere in the note that shows
+ * the same text. Placeholders become their items, which the range carries.
+ */
+function rangeReplacement(
+  text: string,
+  render: (adopted: string) => string,
+  removeEmbeds?: readonly string[],
+): NoteRangeReplacement {
+  const listed = (embed: NoteEmbed) =>
+    Boolean(removeEmbeds?.includes(embed.id));
+  return (touched) => {
+    // A listed item is being deleted, so its retyped label stays plain text.
+    const html = render(
+      adoptRetypedNoteEmbedLabels(
+        text,
+        touched.filter((embed) => !listed(embed)),
+      ),
+    );
+    return { html, carried: createNoteEmbedCarrier(html), removed: listed };
+  };
 }
 
 type NoteWriteInput = {
@@ -396,29 +436,25 @@ function applyPatchesToNoteHtml(
       },
     );
     // A label of a replaced item retyped as plain text means the item itself.
-    const replace = adoptRetypedNoteEmbedLabels(
+    const replace = rangeReplacement(
       requested,
-      embedsShownIn(result, find),
+      (adopted) => {
+        const restored = restoreNoteEmbedTokensInHtml(
+          escapeNoteHtml(adopted),
+          registry,
+        );
+        assertKnownEmbedTokens(restored.unknown);
+        return restored.html;
+      },
+      input.removeEmbeds,
     );
-    let options: Parameters<typeof replaceTextContentInHtml>[3] = {};
-    if (hasNoteEmbedTokens(replace)) {
-      const restored = restoreNoteEmbedTokensInHtml(
-        escapeNoteHtml(replace),
-        registry,
-      );
-      assertKnownEmbedTokens(restored.unknown);
-      options = {
-        replacementHtml: restored.html,
-        carried: createNoteEmbedCarrier(restored.html),
-      };
-    }
     const asShown = stripNoteHtml(renderRawNoteHtml(find));
     const applied =
       patch.findFormat === "markdown"
-        ? replaceTextContentInHtml(result, asShown, replace, options)
-        : (replaceTextContentInHtml(result, find, replace, options) ??
+        ? replaceTextContentInHtml(result, asShown, replace)
+        : (replaceTextContentInHtml(result, find, replace) ??
           (asShown !== find
-            ? replaceTextContentInHtml(result, asShown, replace, options)
+            ? replaceTextContentInHtml(result, asShown, replace)
             : null));
     if (applied === null) return { failedPatch: index };
     result = applied;
@@ -631,21 +667,21 @@ function prepareNoteWriteInput(
       const selected = synthesizeSelectedTextContexts(context.request)[
         input._selection.index - 1
       ];
-      const replacementHtml = renderContentWithEmbeds(
-        adoptRetypedNoteEmbedLabels(
-          input._selection.replacement,
-          embedsShownIn(snapshot.html, selected.text),
-        ),
-        false,
-        snapshot.html,
-        input,
-        lookup,
-      );
       const patched = replaceNoteSelectionHtml(
         snapshot.html,
         selected.text,
-        replacementHtml,
-        createNoteEmbedCarrier(replacementHtml),
+        rangeReplacement(
+          input._selection.replacement,
+          (adopted) =>
+            renderContentWithEmbeds(
+              adopted,
+              false,
+              snapshot.html,
+              input,
+              lookup,
+            ),
+          input.removeEmbeds,
+        ),
       );
       if (patched === null)
         throw new Error(
@@ -681,15 +717,21 @@ function prepareNoteWriteInput(
     input.content = input._isHtml
       ? input.content
       : normalizeNoteSourceText(input.content);
-    // A retyped label of an item stands for the item. A finalized document
-    // is saved exactly as stored, so it is left to the check below.
-    if (input._patchedHtml === undefined && !input.documentId)
+    // A retyped label of an item stands for the item, when no other item
+    // of the note shows the same text. A finalized document is saved exactly
+    // as stored, so it is left to the check below.
+    if (input._patchedHtml === undefined && !input.documentId) {
+      const embeds = collectNoteEmbeds(snapshot.html);
+      const shown = noteEmbedsByVisibleText(embeds);
       input.content = adoptRetypedNoteEmbedLabels(
         input.content,
-        collectNoteEmbeds(snapshot.html).filter(
-          (embed) => !input.removeEmbeds?.includes(embed.id),
+        embeds.filter(
+          (embed) =>
+            !input.removeEmbeds?.includes(embed.id) &&
+            shown.get(noteEmbedVisibleText(embed))?.length === 1,
         ),
       );
+    }
     // Bind the exact final HTML now, so the check below and the write agree.
     const finalHtml = withCitationRegistry(
       finishEditHtml(
@@ -702,7 +744,6 @@ function prepareNoteWriteInput(
             lookup,
           ),
         snapshot.html,
-        input.removeEmbeds,
       ),
       input,
     );
@@ -876,7 +917,7 @@ export function createNoteWriteTool(
             type: "array",
             items: { type: "string" },
             description:
-              "Mode 'edit': ids of {{kind:id}} note placeholders (citations, highlights, images) the user asked to delete. Keep all others; an edit dropping one is refused.",
+              "Mode 'edit': ids of {{kind:id}} note placeholders (citations, highlights, images) the user asked to delete; omit those placeholders. Keep all others; an edit dropping one is refused.",
           },
           target: {
             type: "string",
@@ -1249,9 +1290,15 @@ export function createNoteWriteTool(
       const diffAfter = input._isHtml
         ? noteHtmlToModelText(input.content)
         : normalizedContent;
-      const removed = (input.removeEmbeds || [])
-        .map((id) => noteEmbedRegistry(snapshot.html).get(id))
-        .filter((embed): embed is NoteEmbed => Boolean(embed));
+      // Count the copies the prepared edit actually deletes, not the ids it
+      // names: an id may lose one copy of several, or none.
+      const removed =
+        input._patchedHtml === undefined
+          ? []
+          : findMissingNoteEmbeds(
+              input.expectedOriginalHtml ?? snapshot.html,
+              input._patchedHtml,
+            );
 
       return {
         toolName: "note_write",
@@ -1512,10 +1559,7 @@ export function createNoteWriteTool(
       // or content with imported images, is rendered again the same way.
       const finishHtml = (html: string) =>
         input.mode === "edit"
-          ? withCitationRegistry(
-              finishEditHtml(html, originalHtml, input.removeEmbeds),
-              input,
-            )
+          ? withCitationRegistry(finishEditHtml(html, originalHtml), input)
           : html;
       const render = (content: string) =>
         input.mode === "edit" && content === input.content && input._patchedHtml

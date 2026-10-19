@@ -717,6 +717,59 @@ describe("noteWrite create tracking", function () {
       assert.include(saved, citation);
     });
 
+    it("saves the user's review-box text that deletes a placeholder, and reports the deletion", async function () {
+      const existing = saveExistingNote(64, 9, before);
+      const tool = createNoteWriteTool(new ZoteroGateway());
+      const validated = tool.validate({
+        mode: "edit",
+        targetNoteId: 64,
+        content: `Model wording ${token()}.`,
+      });
+      assert.isTrue(validated.ok);
+      if (!validated.ok) return;
+      tool.createPendingAction!(validated.value, baseContext);
+      const confirmed = tool.applyConfirmation!(validated.value, {
+        content: "User wording without the citation.",
+      });
+      assert.isTrue(confirmed.ok);
+      if (!confirmed.ok) return;
+      const result = (await tool.execute(confirmed.value, baseContext))
+        .content as any;
+      const saved = existing.getNote();
+      assert.include(saved, "User wording without the citation.");
+      assert.notInclude(saved, "data-citation=");
+      assert.include(
+        result.noteChange.description,
+        "This edit deleted 1 embedded item.",
+      );
+    });
+
+    it("refuses a placeholder the user invents in the review box", async function () {
+      const existing = saveExistingNote(65, 9, before);
+      const tool = createNoteWriteTool(new ZoteroGateway());
+      const validated = tool.validate({
+        mode: "edit",
+        targetNoteId: 65,
+        content: `Model wording ${token()}.`,
+      });
+      assert.isTrue(validated.ok);
+      if (!validated.ok) return;
+      tool.createPendingAction!(validated.value, baseContext);
+      const confirmed = tool.applyConfirmation!(validated.value, {
+        content: `User wording ${token()} {{citation:abcdef}}.`,
+      });
+      assert.isTrue(confirmed.ok);
+      if (!confirmed.ok) return;
+      let error: unknown;
+      try {
+        await tool.execute(confirmed.value, baseContext);
+      } catch (caught) {
+        error = caught;
+      }
+      assert.match(String(error), /no embedded item \{\{citation:abcdef/);
+      assert.equal(existing.getNote(), before);
+    });
+
     it("refuses to save a rewrite that drops the citation, leaving the note as it was", async function () {
       const existing = saveExistingNote(63, 9, before);
       const tool = createNoteWriteTool(new ZoteroGateway());
