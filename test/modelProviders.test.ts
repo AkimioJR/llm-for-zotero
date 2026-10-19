@@ -365,6 +365,85 @@ describe("modelProviders", function () {
     assert.equal(notifications, 1);
   });
 
+  describe("cached reads of the stored provider groups", function () {
+    const sampleGroups = (): ModelProviderGroup[] => [
+      {
+        id: "provider-a",
+        apiBase: "https://api.openai.com/v1",
+        apiKey: "sk-a",
+        authMode: "api_key",
+        providerProtocol: "openai_chat_compat",
+        models: [
+          {
+            id: "model-a",
+            model: "gpt-4o-mini",
+            temperature: 0.3,
+            outputTokenLimit: { mode: "custom", tokens: 4096 },
+          },
+        ],
+      },
+    ];
+
+    it("parses an unchanged stored value once across many reads", function () {
+      setModelProviderGroups(sampleGroups());
+      const originalParse = JSON.parse;
+      let parses = 0;
+      JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+        parses += 1;
+        return originalParse(...args);
+      }) as typeof JSON.parse;
+      try {
+        for (let index = 0; index < 20; index += 1) {
+          getRuntimeModelEntries();
+          getModelProviderGroups();
+        }
+      } finally {
+        JSON.parse = originalParse;
+      }
+      assert.isAtMost(parses, 1);
+    });
+
+    it("reflects a new stored value on the next read", function () {
+      setModelProviderGroups(sampleGroups());
+      assert.equal(getRuntimeModelEntries()[0]?.model, "gpt-4o-mini");
+      const next = sampleGroups();
+      next[0]!.models[0]!.model = "gpt-5";
+      setModelProviderGroups(next);
+      assert.equal(getRuntimeModelEntries()[0]?.model, "gpt-5");
+      assert.equal(getModelProviderGroups()[0]?.models[0]?.model, "gpt-5");
+    });
+
+    it("isolates callers that mutate a returned value", function () {
+      setModelProviderGroups(sampleGroups());
+      const groups = getModelProviderGroups();
+      const group = groups[0] as ModelProviderGroup & { apiKey: string };
+      group.apiKey = "mutated";
+      (group.models[0] as { model: string }).model = "mutated";
+      groups.push({ ...group, id: "extra" });
+      const entries = getRuntimeModelEntries();
+      entries[0]!.model = "mutated";
+      const advanced = entries[0]!.advanced as {
+        outputTokenLimit: { mode: string };
+      };
+      advanced.outputTokenLimit.mode = "mutated";
+      entries.pop();
+
+      assert.lengthOf(getModelProviderGroups(), 1);
+      assert.equal(getModelProviderGroups()[0]?.apiKey, "sk-a");
+      assert.equal(
+        getModelProviderGroups()[0]?.models[0]?.model,
+        "gpt-4o-mini",
+      );
+      const fresh = getRuntimeModelEntries();
+      assert.lengthOf(fresh, 1);
+      assert.equal(fresh[0]?.model, "gpt-4o-mini");
+      assert.deepEqual(fresh[0]?.advanced?.outputTokenLimit, {
+        mode: "custom",
+        tokens: 4096,
+      });
+    });
+  });
+
   it("normalizes WebChat as target-only persisted and runtime state", function () {
     setModelProviderGroups([
       {
