@@ -223,6 +223,8 @@ export type WorkflowTestStandaloneSidePanelDiagnostics = {
     browserTabs: {
       toggleTopPx: number;
       toggleBottomPx: number;
+      /** Bottom of the 32px ⇤ sidebar toggle; null when it is hidden. */
+      navToggleBottomPx: number | null;
       /** Top of Paper chat | Library chat; the tabs start on this line. */
       mainSwitchTopPx: number;
       /** Middle lines (y of the box's centre) of the strip and its parts. */
