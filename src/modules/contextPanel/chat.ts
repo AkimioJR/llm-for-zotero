@@ -145,6 +145,7 @@ import {
   writeChatScrollTop,
   persistChatScrollSnapshotForConversationKey,
   setFollowBottomChatScrollSnapshot,
+  setChatBoxConversation,
   withScrollGuard,
 } from "./chatScrollSnapshots";
 import {
@@ -10675,6 +10676,7 @@ function renderChatForPanel(
     resolvePaperContextDisplayRef(paperContext, paperContextDisplayCache);
 
   if (!item) {
+    setChatBoxConversation(chatBox, null);
     chatBox.innerHTML = getPaperChatStartPageHtml();
     const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
     if (panelRoot) panelRoot.dataset.startPageActive = "true";
@@ -10798,6 +10800,8 @@ function renderChatForPanel(
     endInlineEdit(body);
   }
 
+  // From here a full rebuild makes the box show this conversation.
+  if (!useTargetedRerender) setChatBoxConversation(chatBox, conversationKey);
   if (history.length === 0) {
     // [webchat] Show webchat-specific welcome instead of generic instructions
     const effectiveRequestConfig = resolveEffectiveRequestConfig({
