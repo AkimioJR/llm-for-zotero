@@ -969,6 +969,7 @@ describe("live: search routing and the evidence ladder", function () {
           local: record.summary.familyCounts.local,
           scholarly: record.summary.familyCounts.scholarly,
           web: record.summary.familyCounts.web,
+          shell: record.summary.shellCalls,
           card: record.summary.familyCounts.card,
           confirmations: record.cards.length,
           localBeforeOutside: record.summary.localBeforeOutside,

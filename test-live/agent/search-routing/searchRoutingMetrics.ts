@@ -11,9 +11,17 @@
  * - scholarly: outside scholarly search
  * - web: outside web search and page reads
  * - card: the paper selection (import) card
+ * - shell: shell commands (for example curl to a literature API); not a rung,
+ *   counted because outside sources must not be read this way
  * - other: everything else (skills, task updates, writes)
  */
-export type ToolFamily = "local" | "scholarly" | "web" | "card" | "other";
+export type ToolFamily =
+  | "local"
+  | "scholarly"
+  | "web"
+  | "card"
+  | "shell"
+  | "other";
 
 const FAMILY_BY_TOOL: Record<string, ToolFamily> = {
   paper_read: "local",
@@ -27,6 +35,8 @@ const FAMILY_BY_TOOL: Record<string, ToolFamily> = {
   web_search: "web",
   web_read: "web",
   literature_review: "card",
+  // The plugin registry's only shell tool.
+  run_command: "shell",
 };
 
 export function classifyTool(name: string): ToolFamily {
@@ -61,6 +71,8 @@ export type RoutingRepSummary = {
   familyCounts: Record<ToolFamily, number>;
   outsideCalls: number;
   localCalls: number;
+  /** Shell commands run in the rep (run_command). */
+  shellCalls: number;
   literatureReviewCalls: number;
   confirmations: number;
   firstLocalRound: number | null;
@@ -82,6 +94,7 @@ export function summarizeRoutingRep(
     scholarly: 0,
     web: 0,
     card: 0,
+    shell: 0,
     other: 0,
   };
   for (const call of calls) familyCounts[call.family] += 1;
@@ -97,6 +110,7 @@ export function summarizeRoutingRep(
     familyCounts,
     outsideCalls: familyCounts.scholarly + familyCounts.web,
     localCalls: familyCounts.local,
+    shellCalls: familyCounts.shell,
     literatureReviewCalls: calls.filter(
       (call) => call.name === "literature_review",
     ).length,
@@ -140,6 +154,7 @@ export type SummaryRow = {
   local?: number;
   scholarly?: number;
   web?: number;
+  shell?: number;
   card?: number;
   confirmations?: number;
   localBeforeOutside?: boolean | null;
@@ -158,6 +173,7 @@ const SUMMARY_COLUMNS: Array<[string, (row: SummaryRow) => unknown]> = [
   ["local", (row) => row.local],
   ["scholarly", (row) => row.scholarly],
   ["web", (row) => row.web],
+  ["shell", (row) => row.shell],
   ["card", (row) => row.card],
   ["confirms", (row) => row.confirmations],
   [
