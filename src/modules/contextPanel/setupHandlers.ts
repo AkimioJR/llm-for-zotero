@@ -237,6 +237,7 @@ import {
   resolveStandaloneConversationSwitch,
   type StandaloneConversationSwitchDecision,
 } from "./standaloneConversationSwitch";
+import { createChatInputLock } from "./chatInputLock";
 import {
   getActiveContextAttachmentFromTabs,
   addSelectedTextContext,
@@ -6795,6 +6796,9 @@ export function setupHandlers(
   // Latest in-place paper switch; only it may re-enable the chat box.
   let paperItemSwitchToken = 0;
   let conversationInPlaceSwitchToken = 0;
+  const conversationSwitchInputLock = chatBox
+    ? createChatInputLock(chatBox)
+    : null;
   /** See standaloneConversationSwitch.ts. */
   const resolveConversationSwitchForPanel = (
     nextItem: Zotero.Item,
@@ -6988,8 +6992,9 @@ export function setupHandlers(
       // The last conversation's messages stay on screen until the next one is
       // drawn; they must not take input meanwhile (retry/edit would act on
       // the next conversation's history). Only the latest switch clears it.
+      // (Not `inert`: that restyles every message of a long chat.)
       const switchToken = ++conversationInPlaceSwitchToken;
-      chatBox?.setAttribute("inert", "");
+      conversationSwitchInputLock?.lock();
       try {
         const switched = isGlobal
           ? await switchGlobalConversation(nextKey, { quietHistory: true })
@@ -7020,7 +7025,7 @@ export function setupHandlers(
         return switched;
       } finally {
         if (switchToken === conversationInPlaceSwitchToken) {
-          chatBox?.removeAttribute("inert");
+          conversationSwitchInputLock?.unlock();
         }
       }
     },
