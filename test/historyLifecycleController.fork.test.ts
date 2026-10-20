@@ -302,6 +302,7 @@ function createControllerHarness(
     mode?: "global" | "paper";
     withHistoryHeader?: boolean;
     withLibraryChatTab?: boolean;
+    overrides?: Partial<HistoryLifecycleControllerDeps>;
   } = {},
 ) {
   const doc = new FakeDocument();
@@ -428,6 +429,7 @@ function createControllerHarness(
     setActiveEditSession: () => undefined,
     getCoreAgentRuntime: async () => ({}) as any,
     log: () => undefined,
+    ...options.overrides,
   };
 
   return {
@@ -1398,6 +1400,65 @@ describe("historyLifecycleController active-conversation selection", function ()
       assert.equal(readPersistedGlobal(system), targetKey);
     });
   }
+
+  it("switchGlobalConversation puts the new conversation's draft in the composer before its load, so a quick next switch saves the right draft", async function () {
+    const THIRD_KEY = TARGET_CONVERSATION_KEY + 1;
+    loadedConversationKeys.delete(THIRD_KEY);
+    conversationRepository.ensureCatalogEntry = async (params) =>
+      makeCatalogEntry({
+        conversationKey: params.conversationKey || TARGET_CONVERSATION_KEY,
+        kind: "global",
+        libraryID: LIBRARY_ID,
+        system: "upstream",
+      });
+    let releaseTargetLoad: () => void = () => undefined;
+    const targetLoadGate = new Promise<void>((resolve) => {
+      releaseTargetLoad = resolve;
+    });
+    conversationRepository.loadMessages = async (conversationKey: number) => {
+      if (conversationKey === TARGET_CONVERSATION_KEY) await targetLoadGate;
+      return [];
+    };
+    const drafts = new Map<number, string>([
+      [SOURCE_CONVERSATION_KEY, "draft of A"],
+      [TARGET_CONVERSATION_KEY, "draft of B"],
+    ]);
+    let composer = "draft of A";
+    const keyOfCurrentItem = () => getConversationKey(harness.getCurrentItem());
+    const harness = createControllerHarness({
+      overrides: {
+        persistDraftInputForCurrentConversation: () => {
+          drafts.set(keyOfCurrentItem(), composer);
+        },
+        restoreDraftInputForCurrentConversation: () => {
+          composer = drafts.get(keyOfCurrentItem()) || "";
+        },
+      },
+    });
+    try {
+      const switchToTarget = harness.controller.switchGlobalConversation(
+        TARGET_CONVERSATION_KEY,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(
+        getConversationKey(harness.getCurrentItem()),
+        TARGET_CONVERSATION_KEY,
+      );
+      // B's load is still held; the composer already shows B's draft.
+      assert.equal(composer, "draft of B");
+      const switchToThird =
+        harness.controller.switchGlobalConversation(THIRD_KEY);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      releaseTargetLoad();
+      await switchToTarget;
+      await switchToThird;
+      assert.equal(drafts.get(TARGET_CONVERSATION_KEY), "draft of B");
+      assert.equal(drafts.get(SOURCE_CONVERSATION_KEY), "draft of A");
+    } finally {
+      loadedConversationKeys.delete(THIRD_KEY);
+      chatHistory.delete(THIRD_KEY);
+    }
+  });
 
   for (const system of ["upstream", "codex", "claude_code"] as const) {
     it(`createAndSwitchGlobalConversation offers only the active ${system} key as the current draft and remembers the new key${system === "claude_code" ? " in the map only" : " in the map and the pref"}`, async function () {

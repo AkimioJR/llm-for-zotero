@@ -2160,10 +2160,14 @@ export function createHistoryLifecycleController(
     closeExportMenu();
     closeHistoryNewMenu();
     closeHistoryMenu();
+    // The panel is on this conversation now, so its own draft goes into the
+    // composer before the load below: a switch that overtakes this one must
+    // save this conversation's draft, not the last one's text.
+    restoreDraftInputForCurrentConversation();
+    resetComposePreviewUI();
     await ensureConversationLoaded(item as Zotero.Item, { body });
     if (!isPanelOperationLeaseCurrent(hostLease)) return false;
     invalidateHistorySearchDocument(normalizedConversationKey);
-    restoreDraftInputForCurrentConversation();
     refreshChatPreservingScroll();
     resetComposePreviewUI();
     updateModelButton();
@@ -2393,6 +2397,21 @@ export function createHistoryLifecycleController(
     syncConversationIdentity();
     refreshAutoLoadedPaperContextForCurrentItem();
     void renderShortcuts(body, item as Zotero.Item, resolveShortcutMode(item));
+    setActiveEditSession(null);
+    endInlineEdit(body);
+    clearForcedSkill();
+    closePaperPicker();
+    closePromptMenu();
+    closeResponseMenu();
+    closeRetryModelMenu();
+    closeExportMenu();
+    closeHistoryNewMenu();
+    closeHistoryMenu();
+    // The panel is on this conversation now, so its own draft goes into the
+    // composer before any load below: a switch that overtakes this one must
+    // save this conversation's draft, not the last one's text.
+    restoreDraftInputForCurrentConversation();
+    resetComposePreviewUI();
     // In WebChat the panel is only ever on a WebChat session row (isolated
     // above), never on the paper's ordinary chat: WebChat empties the chat it
     // is on, and the other surface (on an API model) may show that chat. On
@@ -2420,18 +2439,7 @@ export function createHistoryLifecycleController(
       await ensureConversationLoaded(item as Zotero.Item, { body });
     }
     if (!isPanelOperationLeaseCurrent(hostLease)) return false;
-    setActiveEditSession(null);
-    endInlineEdit(body);
-    clearForcedSkill();
-    closePaperPicker();
-    closePromptMenu();
-    closeResponseMenu();
-    closeRetryModelMenu();
-    closeExportMenu();
-    closeHistoryNewMenu();
-    closeHistoryMenu();
     invalidateHistorySearchDocument(getConversationKey(item as Zotero.Item));
-    restoreDraftInputForCurrentConversation();
     refreshChatPreservingScroll();
     resetComposePreviewUI();
     updateModelButton();
