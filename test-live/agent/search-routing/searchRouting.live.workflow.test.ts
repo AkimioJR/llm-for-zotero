@@ -47,6 +47,18 @@
  * anysearchApiKey from the live profile's prefs.js for the run and restores
  * them after; without a key there either, those cases are skipped and the
  * reason is printed. No key is ever written to a report or printed.
+ *
+ * Real-paper mode: LLM_FOR_ZOTERO_ROUTING_PAPERS_DIR=<dir with manifest.json>
+ * seeds the active paper and the library from a local, never-committed set of
+ * real papers (their PDFs and MinerU text) instead of the authored fictional
+ * fixtures, and the case prompts become paper-specific (S1 family, S2, S3,
+ * S6, S7, S8, S10 and the S5 pair) from the manifest's "facts". The manifest
+ * lists papers with title, creators ({firstName, lastName}), year, doi,
+ * itemKey, role (active | library), pdfPath and textPath (relative to the
+ * dir). Without the variable the authored fixtures are used, unchanged.
+ * LLM_FOR_ZOTERO_ROUTING_WEB_PROVIDER=tavily copies tavilyApiKey from the
+ * live profile and selects Tavily; =anysearch selects the keyless provider;
+ * unset keeps the behavior above.
  */
 import { assert } from "chai";
 import { papers as authoredPapers } from "../../../test/fixtures/qaEvaluation/corpus";
@@ -99,6 +111,8 @@ const selectedCases = new Set(
     .map((id) => id.trim())
     .filter(Boolean),
 );
+const papersDir = env("LLM_FOR_ZOTERO_ROUTING_PAPERS_DIR").replace(/\/+$/, "");
+const webProviderChoice = env("LLM_FOR_ZOTERO_ROUTING_WEB_PROVIDER");
 const PREF_PREFIX = "extensions.zotero.llmforzotero";
 const MARK = `route${Date.now().toString(36)}`;
 /** Web prefs the suite may copy from the live profile for one run. */
@@ -125,6 +139,36 @@ const S1_SUBJECT =
  */
 const TOOL_QUESTION =
   "This paper sorted its spikes with automatic clustering. Search online whether Kilosort, a widely used automatic spike-sorting package, is still maintained and when its latest release came out.";
+
+/** The user's own wording of the original bug report (real-paper mode). */
+const REAL_S1_SUBJECT =
+  "the tuning of the head direction neurons (at each individual neuron) are stable";
+const REAL_OTHER_STUDIES =
+  "can you search whether other studies found the same stability of head-direction tuning across days?";
+
+type ManifestPaper = {
+  title: string;
+  creators: Array<{ firstName?: string; lastName: string }>;
+  year: string;
+  doi?: string;
+  itemKey?: string;
+  role: "active" | "library";
+  pdfPath?: string | null;
+  textPath?: string | null;
+};
+type ManifestFacts = {
+  /** The in-paper result the S1 family asks about (a short fact). */
+  s1Result: string;
+  /** A named tool, package or dataset the active paper used. */
+  tool: string;
+  /** A topic present in the library (S8). */
+  presentTopic: string;
+  /** A topic absent from the library (S7). */
+  absentTopic: string;
+  /** The claim the S5 pair searches a collection for. */
+  collectionClaim: string;
+};
+type Manifest = { papers: ManifestPaper[]; facts: ManifestFacts };
 
 type Scope = "paper" | "collection" | "global" | "side";
 
@@ -417,10 +461,48 @@ const CASES: RoutingCase[] = [
   },
 ];
 
+/** Replaces the authored prompts with the real-paper ones (manifest facts). */
+function applyRealPrompts(facts: ManifestFacts): void {
+  const set = (id: string, prompt: string) => {
+    const entry = CASES.find((candidate) => candidate.id === id);
+    if (entry) entry.prompt = prompt;
+  };
+  set("S1", `can you search and help me to know whether ${REAL_S1_SUBJECT}?`);
+  set("S1-control", `can you help me to know whether ${REAL_S1_SUBJECT}?`);
+  set(
+    "S1b-check",
+    `can you check and help me to know whether ${REAL_S1_SUBJECT}?`,
+  );
+  set(
+    "S1b-lookup",
+    `can you look up and help me to know whether ${REAL_S1_SUBJECT}?`,
+  );
+  set("S9", `can you search and help me to know whether ${REAL_S1_SUBJECT}?`);
+  set("S2", REAL_OTHER_STUDIES);
+  set("S10", REAL_OTHER_STUDIES);
+  const toolQuestion = `This paper used ${facts.tool}. Search online whether ${facts.tool} is still maintained and when its latest release came out.`;
+  set("S3", toolQuestion);
+  set(
+    "S6",
+    `For this paper, tell me whether the tuning of individual head-direction neurons stayed stable across days, search whether other studies found the same, and search online whether ${facts.tool} is still maintained.`,
+  );
+  set(
+    "S5",
+    `search this collection for evidence that ${facts.collectionClaim}`,
+  );
+  set(
+    "S5b",
+    `search this collection for evidence that ${facts.collectionClaim}, and compare with recent literature`,
+  );
+  set("S7", `search for papers on ${facts.absentTopic}`);
+  set("S8", `search for papers on ${facts.presentTopic}`);
+}
+
 type SeededPaper = {
   itemId: number;
   attachmentId: number;
   title: string;
+  /** Empty for a real PDF imported from the papers dir (nothing to remove). */
   tempPdfPath: string;
   ref: Record<string, unknown>;
 };
@@ -466,6 +548,7 @@ describe("live: search routing and the evidence ladder", function () {
   const restoredWebPrefs = new Map<string, string>();
   let webAvailable = false;
   let webSource = "none";
+  let manifest: Manifest | null = null;
 
   function wanted(id: string): boolean {
     return !selectedCases.size || selectedCases.has(id);
@@ -510,6 +593,8 @@ describe("live: search routing and the evidence ladder", function () {
    * Zotero.Prefs and restored in after(). Returns where access came from.
    */
   async function ensureWebAccess(): Promise<string> {
+    if (webProviderChoice === "tavily" || webProviderChoice === "anysearch")
+      return forceWebProvider(webProviderChoice);
     if (hasWebAccess()) return "scaffold profile";
     const profilePath = env("LLM_FOR_ZOTERO_LIVE_PROFILE_PATH");
     if (!profilePath) return "none";
@@ -522,13 +607,50 @@ describe("live: search routing and the evidence ladder", function () {
     for (const key of WEB_PREF_KEYS) {
       const value = stringPrefFromContents(contents, `${PREF_PREFIX}.${key}`);
       if (!value) continue;
-      restoredWebPrefs.set(
-        key,
-        String(Zotero.Prefs.get(`${PREF_PREFIX}.${key}`, true) || ""),
-      );
+      rememberWebPref(key);
       Zotero.Prefs.set(`${PREF_PREFIX}.${key}`, value, true);
     }
     return hasWebAccess() ? "live profile prefs.js" : "none";
+  }
+
+  function rememberWebPref(key: string): void {
+    if (restoredWebPrefs.has(key)) return;
+    restoredWebPrefs.set(
+      key,
+      String(Zotero.Prefs.get(`${PREF_PREFIX}.${key}`, true) || ""),
+    );
+  }
+
+  /**
+   * LLM_FOR_ZOTERO_ROUTING_WEB_PROVIDER: pins the provider for the run.
+   * Tavily copies its key from the live profile (never printed or reported).
+   */
+  async function forceWebProvider(
+    provider: "tavily" | "anysearch",
+  ): Promise<string> {
+    if (provider === "tavily") {
+      const profilePath = env("LLM_FOR_ZOTERO_LIVE_PROFILE_PATH");
+      let key = "";
+      try {
+        if (profilePath)
+          key = stringPrefFromContents(
+            String(await Zotero.File.getContentsAsync(profilePath)),
+            `${PREF_PREFIX}.tavilyApiKey`,
+          );
+      } catch {
+        key = "";
+      }
+      if (!key) return "none";
+      rememberWebPref("tavilyApiKey");
+      Zotero.Prefs.set(`${PREF_PREFIX}.tavilyApiKey`, key, true);
+    }
+    rememberWebPref("webAccessProvider");
+    Zotero.Prefs.set(`${PREF_PREFIX}.webAccessProvider`, provider, true);
+    if (provider === "tavily")
+      return hasWebAccess() && getWebAccessProvider() === "tavily"
+        ? "tavily (key from live profile prefs.js)"
+        : "none";
+    return "anysearch (forced)";
   }
 
   function restoreWebPrefs(): void {
@@ -545,20 +667,55 @@ describe("live: search routing and the evidence ladder", function () {
     author: string;
     year: string;
     markdown: string;
+    /** Absolute path of a real PDF to import instead of a generated one. */
+    realPdfPath?: string;
+    creators?: Array<{ firstName?: string; lastName: string }>;
+    doi?: string;
   }): Promise<SeededPaper> {
-    const fixture = await api.createPaperWithPdfFixture({
-      title: input.title,
-      pages: pdfPages(input.markdown),
-    });
+    let fixture: {
+      parentItemId: number;
+      pdfAttachmentId: number;
+      tempPdfPath: string;
+    };
+    if (input.realPdfPath) {
+      const parent = new Zotero.Item("journalArticle");
+      parent.libraryID = libraryID();
+      parent.setField("title", input.title);
+      const parentItemId = Math.floor(Number(await parent.saveTx()));
+      const imported = await Zotero.Attachments.importFromFile({
+        file: input.realPdfPath,
+        parentItemID: parentItemId,
+        contentType: "application/pdf",
+      });
+      fixture = {
+        parentItemId,
+        pdfAttachmentId: Math.floor(Number(imported.id)),
+        tempPdfPath: "",
+      };
+    } else {
+      fixture = await api.createPaperWithPdfFixture({
+        title: input.title,
+        pages: pdfPages(input.markdown),
+      });
+    }
     const item = Zotero.Items.get(fixture.parentItemId);
     item.setField("date", input.year);
-    item.setCreators([
-      {
-        creatorType: "author",
-        firstName: "Evaluation",
-        lastName: input.author,
-      },
-    ]);
+    if (input.doi) item.setField("DOI", input.doi);
+    item.setCreators(
+      input.creators?.length
+        ? input.creators.map((creator) => ({
+            creatorType: "author",
+            firstName: creator.firstName || "",
+            lastName: creator.lastName,
+          }))
+        : [
+            {
+              creatorType: "author",
+              firstName: "Evaluation",
+              lastName: input.author,
+            },
+          ],
+    );
     await item.saveTx();
     const attachment = Zotero.Items.get(fixture.pdfAttachmentId);
     await writeMineruCacheFiles(attachment.id, input.markdown, [
@@ -821,24 +978,49 @@ describe("live: search routing and the evidence ladder", function () {
     Zotero.Prefs.set(`${PREF_PREFIX}.mineruSyncEnabled`, false, true);
     webSource = await ensureWebAccess();
     webAvailable = webSource !== "none";
-    active = await seedPaper({
-      title: ACTIVE_PAPER_TITLE,
-      author: "Fixture",
-      year: "2024",
-      markdown: await readActivePaper(),
-    });
-    // Two more authored fixtures make the library topic for S8
-    // (representational drift) and the S5 collection.
     const others: SeededPaper[] = [];
-    for (const paper of authoredPapers)
-      others.push(
-        await seedPaper({
-          title: paper.title,
-          author: paper.author,
-          year: paper.year,
-          markdown: paper.text,
-        }),
-      );
+    if (papersDir) {
+      manifest = JSON.parse(
+        String(await IOUtils.readUTF8(`${papersDir}/manifest.json`)),
+      ) as Manifest;
+      applyRealPrompts(manifest.facts);
+      for (const entry of manifest.papers) {
+        if (!entry.pdfPath || !entry.textPath)
+          throw new Error(`manifest paper lacks a PDF or text: ${entry.title}`);
+        const paper = await seedPaper({
+          title: entry.title,
+          author: entry.creators[0]?.lastName || "Unknown",
+          year: entry.year,
+          markdown: String(
+            await IOUtils.readUTF8(`${papersDir}/${entry.textPath}`),
+          ),
+          realPdfPath: `${papersDir}/${entry.pdfPath}`,
+          creators: entry.creators,
+          doi: entry.doi,
+        });
+        if (entry.role === "active") active = paper;
+        else others.push(paper);
+      }
+      if (!active) throw new Error("manifest has no active paper");
+    } else {
+      active = await seedPaper({
+        title: ACTIVE_PAPER_TITLE,
+        author: "Fixture",
+        year: "2024",
+        markdown: await readActivePaper(),
+      });
+      // Two more authored fixtures make the library topic for S8
+      // (representational drift) and the S5 collection.
+      for (const paper of authoredPapers)
+        others.push(
+          await seedPaper({
+            title: paper.title,
+            author: paper.author,
+            year: paper.year,
+            markdown: paper.text,
+          }),
+        );
+    }
     collection = new Zotero.Collection();
     collection.libraryID = libraryID();
     collection.name = `Search routing ${MARK}`;
@@ -882,6 +1064,18 @@ describe("live: search routing and the evidence ladder", function () {
       webAvailable,
       webSource,
       webProvider: getWebAccessProvider(),
+      paperSource: manifest
+        ? {
+            kind: "real papers (local manifest)",
+            active: manifest.papers
+              .filter((entry) => entry.role === "active")
+              .map((entry) => entry.title),
+            library: manifest.papers
+              .filter((entry) => entry.role === "library")
+              .map((entry) => entry.title),
+          }
+        : { kind: "authored fixtures" },
+      webProviderChoice: webProviderChoice || "unset",
       papers: seeded.map(({ tempPdfPath: _path, ...paper }) => paper),
       collection: { id: collection.id, name: collection.name },
       indexCoverage,
@@ -918,7 +1112,8 @@ describe("live: search routing and the evidence ladder", function () {
       try {
         await Zotero.Items.get(paper.attachmentId)?.eraseTx();
         await Zotero.Items.get(paper.itemId)?.eraseTx();
-        await IOUtils.remove(paper.tempPdfPath, { ignoreAbsent: true });
+        if (paper.tempPdfPath)
+          await IOUtils.remove(paper.tempPdfPath, { ignoreAbsent: true });
       } catch {
         /* Cleanup must not hide a test result. */
       }
