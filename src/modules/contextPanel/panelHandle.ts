@@ -1,3 +1,5 @@
+import type { StandaloneConversationSwitchDecision } from "./standaloneConversationSwitch";
+
 /**
  * The typed surface a mounted panel publishes for code outside its setup
  * closure. setupHandlers publishes one handle per setup and unpublishes it at
@@ -39,6 +41,23 @@ export type PanelHandle = {
     nextBasePaperItem: Zotero.Item | null,
     rebuild: () => void,
   ): boolean;
+  /**
+   * The standalone window's own panel: whether it can move to `nextItem`'s
+   * conversation in place, or why it needs a full remount
+   * (standaloneConversationSwitch.ts). Changes nothing.
+   */
+  resolveConversationSwitch(
+    nextItem: Zotero.Item,
+  ): StandaloneConversationSwitchDecision;
+  /**
+   * The standalone window's own panel: moves to `nextItem`'s conversation in
+   * place, through the panel's own history switch, and draws it once. The
+   * history reload after it does not tell the window's list (the window
+   * marks the row itself). Resolves false when the panel cannot move in
+   * place, a newer switch overtook this one, or the switch was refused; the
+   * caller then remounts if this is still its latest switch.
+   */
+  switchConversationInPlace(nextItem: Zotero.Item): Promise<boolean>;
 };
 
 const panelHandles = new WeakMap<Element, PanelHandle>();

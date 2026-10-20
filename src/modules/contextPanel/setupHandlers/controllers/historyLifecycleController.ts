@@ -1821,8 +1821,27 @@ export function createHistoryLifecycleController(
   // Counts this panel's history reloads, so a chat-list change this panel
   // already reloaded for (typically its own write) is not reloaded twice.
   let historyReloadsStarted = 0;
-  const refreshGlobalHistoryHeader = async () => {
-    historyReloadsStarted += 1;
+  // A reload that tells the window's list (onConversationHistoryChanged) has
+  // started and no reload has told it yet: a newer reload that replaced it
+  // tells the list instead, even a quiet one.
+  let historyChangeNoticeOwed = false;
+  const noticeHistoryChanged = () => {
+    if (!historyChangeNoticeOwed) return;
+    historyChangeNoticeOwed = false;
+    notifyConversationHistoryChanged();
+  };
+  /**
+   * Reloads the panel's history header and menu, then tells the window's
+   * list. A quiet reload (`quiet: true`) is the one after a plain
+   * conversation switch: the list is the same, so the window's list is not
+   * told. It does not count as a reload for a chat-list change either, so a
+   * change made meanwhile still reloads, and tells the list, by itself.
+   */
+  const refreshGlobalHistoryHeader = async (options?: { quiet?: boolean }) => {
+    if (options?.quiet !== true) {
+      historyReloadsStarted += 1;
+      historyChangeNoticeOwed = true;
+    }
     if (!historyBar || !titleStatic || !item) {
       if (titleStatic) {
         titleStatic.style.display = body.closest(".llm-dedicated-chat-pane")
@@ -1835,7 +1854,7 @@ export function createHistoryLifecycleController(
       // A live pending deletion keeps its undo toast even while the header
       // is unavailable — hiding it here silently withdrew undo mid-window.
       if (!pendingDeletionStore.getLatestPending()) hideHistoryUndoToast();
-      notifyConversationHistoryChanged();
+      noticeHistoryChanged();
       return;
     }
     const libraryID = getCurrentLibraryID();
@@ -2023,11 +2042,16 @@ export function createHistoryLifecycleController(
     titleStatic.style.display = "none";
     historyBar.style.display = "inline-flex";
     renderGlobalHistoryMenu();
-    notifyConversationHistoryChanged();
+    noticeHistoryChanged();
   };
 
+  /**
+   * `quietHistory`: the caller (the standalone window) keeps its own list
+   * current for this switch, so the history reload after it is quiet.
+   */
   const switchGlobalConversation = async (
     nextConversationKey: number,
+    options?: { quietHistory?: boolean },
   ): Promise<boolean> => {
     if (
       !requireCurrentPanelOwnership(body, null, "switch-global-conversation")
@@ -2144,7 +2168,7 @@ export function createHistoryLifecycleController(
     resetComposePreviewUI();
     updateModelButton();
     updateReasoningButton();
-    void refreshGlobalHistoryHeader();
+    void refreshGlobalHistoryHeader({ quiet: options?.quietHistory === true });
     return true;
   };
 
@@ -2153,6 +2177,8 @@ export function createHistoryLifecycleController(
     options?: {
       paperItem?: Zotero.Item | null;
       allowedCatalogPaperItemID?: number;
+      /** As for switchGlobalConversation. */
+      quietHistory?: boolean;
     },
   ): Promise<boolean> => {
     if (
@@ -2410,7 +2436,7 @@ export function createHistoryLifecycleController(
     resetComposePreviewUI();
     updateModelButton();
     updateReasoningButton();
-    void refreshGlobalHistoryHeader();
+    void refreshGlobalHistoryHeader({ quiet: options?.quietHistory === true });
     if (moveToOwnWebChatSession) {
       void deps.moveToOwnWebChatSession().catch((error) => {
         appLogger.warn("LLM: Failed to open the WebChat session", error);
@@ -4466,15 +4492,19 @@ export function createHistoryLifecycleController(
       syncStateFromDeps();
       return refreshGlobalHistoryHeader();
     },
-    switchGlobalConversation: async (nextConversationKey: number) => {
+    switchGlobalConversation: async (
+      nextConversationKey: number,
+      options?: { quietHistory?: boolean },
+    ) => {
       syncStateFromDeps();
-      return switchGlobalConversation(nextConversationKey);
+      return switchGlobalConversation(nextConversationKey, options);
     },
     switchPaperConversation: async (
       nextConversationKey?: number,
       options?: {
         paperItem?: Zotero.Item | null;
         allowedCatalogPaperItemID?: number;
+        quietHistory?: boolean;
       },
     ) => {
       syncStateFromDeps();

@@ -234,6 +234,10 @@ import {
   type PanelHandle,
 } from "./panelHandle";
 import {
+  resolveStandaloneConversationSwitch,
+  type StandaloneConversationSwitchDecision,
+} from "./standaloneConversationSwitch";
+import {
   getActiveContextAttachmentFromTabs,
   addSelectedTextContext,
   appendSelectedTextContextForItem,
@@ -1495,12 +1499,14 @@ export function setupHandlers(
   let refreshGlobalHistoryHeader: () => Promise<void> = async () => {};
   let switchGlobalConversation: (
     nextConversationKey: number,
+    options?: { quietHistory?: boolean },
   ) => Promise<boolean> = async () => false;
   let switchPaperConversation: (
     nextConversationKey?: number,
     options?: {
       paperItem?: Zotero.Item | null;
       allowedCatalogPaperItemID?: number;
+      quietHistory?: boolean;
     },
   ) => Promise<boolean | void> = async () => {};
   let createAndSwitchGlobalConversation: (
@@ -6779,6 +6785,47 @@ export function setupHandlers(
   ) => Promise<void> = async () => undefined;
   // Latest in-place paper switch; only it may re-enable the chat box.
   let paperItemSwitchToken = 0;
+  /** See standaloneConversationSwitch.ts. */
+  const resolveConversationSwitchForPanel = (
+    nextItem: Zotero.Item,
+  ): StandaloneConversationSwitchDecision => {
+    const currentKind = item ? resolveDisplayConversationKind(item) : null;
+    const nextKind = resolveDisplayConversationKind(nextItem);
+    const panelAlive =
+      !setupHandlersCleaned && Boolean(item) && panelRoot.isConnected;
+    if (panelAlive && (!currentKind || !nextKind)) {
+      return { inPlace: false, reason: "mode-changed" };
+    }
+    const kindOrGlobal = (kind: "global" | "paper" | null) =>
+      kind === "paper" ? "paper" : "global";
+    const nextBasePaper =
+      nextKind === "paper" ? resolveConversationBaseItem(nextItem) : null;
+    const currentBasePaper =
+      currentKind === "paper" ? resolveCurrentPaperBaseItem() : null;
+    return resolveStandaloneConversationSwitch({
+      panelAlive,
+      standalonePanel: isStandalonePanel,
+      sidePanel: isSidePanel,
+      ownershipBlocked: Boolean(panelRoot.dataset.ownershipBlocked),
+      webChat: isWebChatModeActive(),
+      runtimeSwitchInFlight: runtimeSystemSwitchInFlight,
+      inlineEditOpen: Boolean(getInlineEditTarget(body)),
+      current: {
+        system: currentConversationSystem,
+        kind: kindOrGlobal(currentKind),
+        libraryID: getCurrentLibraryID(),
+        basePaperItemID: Number(currentBasePaper?.id || 0),
+        isNote: isNoteSession(),
+      },
+      next: {
+        system: resolveConversationSystemForItem(nextItem) || "upstream",
+        kind: kindOrGlobal(nextKind),
+        libraryID: Number(nextItem.libraryID || 0),
+        basePaperItemID: Number(nextBasePaper?.id || 0),
+        isNote: Boolean(resolveActiveNoteSession(nextItem)),
+      },
+    });
+  };
   const panelHandle: PanelHandle = {
     addItemsAsDefaultContext: (zoteroItems) =>
       addItemsAsDefaultContextForHandle(zoteroItems),
@@ -6920,6 +6967,24 @@ export function setupHandlers(
         },
       });
       return true;
+    },
+    resolveConversationSwitch: (nextItem) =>
+      resolveConversationSwitchForPanel(nextItem),
+    switchConversationInPlace: async (nextItem) => {
+      if (!resolveConversationSwitchForPanel(nextItem).inPlace) return false;
+      const nextKey = getConversationKey(nextItem);
+      if (!Number.isFinite(nextKey) || nextKey <= 0) return false;
+      if (resolveDisplayConversationKind(nextItem) === "global") {
+        return await switchGlobalConversation(nextKey, { quietHistory: true });
+      }
+      return (
+        (await switchPaperConversation(nextKey, {
+          paperItem:
+            resolveConversationBaseItem(nextItem) ||
+            resolveCurrentPaperBaseItem(),
+          quietHistory: true,
+        })) === true
+      );
     },
   };
   publishPanelHandle(body, panelHandle);
