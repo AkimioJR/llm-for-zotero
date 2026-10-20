@@ -588,6 +588,7 @@ export function openStandaloneChat(options?: {
   let darkMQ: MediaQueryList | null = null;
   let onSchemeChange: (() => void) | null = null;
   let cleanupStandalonePrefObserver: (() => void) | null = null;
+  let cleanupStandaloneTabFollow: (() => void) | null = null;
   let cleanupStandaloneVerticalResize: (() => void) | null = null;
   let cleanupStandaloneSidebarResize: (() => void) | null = null;
   let cleanupStandaloneSidebarFlyout: (() => void) | null = null;
@@ -4498,6 +4499,36 @@ export function openStandaloneChat(options?: {
         }
       };
 
+      // Follow the selected main-window tab from Zotero's own tab notifier.
+      // The panels' onItemChange only fires when a tab's own host re-renders
+      // with a new signature, so re-selecting a tab seen before was missed.
+      const readSelectedTabItem = (): Zotero.Item | null => {
+        const tabs = (mainWin as any)?.Zotero_Tabs;
+        const tabID = tabs?.selectedID;
+        if (!tabID) return null;
+        if (tabs.selectedType === "library") return getSelectedZoteroItem();
+        const reader = (Zotero as any).Reader?.getByTabID?.(tabID);
+        const itemID = Number(reader?.itemID || 0);
+        return itemID > 0 ? (Zotero.Items.get(itemID) as Zotero.Item) : null;
+      };
+      const tabFollowObserverID = Zotero.Notifier.registerObserver(
+        {
+          notify: (event: string) => {
+            if (event !== "select") return;
+            // Zotero_Tabs updates selectedID after it notifies.
+            mainWin?.setTimeout(() => {
+              if (cancelled || newWin.closed) return;
+              const item = readSelectedTabItem();
+              if (item) standaloneItemChangeHandler?.(item);
+            }, 0);
+          },
+        },
+        ["tab"],
+        "llm-standalone-tab-follow",
+      );
+      cleanupStandaloneTabFollow = () =>
+        Zotero.Notifier.unregisterObserver(tabFollowObserverID);
+
       // Initial mount preserves the current paper/library conversation. The
       // only automatic blank draft is created once during Zotero startup.
       appLogger.debug(
@@ -4550,6 +4581,8 @@ export function openStandaloneChat(options?: {
     unsubscribeStandalonePendingDeletions?.();
     unsubscribeStandalonePendingDeletions = null;
     cleanupStandalonePrefObserver?.();
+    cleanupStandaloneTabFollow?.();
+    cleanupStandaloneTabFollow = null;
     cleanupStandaloneVerticalResize?.();
     cleanupStandaloneVerticalResize = null;
     cleanupStandaloneSidebarResize?.();
