@@ -1885,6 +1885,27 @@ export function openStandaloneChat(options?: {
           mountChatPanel(nextItem, rawContextItem);
           return Promise.resolve();
         }
+        try {
+          return switchStandaloneConversationInPlace(
+            handle,
+            targetItem,
+            rawContextItem,
+            startedAt,
+          );
+        } catch (err) {
+          // A throw before the switch started leaves the window half-moved;
+          // a rebuild puts it back in one consistent state.
+          appLogger.warn("LLM: standalone in-place switch failed", err);
+          mountChatPanel(nextItem, rawContextItem);
+          return Promise.resolve();
+        }
+      };
+      const switchStandaloneConversationInPlace = (
+        handle: NonNullable<ReturnType<typeof getPanelHandle>>,
+        targetItem: Zotero.Item,
+        rawContextItem: Zotero.Item | null | undefined,
+        startedAt: number,
+      ): Promise<void> => {
         const switchGeneration = ++standaloneMountGeneration;
         const isCurrentSwitch = () =>
           !cancelled &&
@@ -1931,10 +1952,10 @@ export function openStandaloneChat(options?: {
         }
         const remountInstead = (reason: string, err?: unknown) => {
           if (!isCurrentSwitch()) return;
-          appLogger.debug("LLM: standalone in-place switch refused", {
-            reason,
-            error: err,
-          });
+          (err ? appLogger.warn : appLogger.debug)(
+            "LLM: standalone in-place switch refused",
+            { reason, error: err },
+          );
           mountChatPanel(targetItem, rawItemForPanel);
         };
         return handle.switchConversationInPlace(targetItem).then(

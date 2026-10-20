@@ -1030,9 +1030,22 @@ describe("workflow: standalone document chat", function () {
       assert.isOk(root, `${tab}: panel root`);
       input()!.value = `${tab} draft kept in B`;
       input()!.dispatchEvent(new win.Event("input", { bubbles: true }));
+      const statusLine = () =>
+        content().querySelector("#llm-status") as HTMLElement | null;
+      // Stands in for a status B's own request wrote ("sending", an error).
+      statusLine()!.textContent = `${tab} status left by B`;
 
       await switchTo(tab, rowFor(keyA)!, keyA, markerA);
       checkSameRoot(tab, root);
+      assert.notInclude(
+        statusLine()?.textContent || "",
+        "status left by B",
+        `${tab}: A must not show B's status`,
+      );
+      assert.isFalse(
+        content().querySelector("#llm-chat-box")?.hasAttribute("inert"),
+        `${tab}: the chat takes input after the switch`,
+      );
       assert.notInclude(chatText(), markerB, `${tab}: B's messages left`);
       assert.equal(input()!.value, "", `${tab}: A has no draft`);
       assert.isTrue(rowFor(keyA)!.classList.contains("active"));

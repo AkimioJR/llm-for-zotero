@@ -6785,6 +6785,7 @@ export function setupHandlers(
   ) => Promise<void> = async () => undefined;
   // Latest in-place paper switch; only it may re-enable the chat box.
   let paperItemSwitchToken = 0;
+  let conversationInPlaceSwitchToken = 0;
   /** See standaloneConversationSwitch.ts. */
   const resolveConversationSwitchForPanel = (
     nextItem: Zotero.Item,
@@ -6974,17 +6975,45 @@ export function setupHandlers(
       if (!resolveConversationSwitchForPanel(nextItem).inPlace) return false;
       const nextKey = getConversationKey(nextItem);
       if (!Number.isFinite(nextKey) || nextKey <= 0) return false;
-      if (resolveDisplayConversationKind(nextItem) === "global") {
-        return await switchGlobalConversation(nextKey, { quietHistory: true });
+      const isGlobal = resolveDisplayConversationKind(nextItem) === "global";
+      // The last conversation's messages stay on screen until the next one is
+      // drawn; they must not take input meanwhile (retry/edit would act on
+      // the next conversation's history). Only the latest switch clears it.
+      const switchToken = ++conversationInPlaceSwitchToken;
+      chatBox?.setAttribute("inert", "");
+      try {
+        const switched = isGlobal
+          ? await switchGlobalConversation(nextKey, { quietHistory: true })
+          : (await switchPaperConversation(nextKey, {
+              paperItem:
+                resolveConversationBaseItem(nextItem) ||
+                resolveCurrentPaperBaseItem(),
+              quietHistory: true,
+            })) === true;
+        if (
+          switched &&
+          status &&
+          switchToken === conversationInPlaceSwitchToken
+        ) {
+          // Status writes reach only panels showing the request's
+          // conversation, so the last conversation's status would linger.
+          // Start from the text a fresh mount shows, then let this
+          // conversation's own request state (if any) take over.
+          setStatus(
+            status,
+            isGlobal
+              ? t("No active paper context. Type / to add papers.")
+              : t("Ready"),
+            "ready",
+          );
+          syncRequestUiForCurrentConversation();
+        }
+        return switched;
+      } finally {
+        if (switchToken === conversationInPlaceSwitchToken) {
+          chatBox?.removeAttribute("inert");
+        }
       }
-      return (
-        (await switchPaperConversation(nextKey, {
-          paperItem:
-            resolveConversationBaseItem(nextItem) ||
-            resolveCurrentPaperBaseItem(),
-          quietHistory: true,
-        })) === true
-      );
     },
   };
   publishPanelHandle(body, panelHandle);
