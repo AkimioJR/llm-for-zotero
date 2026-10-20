@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import { createLiteratureSearchTool } from "../src/agent/tools/read/literatureSearch";
+import { AGENT_SEARCH_TOOL_ROUTES } from "../src/agent/model/agentPersona";
 import type { AgentToolContext } from "../src/agent/types";
 import { resolvedAgentRequest } from "./helpers/resolvedAgentRequest";
 
@@ -35,11 +36,13 @@ describe("literature_search tool", function () {
       "To read a paper's abstract or details, use workflow:'answer'; workflow:'review' with mode:'metadata' proposes metadata changes the user must approve, so use it only when the user asks to check or fix an item's metadata.",
     );
     // A summary of the folder once turned into a discovery card of
-    // external papers nobody asked for.
+    // external papers nobody asked for. The plugin Agent's search-tool map
+    // owns that rule now; the description states mechanics only.
     assert.include(
-      tool.spec.description,
-      "never for work on papers already in the turn's scope (summaries, reviews, comparisons)",
+      AGENT_SEARCH_TOOL_ROUTES,
+      "Show the paper selection card (literature_review) only when the user asks you to find or recommend papers.",
     );
+    assert.notInclude(tool.spec.description, "only when the user asks to find");
   });
 
   it("supports metadata lookups through the unified online tool", async function () {

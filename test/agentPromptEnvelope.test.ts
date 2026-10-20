@@ -440,7 +440,7 @@ describe("agent prompt envelope", function () {
       // still block in yolo belong in the same sentence, and only those.
       assert.include(
         yolo,
-        "Requested review workflows, database integrity and the paper selection card for discovered papers remain binding",
+        "Requested review workflows, database integrity and the paper selection card for papers the user asked you to find remain binding",
       );
       for (const unenforced of [
         "Explicit user restrictions",

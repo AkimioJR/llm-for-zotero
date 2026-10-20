@@ -57,11 +57,15 @@ describe("direct Agent model tool surface", function () {
     // past_chat_search and past_chat_attach, the always-listed tools that
     // find an earlier chat and add it (24,904 tool characters, 2026-10-19);
     // the same two tools raised the cap with the fixed prompt to 34,000
-    // (33,723 characters).
+    // (33,723 characters). The search routing contract and the plugin
+    // Agent's search-tool map raised that cap by exactly their measured net
+    // growth, 519 characters, to 34,519 (34,300 characters, from 33,781;
+    // 24,926 tool characters, 2026-10-20), and by 29 more for the rule to use
+    // a source the user names, to 34,548.
     assert.isAtMost(serializedToolCharacters, 25_000);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      34_000,
+      34_548,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

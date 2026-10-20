@@ -25,6 +25,7 @@ import {
   CORE_RESEARCH_CONTRACT,
   PAPER_CITATION_CONTRACT,
   RUNTIME_CAPABILITY_CONTEXT,
+  SEARCH_ROUTING_CONTRACT,
 } from "../shared/instructionContracts";
 import {
   addZoteroMcpToolActivityObserver,
@@ -1778,6 +1779,7 @@ export function buildZoteroEnvironmentManifest(params: {
     PAPER_CITATION_CONTRACT,
     AGENT_ACTION_CONTRACT,
     RUNTIME_CAPABILITY_CONTEXT,
+    SEARCH_ROUTING_CONTRACT,
   );
 
   if (!params.mcpEnabled) {

@@ -8,6 +8,7 @@ import {
   PAPER_CITATION_CONTRACT,
   RESEARCH_RESPONSE_FORMAT_GUIDANCE,
   RUNTIME_CAPABILITY_CONTEXT,
+  SEARCH_ROUTING_CONTRACT,
 } from "../src/shared/instructionContracts";
 import { DEFAULT_SYSTEM_PROMPT } from "../src/utils/llmDefaults";
 import { estimateTextTokens } from "../src/utils/modelInputCap";
@@ -56,10 +57,8 @@ describe("instruction harness inventory", function () {
     );
     assert.notInclude(persona, "literature_review");
     assert.notInclude(persona, "only for imports, note saving");
-    assert.include(
-      persona,
-      "literature_search for scholarly evidence, web_search and web_read for general public evidence",
-    );
+    assert.include(persona, SEARCH_ROUTING_CONTRACT);
+    assert.notInclude(persona, "literature_search for scholarly evidence");
   });
   it("keeps the shared semantic contracts provider-neutral", function () {
     const contracts = [
@@ -67,6 +66,7 @@ describe("instruction harness inventory", function () {
       PAPER_CITATION_CONTRACT,
       AGENT_ACTION_CONTRACT,
       RUNTIME_CAPABILITY_CONTEXT,
+      SEARCH_ROUTING_CONTRACT,
     ].join("\n");
 
     assert.notMatch(
@@ -83,6 +83,7 @@ describe("instruction harness inventory", function () {
       PAPER_CITATION_CONTRACT,
       AGENT_ACTION_CONTRACT,
       RUNTIME_CAPABILITY_CONTEXT,
+      SEARCH_ROUTING_CONTRACT,
       RESEARCH_RESPONSE_FORMAT_GUIDANCE,
     ]) {
       assert.include(persona, contract);

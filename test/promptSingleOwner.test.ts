@@ -1,13 +1,17 @@
 import { assert } from "chai";
 import { readFileSync } from "node:fs";
-import { AGENT_PERSONA_INSTRUCTIONS } from "../src/agent/model/agentPersona";
+import {
+  AGENT_PERSONA_INSTRUCTIONS,
+  AGENT_SEARCH_TOOL_ROUTES,
+} from "../src/agent/model/agentPersona";
 import { BUILTIN_SKILL_FILES } from "../src/agent/skills";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
 
 /**
  * Every behavioral prompt rule has one owner. An owner is one tool (its
  * description, model-facing description, and guidance together), the
- * persona (all its sections), one shipped skill file, or the message
+ * persona (all its sections, the shared contracts it carries and the plugin
+ * Agent's search-tool map), one shipped skill file, or the message
  * builder's hard-coded prompt sections. A marker phrase distinctive for a
  * rule must appear in exactly the expected owner.
  */
@@ -31,7 +35,10 @@ function collectOwnerTexts(): Map<string, string> {
     registry.listTools().map((spec) => [spec.name, spec.description]),
   );
   const owners = new Map<string, string>();
-  owners.set("persona", AGENT_PERSONA_INSTRUCTIONS.join("\n"));
+  owners.set(
+    "persona",
+    [...AGENT_PERSONA_INSTRUCTIONS, AGENT_SEARCH_TOOL_ROUTES].join("\n"),
+  );
   for (const tool of registry.listToolDefinitions()) {
     owners.set(
       `tool:${tool.spec.name}`,
@@ -95,6 +102,31 @@ describe("prompt rules have a single owner", function () {
       owner: "tool:literature_search",
     },
     {
+      rule: "search names an action, not a source",
+      marker: "name an action, not a source",
+      owner: "persona",
+    },
+    {
+      rule: "a source the user names is used",
+      marker: "use a source the user names",
+      owner: "persona",
+    },
+    {
+      rule: "the nearest source that can hold a need comes first",
+      marker: "nearest source that can hold it",
+      owner: "persona",
+    },
+    {
+      rule: "scholarly and public-fact needs map to search families",
+      marker: "distinct needs use both",
+      owner: "persona",
+    },
+    {
+      rule: "the selection card answers only a find or recommend request",
+      marker: "only when the user asks you to find or recommend papers",
+      owner: "persona",
+    },
+    {
       rule: "figure crops come only from paper_read figures mode",
       marker: "figure_crops",
       owner: "skill:analyze-figures.md",
@@ -120,6 +152,18 @@ describe("prompt rules have a single owner", function () {
     );
     assert.isTrue(owners.has("persona"));
     assert.isTrue(owners.has("messageBuilder"));
+  });
+
+  it("keeps no routing copy outside the search routing contract", function () {
+    for (const marker of [
+      "Use external search",
+      "both source families",
+      "for scholarly discovery",
+      "A mixed request may also use",
+      "only when the user asks to find, recommend",
+      "current or general public evidence",
+    ])
+      assert.deepEqual(ownersOf(owners, marker), [], marker);
   });
 
   for (const { rule, marker, owner } of rules) {

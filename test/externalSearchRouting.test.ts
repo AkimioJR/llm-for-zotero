@@ -1,6 +1,19 @@
 import { assert } from "chai";
-import { AGENT_PERSONA_INSTRUCTIONS } from "../src/agent/model/agentPersona";
+import {
+  AGENT_PERSONA_INSTRUCTIONS,
+  AGENT_SEARCH_TOOL_ROUTES,
+} from "../src/agent/model/agentPersona";
+import {
+  renderAgentPromptEnvelope,
+  stringifyMessageContent,
+} from "../src/agent/model/messageBuilder";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
+import { buildZoteroEnvironmentManifest } from "../src/codexAppServer/nativeClient";
+import {
+  CORE_RESEARCH_CONTRACT,
+  RUNTIME_CAPABILITY_CONTEXT,
+  SEARCH_ROUTING_CONTRACT,
+} from "../src/shared/instructionContracts";
 import type {
   AgentRuntimeRequest,
   AgentToolDefinition,
@@ -56,14 +69,108 @@ describe("external search guidance routing", function () {
       assert.isFalse(guidanceMatches(literature, request(text)));
     }
   });
-  it("keeps the evidence-necessity and composability rules in the persona", function () {
+  it("keeps search routing in the one contract the persona carries", function () {
     const persona = AGENT_PERSONA_INSTRUCTIONS.join("\n");
-    assert.include(persona, "Use external search when");
-    assert.include(persona, "both source families");
-    assert.include(persona, "Preserve the user's language");
-    assert.include(persona, "If necessary web access is unavailable");
+    assert.include(persona, SEARCH_ROUTING_CONTRACT);
+    for (const rule of [
+      "name an action, not a source",
+      "use a source the user names",
+      "use the nearest source that can hold it",
+      "Skip a source that cannot hold the need",
+      "distinct needs use both",
+      "With nothing attached, look in the library first",
+      "If a needed source is unavailable, say so",
+    ])
+      assert.include(SEARCH_ROUTING_CONTRACT, rule);
+    // The language rule is owned by the core research contract.
+    assert.include(CORE_RESEARCH_CONTRACT, "use the user's language");
+    assert.notInclude(persona, "Preserve the user's language");
+    // The earlier routing copies that told the model to search outside
+    // sources whenever a request said "search" are gone.
+    assert.notInclude(persona, "External evidence routing");
+    assert.notInclude(persona, "both source families");
+    assert.notInclude(RUNTIME_CAPABILITY_CONTEXT, "external search");
+    assert.include(
+      RUNTIME_CAPABILITY_CONTEXT,
+      "look up any other named target",
+    );
     assert.notInclude(persona, "Start with basic depth");
     assert.notInclude(persona, "focused lookup");
     assert.notInclude(persona, "exploratory or ambiguous discovery");
+  });
+
+  it("delivers the contract once to every runtime and the card rule only to the plugin Agent", async function () {
+    const count = (text: string, needle: string) =>
+      text.split(needle).length - 1;
+    const cardRule = "only when the user asks you to find or recommend papers";
+    assert.include(AGENT_SEARCH_TOOL_ROUTES, cardRule);
+
+    // Plugin Agent: the fixed system prompt (cached prefix), not the turn.
+    const tools = registry();
+    const value = request("Search whether other studies found the same result");
+    const rendered = await renderAgentPromptEnvelope(
+      value,
+      tools.listToolDefinitionsForRequest(value),
+      [],
+    );
+    const fixedPrompt = rendered.inventory.fixedPrompt;
+    assert.equal(count(fixedPrompt, SEARCH_ROUTING_CONTRACT), 1);
+    assert.equal(count(fixedPrompt, AGENT_SEARCH_TOOL_ROUTES), 1);
+    const turn = stringifyMessageContent(rendered.envelope.turnMessage.content);
+    assert.notInclude(turn, "## Search routing");
+    assert.notInclude(turn, cardRule);
+
+    // Claude Code bridge: it sends the persona as its Agent-mode block.
+    const bridgeBlock = AGENT_PERSONA_INSTRUCTIONS.join("\n\n");
+    assert.equal(count(bridgeBlock, SEARCH_ROUTING_CONTRACT), 1);
+    assert.notInclude(bridgeBlock, cardRule);
+    assert.notInclude(bridgeBlock, "literature_review");
+
+    // Codex app-server: the Zotero environment manifest.
+    for (const mcpReady of [true, false]) {
+      const manifest = buildZoteroEnvironmentManifest({
+        scope: {
+          conversationKey: 1,
+          libraryID: 1,
+          kind: "paper",
+          paperItemID: 11,
+          activeItemId: 11,
+          activeContextItemId: 12,
+          paperTitle: "Prompt Paper",
+        },
+        mcpEnabled: true,
+        mcpReady,
+      });
+      assert.equal(count(manifest, SEARCH_ROUTING_CONTRACT), 1);
+      assert.notInclude(manifest, cardRule);
+      assert.notInclude(manifest, "literature_review");
+    }
+  });
+
+  it("keeps routing out of the external search tool descriptions", function () {
+    const { web, literature } = guidanceTools();
+    const modelDescriptions = new Map(
+      registry()
+        .listTools()
+        .map((spec) => [spec.name, spec.description]),
+    );
+    for (const text of [
+      web.spec.description,
+      web.guidance?.instruction || "",
+      literature.spec.description,
+      modelDescriptions.get("literature_search") || "",
+    ]) {
+      assert.notMatch(text, /only when the user asks to find/);
+      assert.notMatch(text, /Use (literature|web)_search (for|when)/);
+      assert.notInclude(text, "never for work on papers already");
+    }
+    assert.include(
+      web.spec.description,
+      "write the query in the user's language by default",
+    );
+    assert.match(
+      modelDescriptions.get("paper_read") || "",
+      /^Read or search the turn's papers; mode:targeted with query finds passages\./,
+    );
   });
 });

@@ -43,12 +43,20 @@ import {
  * again by past_chat_search and past_chat_attach, the always-listed tools
  * that find an earlier chat and add it to the user's message (733
  * characters each, 2026-10-19). Raised again by note_write's removeEmbeds field
- * (58 characters, 2026-10-19).
+ * (58 characters, 2026-10-19). Raised again by the search routing contract,
+ * the one owner of when to search which source, and the plugin Agent's map
+ * from source families to its tools with the selection-card rule: 555 fixed
+ * prompt characters after removing the persona and capability-context
+ * routing copies they replace, less 36 tool characters (literature_search,
+ * paper_read) and 22 or 6 turn characters (paper_read guidance, single-paper
+ * line), for net growth of 497, 513 and 497 characters (2026-10-20). Raised by 30
+ * each (29 fixed prompt characters for the rule to use a source the user
+ * names, and one turn character), to 37,974, 36,707 and 38,072.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 37_447,
-  paper: 36_164,
-  collection: 37_545,
+  global: 37_974,
+  paper: 36_707,
+  collection: 38_072,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

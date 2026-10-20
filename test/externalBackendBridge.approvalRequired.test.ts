@@ -17,7 +17,9 @@ import {
   CORE_RESEARCH_CONTRACT,
   PAPER_CITATION_CONTRACT,
   RUNTIME_CAPABILITY_CONTEXT,
+  SEARCH_ROUTING_CONTRACT,
 } from "../src/shared/instructionContracts";
+import { AGENT_SEARCH_TOOL_ROUTES } from "../src/agent/model/agentPersona";
 
 describe("external bridge action approval handling", function () {
   function createRuntime(onPrepare?: () => void) {
@@ -628,6 +630,13 @@ describe("external bridge action approval handling", function () {
       ]) {
         assert.include(customInstruction, contract);
       }
+      // Search routing reaches the bridge once; the plugin-only selection
+      // card rule does not (the bridge has no literature_review card).
+      assert.equal(
+        customInstruction.split(SEARCH_ROUTING_CONTRACT).length - 1,
+        1,
+      );
+      assert.notInclude(customInstruction, AGENT_SEARCH_TOOL_ROUTES);
       const mcpServers = capturedBody?.mcpServers as
         | Record<
             string,

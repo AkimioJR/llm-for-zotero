@@ -120,7 +120,7 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   library_retrieve:
     "Retrieve ranked paper evidence from a library scope with explicit coverage.",
   paper_read:
-    "Read Zotero paper content. For figure crops use mode:figures and figureLabels (e.g. ['Figure 1']); extracts from the source PDF without requiring MinerU. Preserve the active attachment; a sibling PDF's cache is not the same source.",
+    "Read or search the turn's papers; mode:targeted with query finds passages. For figure crops use mode:figures and figureLabels (e.g. ['Figure 1']); extracts from the source PDF without requiring MinerU. Preserve the active attachment; a sibling PDF's cache is not the same source.",
   library_update:
     "Change tags, metadata, memberships, parents, or Related links; kind:'collection' creates, renames, moves, or deletes a collection, kind:'attachment' renames, relinks, or deletes one, kind:'savedSearch' saves or deletes one. A membership move removes its named source.",
   context_read:

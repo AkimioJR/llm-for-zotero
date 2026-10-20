@@ -211,7 +211,7 @@ export function createWebSearchTool(
     spec: {
       name: "web_search",
       description:
-        "Search the current public web with Tavily when the answer materially needs current facts or concrete general-web evidence. Use literature_search for scholarly discovery; a request may use both for distinct evidence needs.",
+        "Search the current public web with Tavily; write the query in the user's language by default. Returns ranked results with snippets; web_read reads a result's page text.",
       inputSchema: {
         type: "object",
         required: ["query", "depth"],
@@ -258,7 +258,7 @@ export function createWebSearchTool(
     guidance: {
       matches: neverSelected,
       instruction:
-        "Use web_search when the request needs current or general public evidence. A mixed request may also use literature_search for distinct scholarly evidence. Preserve the user's language by default, explicitly choose basic or advanced from the current retrieval need, and use web_read when search snippets are insufficient. Every final-answer paragraph that uses web results must end with the exact hidden source marker described in the tool result, using only returned sourceId values. Do not add a references footer.",
+        "Always explicitly choose basic or advanced from the current retrieval need, and use web_read when search snippets are insufficient. Every final-answer paragraph that uses web results must end with the exact hidden source marker described in the tool result, using only returned sourceId values. Do not add a references footer.",
     },
     presentation: {
       label: "Search Web",
@@ -323,7 +323,7 @@ export function createWebSearchTool(
       return {
         ...tool.spec,
         description:
-          "Search the public web with AnySearch. Supports query and result count only, not depth, topic, date/domain filters or vertical selection. Use literature_search for scholarly discovery and web_read for page text.",
+          "Search the public web with AnySearch. Supports query and result count only, not depth, topic, date/domain filters or vertical selection. Write the query in the user's language by default; use web_read for page text.",
         inputSchema: {
           type: "object",
           required: ["query"],
@@ -340,7 +340,7 @@ export function createWebSearchTool(
       return {
         matches: neverSelected,
         instruction:
-          "Use web_search for current or general public evidence. AnySearch accepts query and maxResults only; do not invent depth, topic, date/domain filters or vertical options. Use web_read with searched URLs only when snippets are insufficient. Every final-answer paragraph using web information must end with the hidden source marker described in the result, using only returned sourceId values. Do not add a references footer.",
+          "AnySearch accepts query and maxResults only; do not invent depth, topic, date/domain filters or vertical options. Use web_read with searched URLs only when snippets are insufficient. Every final-answer paragraph using web information must end with the hidden source marker described in the result, using only returned sourceId values. Do not add a references footer.",
       };
     },
   };

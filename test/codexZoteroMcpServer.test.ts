@@ -1260,6 +1260,11 @@ describe("Zotero MCP server", function () {
     const queryTool = payload.result.tools.find(
       (tool: { name: string }) => tool.name === "library_search",
     );
+    assert.notInclude(queryTool.description, "review-card");
+    assert.include(
+      queryTool.description,
+      "proposes metadata changes for the user to approve",
+    );
     assert.deepEqual(queryTool.annotations, {
       readOnlyHint: true,
       openWorldHint: false,

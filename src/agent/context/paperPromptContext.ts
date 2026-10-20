@@ -129,7 +129,7 @@ export async function preparePaperPromptContext(
       throw new Error("Paper context loading cancelled.");
     if (!context?.chunks.length) {
       result.blocks.push(
-        `${header}Full text unavailable. Use available metadata or choose a paper_read/search tool; disclose missing source coverage.`,
+        `${header}Full text unavailable. Use available metadata or read with paper_read; label any outside evidence separately and disclose missing source coverage.`,
       );
       continue;
     }
