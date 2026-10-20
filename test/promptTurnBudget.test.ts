@@ -60,12 +60,16 @@ import {
  * routing contract's rule to read outside sources only with search and
  * web-read tools, never with shell commands (2026-10-20), to 38,423, 37,156
  * and 38,521. Raised by 11 fixed prompt characters each for "or scripts"
- * in that rule (2026-10-20), to 38,434, 37,167 and 38,532.
+ * in that rule (2026-10-20), to 38,434, 37,167 and 38,532. Raised by 62
+ * tool characters each for literature_search's description naming the find
+ * path (workflow:'review' leads to the selection card) and that a review
+ * search needs no gap, which replaced the card branch on every answer
+ * result (2026-10-21), to 38,496, 37,229 and 38,594.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 38_434,
-  paper: 37_167,
-  collection: 38_532,
+  global: 38_496,
+  paper: 37_229,
+  collection: 38_594,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

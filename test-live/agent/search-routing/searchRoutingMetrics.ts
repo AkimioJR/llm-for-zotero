@@ -56,7 +56,106 @@ export type RoutingCall = {
   ok?: boolean;
   error?: string;
   startedMs: number;
+  /** Results in the tool result, when it carried a results list. */
+  resultCount?: number;
+  /** The provider's message in the result (for example a failed source). */
+  providerMessage?: string;
+  /** The provider's warnings in the result. */
+  warnings?: string[];
+  /** The result's nextStep carried the finish-now note (K >= 6). */
+  nudgeFired?: boolean;
+  /** The call failed with a turn latch message (see latchOf). */
+  latch?: OutsideLatch;
+  /**
+   * Set by summarizeRoutingRep: the call was refused by a latch an earlier
+   * call set, so it reached no provider.
+   */
+  latchRejection?: boolean;
 };
+
+/**
+ * Fragments of the host's model-visible texts (outsideSearchLedger.ts).
+ * Kept literal here so a wording change shows up as a suite change.
+ */
+export const NUDGE_MARKER =
+  "Finish the request now with what these searches found";
+const LATCH_MARKERS: Array<[OutsideLatch, string]> = [
+  ["openalex", "OpenAlex is rate-limited for the rest of this turn"],
+  ["web", "Web search is unavailable for the rest of this turn"],
+];
+const VALIDATION_PREFIX = "Invalid tool input";
+
+export type OutsideLatch = "openalex" | "web";
+
+/** The latch a tool error names, if any. */
+export function latchOf(
+  error: string | undefined,
+  providerMessage?: string,
+): OutsideLatch | undefined {
+  const text = error || providerMessage;
+  if (!text) return undefined;
+  return LATCH_MARKERS.find(([, marker]) => text.includes(marker))?.[0];
+}
+
+/** What a tool result shows: result count, provider notes, the nudge. */
+export function observeToolResult(
+  content: unknown,
+): Pick<
+  RoutingCall,
+  "resultCount" | "providerMessage" | "warnings" | "nudgeFired"
+> {
+  if (!content || typeof content !== "object" || Array.isArray(content))
+    return {};
+  const record = content as Record<string, unknown>;
+  const observed: Pick<
+    RoutingCall,
+    "resultCount" | "providerMessage" | "warnings" | "nudgeFired"
+  > = {};
+  if (Array.isArray(record.results))
+    observed.resultCount = record.results.length;
+  if (typeof record.message === "string" && record.message.trim())
+    observed.providerMessage = record.message.slice(0, 300);
+  if (Array.isArray(record.warnings) && record.warnings.length)
+    observed.warnings = record.warnings.map((warning) =>
+      String(warning).slice(0, 300),
+    );
+  if (typeof record.nextStep === "string")
+    observed.nudgeFired = record.nextStep.includes(NUDGE_MARKER);
+  return observed;
+}
+
+/**
+ * Approximate: whether an answer says a search found no study. A plain
+ * regex over English phrasings ("no other studies", "did not find",
+ * "found no", "not found", "none of the searches"); it misses other
+ * wordings and other languages, and can fire on an unrelated negation.
+ */
+const ABSENCE_PATTERNS = [
+  /\bno (?:other |further |additional |published |independent |direct |prior |later )*(?:stud(?:y|ies)|papers?|replications?|evidence)\b/i,
+  /\b(?:did not|didn't|could not|couldn't|was unable to|were unable to) (?:find|identify|locate)\b/i,
+  /\bfound no\b/i,
+  /\bnot found\b/i,
+  /\bnone of the (?:searches|results)\b/i,
+];
+
+export function statesAbsence(answer: string): boolean {
+  return ABSENCE_PATTERNS.some((pattern) => pattern.test(answer));
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/** Approximate: outside search calls of one family that reached a provider (the ledger's K); a call that failed before its provider for another reason still counts. */
+function reachedProvider(call: RoutingCall): boolean {
+  if (call.error?.startsWith(VALIDATION_PREFIX)) return false;
+  if (call.latchRejection) return false;
+  if (call.name === "literature_search")
+    return record(call.args).mode !== "metadata";
+  return call.name === "web_search";
+}
 
 export type RoutingCard = {
   toolName: string;
@@ -82,6 +181,18 @@ export type RoutingRepSummary = {
    * as, the first outside call. null when the rep made no outside call.
    */
   localBeforeOutside: boolean | null;
+  /** Approximate: Outside searches that reached a provider, per family (the ledger's K). */
+  outsideSearchesScholarly: number;
+  outsideSearchesWeb: number;
+  /** A result carried the finish-now note; outside calls made after it. */
+  nudgeFired: boolean;
+  callsAfterNudge: number;
+  /** A latch was set; outside calls after it, and how many it refused. */
+  latchFired: OutsideLatch[];
+  callsAfterLatch: number;
+  latchRejections: number;
+  /** literature_search calls with workflow:'review' (find or recommend). */
+  reviewWorkflowCalls: number;
 };
 
 /** One rep's routing facts, from its ordered tool calls and cards. */
@@ -98,6 +209,27 @@ export function summarizeRoutingRep(
     other: 0,
   };
   for (const call of calls) familyCounts[call.family] += 1;
+  // The first call that names a latch set it (it reached the provider);
+  // later calls naming the same latch were refused without one. Calls in
+  // the same round may both have reached the provider; this counts the
+  // later one as refused.
+  const latched = new Set<OutsideLatch>();
+  let firstLatchIndex = -1;
+  calls.forEach((call, index) => {
+    call.latch = latchOf(call.error, call.providerMessage);
+    if (!call.latch) return;
+    if (latched.has(call.latch)) call.latchRejection = true;
+    else {
+      latched.add(call.latch);
+      if (firstLatchIndex < 0) firstLatchIndex = index;
+    }
+  });
+  const firstNudgeIndex = calls.findIndex((call) => call.nudgeFired);
+  const outsideAfter = (index: number) =>
+    index < 0
+      ? 0
+      : calls.slice(index + 1).filter((call) => isOutsideFamily(call.family))
+          .length;
   const firstLocal = calls.find((call) => call.family === "local");
   const firstOutside = calls.find((call) => isOutsideFamily(call.family));
   const firstLocalRound = firstLocal ? firstLocal.round : null;
@@ -121,6 +253,22 @@ export function summarizeRoutingRep(
       firstOutsideRound === null
         ? null
         : firstLocalRound !== null && firstLocalRound <= firstOutsideRound,
+    outsideSearchesScholarly: calls.filter(
+      (call) => call.family === "scholarly" && reachedProvider(call),
+    ).length,
+    outsideSearchesWeb: calls.filter(
+      (call) => call.family === "web" && reachedProvider(call),
+    ).length,
+    nudgeFired: firstNudgeIndex >= 0,
+    callsAfterNudge: outsideAfter(firstNudgeIndex),
+    latchFired: [...latched],
+    callsAfterLatch: outsideAfter(firstLatchIndex),
+    latchRejections: calls.filter((call) => call.latchRejection).length,
+    reviewWorkflowCalls: calls.filter(
+      (call) =>
+        call.name === "literature_search" &&
+        record(call.args).workflow === "review",
+    ).length,
   };
 }
 
@@ -158,6 +306,17 @@ export type SummaryRow = {
   card?: number;
   confirmations?: number;
   localBeforeOutside?: boolean | null;
+  /** Outside searches that reached a provider: scholarly and web. */
+  searchesScholarly?: number;
+  searchesWeb?: number;
+  nudgeFired?: boolean;
+  callsAfterNudge?: number;
+  latchFired?: string[];
+  callsAfterLatch?: number;
+  latchRejections?: number;
+  /** Approximate (statesAbsence). */
+  absenceAnswer?: boolean;
+  reviewWorkflowCalls?: number;
   citesPaper?: boolean;
   answerChars?: number;
   hardFailures?: string[];
@@ -187,6 +346,37 @@ const SUMMARY_COLUMNS: Array<[string, (row: SummaryRow) => unknown]> = [
             ? "yes"
             : "no",
   ],
+  [
+    "K sch/web",
+    (row) =>
+      row.searchesScholarly === undefined
+        ? ""
+        : `${row.searchesScholarly}/${row.searchesWeb ?? 0}`,
+  ],
+  [
+    "nudge (after)",
+    (row) =>
+      row.nudgeFired === undefined
+        ? ""
+        : row.nudgeFired
+          ? `yes (${row.callsAfterNudge ?? 0})`
+          : "no",
+  ],
+  [
+    "latch (after, refused)",
+    (row) =>
+      row.latchFired === undefined
+        ? ""
+        : row.latchFired.length
+          ? `${row.latchFired.join("+")} (${row.callsAfterLatch ?? 0}, ${row.latchRejections ?? 0})`
+          : "no",
+  ],
+  [
+    "absence~",
+    (row) =>
+      row.absenceAnswer === undefined ? "" : row.absenceAnswer ? "yes" : "no",
+  ],
+  ["review calls", (row) => row.reviewWorkflowCalls],
   [
     "cites paper",
     (row) =>

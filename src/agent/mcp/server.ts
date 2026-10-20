@@ -81,6 +81,7 @@ import { resolveActiveLibraryID } from "../../utils/zoteroLibraryScope";
 import { resolveAgentToolCallWorkCategory } from "../workCategory";
 import { getNotesDirectoryConfig } from "../../utils/notesDirectoryConfig";
 import { OUTSIDE_SEARCH_NEED_SENTENCE } from "../tools/read/outsideSearchNeed";
+import { SCOPELESS_MCP_RUN_PREFIX } from "../tools/read/outsideSearchLedger";
 import {
   PAST_CHAT_ATTACH_TOOL_NAME,
   PAST_CHAT_READ_TOOL_NAME,
@@ -378,7 +379,7 @@ let scopelessRunId: string | null = null;
  * per-turn run id on the registered scope and never reach this.
  */
 function scopelessRunIdentity(): string {
-  scopelessRunId ||= createJournalId("mcp-run");
+  scopelessRunId ||= createJournalId(SCOPELESS_MCP_RUN_PREFIX);
   return scopelessRunId;
 }
 const mcpReadDedupeCache = new Map<

@@ -8,6 +8,7 @@ import { createBuiltInToolRegistry } from "../src/agent/tools";
 import type { AgentToolContext, AgentToolResult } from "../src/agent/types";
 import { literaturePaperIdentities } from "../src/agent/services/literatureDiscovery";
 import { OUTSIDE_SEARCH_STOP_NOTE } from "../src/agent/tools/read/outsideSearchNeed";
+import { clearOutsideSearchTurn } from "../src/agent/tools/read/outsideSearchLedger";
 
 /** Every outside evidence search states why the library cannot hold it. */
 const OUTSIDE_NEED = {
@@ -52,6 +53,7 @@ describe("ranked literature discovery workflow", function () {
   });
   beforeEach(function () {
     clearAgentToolResultHandleStore();
+    clearOutsideSearchTurn("discovery-test-run");
     globalThis.fetch = (async () => ({
       ok: true,
       status: 200,
@@ -690,11 +692,17 @@ describe("ranked literature discovery workflow", function () {
       .description;
     assert.include(
       description,
-      "Explicit imports use workflow:'answer', then library_import",
+      "explicit imports use workflow:'answer', then library_import",
+    );
+    // A find or recommend request names its own workflow, which leads to
+    // the card; answer results no longer carry a card branch.
+    assert.include(
+      description,
+      "For a find or recommend request, use workflow:'review'; its results lead to the selection card (literature_review)",
     );
     assert.include(
       description,
-      "call literature_review to show the selection card",
+      "workflow:'answer' returns evidence for an answer",
     );
   });
 
@@ -732,25 +740,23 @@ describe("ranked literature discovery workflow", function () {
     const content = (await tool.execute(parsed.value, context)) as any;
     assert.isFalse(content.reviewRequired);
     const nextStep = String(content.nextStep);
-    // Answering is the default; the import and card branches follow, each
-    // only for the request that names it, and the stop note closes it.
+    // Answering is the default; the import branch follows, only for the
+    // request that names it, then the turn's ledger and the stop note. No
+    // card branch: it rode on every evidence result and led evidence
+    // questions to the card.
     assert.match(
       nextStep,
       /^Unless the user asked to import papers or only to find or recommend them, answer the user's question from these results as supporting evidence; the turn's own papers remain the primary source\. /,
       nextStep,
     );
     assert.match(nextStep, /If the user asked to import/);
-    assert.isBelow(
-      nextStep.indexOf("library_import"),
-      nextStep.indexOf("call literature_review"),
-      nextStep,
-    );
     assert.isAtLeast(nextStep.indexOf("library_import"), 0, nextStep);
+    assert.notInclude(nextStep, "literature_review", nextStep);
+    assert.notInclude(nextStep, "Otherwise answer");
     assert.include(
       nextStep,
-      "If the user only asked you to find or recommend papers, call literature_review",
+      ` Outside searches this turn: 1 scholarly (queries: hippocampal replay). ${OUTSIDE_SEARCH_STOP_NOTE}`,
     );
-    assert.notInclude(nextStep, "Otherwise answer");
     assert.isTrue(nextStep.endsWith(` ${OUTSIDE_SEARCH_STOP_NOTE}`), nextStep);
   });
 
@@ -762,7 +768,10 @@ describe("ranked literature discovery workflow", function () {
     const content = await answerSearch(context);
     assert.isUndefined(content.candidateSetId);
     assert.isFalse(content.reviewRequired);
-    assert.equal(content.nextStep, OUTSIDE_SEARCH_STOP_NOTE);
+    assert.equal(
+      content.nextStep,
+      `Outside searches this turn: 1 scholarly (queries: population coding). ${OUTSIDE_SEARCH_STOP_NOTE}`,
+    );
   });
 
   it("closes an answer-workflow search without results with the stop note", async function () {
@@ -793,7 +802,11 @@ describe("ranked literature discovery workflow", function () {
     if (!parsed.ok) throw new Error(parsed.error);
     const content = (await tool.execute(parsed.value, context)) as any;
     assert.isString(content.candidateSetId);
-    assert.equal(content.nextStep, OUTSIDE_SEARCH_STOP_NOTE);
+    assert.equal(
+      content.nextStep,
+      `Outside searches this turn: 1 scholarly (queries: hippocampal replay). ${OUTSIDE_SEARCH_STOP_NOTE}`,
+    );
+    assert.notMatch(content.nextStep, /literature_review|selection card/);
   });
 
   it("opens no discovery for a review-workflow search from a caller that cannot see literature_review", async function () {
@@ -810,7 +823,10 @@ describe("ranked literature discovery workflow", function () {
     const content = (await tool.execute(parsed.value, context)) as any;
     assert.isFalse(content.reviewRequired);
     assert.isUndefined(content.sessionId);
-    assert.equal(content.nextStep, OUTSIDE_SEARCH_STOP_NOTE);
+    assert.equal(
+      content.nextStep,
+      `Outside searches this turn: 1 scholarly (queries: hippocampal replay). ${OUTSIDE_SEARCH_STOP_NOTE}`,
+    );
     assert.notMatch(
       JSON.stringify(content),
       /literature_review|selection card/,

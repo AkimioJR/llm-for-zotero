@@ -5,6 +5,7 @@ import {
   OUTSIDE_SEARCH_GAP_MESSAGE,
   OUTSIDE_SEARCH_NEED_MESSAGE,
   OUTSIDE_SEARCH_NEED_SENTENCE,
+  REVIEW_SEARCH_STATES,
 } from "../src/agent/tools/read/outsideSearchNeed";
 import { AgentToolRegistry } from "../src/agent/tools/registry";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
@@ -117,6 +118,31 @@ describe("outside search need", function () {
           need,
         );
       }
+    });
+
+    it("requires need but not gap on a find or recommend search (provisional switch)", function () {
+      // REVIEW_SEARCH_STATES in outsideSearchNeed.ts is the switch; this
+      // pins its provisional value, "need".
+      assert.equal(REVIEW_SEARCH_STATES, "need");
+      assert.isTrue(
+        tool.validate({
+          mode: "search",
+          query: "place cells",
+          workflow: "review",
+          need: "not_in_scope_or_library",
+        }).ok,
+      );
+      assert.equal(
+        errorOf(
+          tool.validate({
+            mode: "search",
+            query: "place cells",
+            workflow: "review",
+          }),
+        ),
+        OUTSIDE_SEARCH_NEED_MESSAGE,
+      );
+      assert.include(tool.spec.description, "workflow:'review' needs no gap");
     });
 
     it("exempts metadata lookups and accepts the host-only value", function () {

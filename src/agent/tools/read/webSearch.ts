@@ -15,13 +15,21 @@ import { getWebAccessProvider } from "../../../webAccess/prefs";
 import { readOnlyInvocationPlan } from "../../authorization/invocationPlan";
 import { neverSelected } from "../guidance";
 import { fail, ok, validateObject } from "../shared";
+import { WebAccessError } from "../../../webAccess/errors";
 import {
   buildOutsideSearchReasonDetail,
   OUTSIDE_SEARCH_NEED_PROPERTIES,
   OUTSIDE_SEARCH_NEED_SENTENCE,
-  OUTSIDE_SEARCH_STOP_NOTE,
   outsideSearchNeedError,
 } from "./outsideSearchNeed";
+import {
+  buildOutsideSearchNote,
+  latchOutsideSearch,
+  outsideSearchLatch,
+  recordOutsideSearch,
+  tracksOutsideSearchTurn,
+  webSearchUnavailableMessage,
+} from "./outsideSearchLedger";
 import {
   createConfiguredWebAccessProvider,
   isWebAccessToolAvailable,
@@ -43,9 +51,32 @@ export type WebSearchInput = {
 
 export type WebSearchToolResult = WebSearchResponse & {
   citation: ReturnType<typeof webCitationInstruction>;
-  /** The stop note; last, so the model reads it after the results. */
+  /**
+   * The turn's web-search ledger and stop note; last, so the model reads
+   * it after the results.
+   */
   nextStep: string;
+  /** Set when the web latch refused the call; no provider was reached. */
+  unavailable?: "latched";
+  message?: string;
 };
+
+/**
+ * Why web search cannot work again this turn, or undefined: an exhausted
+ * quota or a rejected key does not recover by retrying. A rate limit or a
+ * service failure may, so it does not latch.
+ */
+function webSearchLatchReason(error: unknown): string | undefined {
+  if (!(error instanceof WebAccessError)) return undefined;
+  if (error.code === "quota" || error.code === "plan_limit")
+    return "quota exhausted";
+  if (error.code === "authentication") return "authentication rejected";
+  return undefined;
+}
+
+function webProviderLabel(): string {
+  return getWebAccessProvider() === "anysearch" ? "AnySearch" : "Tavily";
+}
 
 function normalizeTopic(value: unknown): WebSearchTopic {
   return value === "news" || value === "finance" ? value : "general";
@@ -308,7 +339,10 @@ export function createWebSearchTool(
             : "Searching the web";
         },
         onSuccess: "Web search complete",
-        onEmpty: "No web results found",
+        onEmpty: ({ content }) =>
+          (content as { unavailable?: unknown } | undefined)?.unavailable
+            ? "Web search unavailable this turn"
+            : "No web results found",
         onError: "Web search failed",
       },
       buildTraceDetails: ({ args, content }) =>
@@ -331,10 +365,36 @@ export function createWebSearchTool(
       // after the model received its schema. Never drop unsupported fields.
       const validated = validateWebSearchInput(input);
       if (!validated.ok) throw new Error(validated.error);
-      const result = await providerFactory().search({
-        ...validated.value,
-        signal: context.signal,
-      });
+      const latched = tracksOutsideSearchTurn(context.runId)
+        ? outsideSearchLatch(context.runId, "web")
+        : undefined;
+      if (latched)
+        return {
+          provider: webProviderLabel(),
+          query: validated.value.query,
+          results: [],
+          citation: webCitationInstruction([]),
+          unavailable: "latched",
+          message: latched,
+          nextStep: latched,
+        };
+      const provider = providerFactory();
+      recordOutsideSearch(context.runId, "web", validated.value.query);
+      let result: WebSearchResponse;
+      try {
+        result = await provider.search({
+          ...validated.value,
+          signal: context.signal,
+        });
+      } catch (error) {
+        const reason = webSearchLatchReason(error);
+        if (!reason) throw error;
+        const message = webSearchUnavailableMessage(webProviderLabel(), reason);
+        latchOutsideSearch(context.runId, "web", message);
+        // The model reads the latch message; the code and status stay.
+        const failure = error as WebAccessError;
+        throw new WebAccessError(message, failure.code, failure.status);
+      }
       const results = registerWebSearchSources(context.runId, result.results);
       return {
         ...result,
@@ -342,7 +402,7 @@ export function createWebSearchTool(
         citation: webCitationInstruction(
           results.map((source) => source.sourceId),
         ),
-        nextStep: OUTSIDE_SEARCH_STOP_NOTE,
+        nextStep: buildOutsideSearchNote(context.runId, "web"),
       };
     },
   };

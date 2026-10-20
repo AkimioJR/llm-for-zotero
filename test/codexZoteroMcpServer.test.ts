@@ -1398,7 +1398,11 @@ describe("Zotero MCP server", function () {
   it("does not send MCP clients to literature_review, which MCP does not expose", async function () {
     const registry = new AgentToolRegistry();
     const literature = createLiteratureSearchTool({} as never);
-    assert.include(literature.spec.description, "call literature_review");
+    // In the plugin, a find or recommend search leads to the card.
+    assert.include(
+      literature.spec.description,
+      "its results lead to the selection card (literature_review)",
+    );
     registry.register(literature);
     registerMcpServer({ toolRegistry: registry, zoteroGateway: {} as never });
     const response = await invokeMcpEndpoint({
@@ -1490,8 +1494,10 @@ describe("Zotero MCP server", function () {
       const text = payload.result.content[0].text as string;
       const body = JSON.parse(text).result;
       assert.isString(body.candidateSetId, text);
-      // MCP clients get the stop note alone, never card or import routing.
-      assert.equal(body.nextStep, OUTSIDE_SEARCH_STOP_NOTE, text);
+      // A standalone MCP session keeps no ledger: the stop note only, never
+      // card or import routing.
+      assert.isTrue(body.nextStep.endsWith(OUTSIDE_SEARCH_STOP_NOTE), text);
+      assert.notInclude(body.nextStep, "library_import");
       assert.notInclude(text, "literature_review");
       assert.notInclude(text, "selection card");
     } finally {

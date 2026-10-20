@@ -763,6 +763,7 @@ export class TurnBoundary {
   private readonly navigationRoundsTrigger: number;
   private readonly navigationCallsTrigger: number;
   private readonly maxRounds: number;
+  private readonly onSettled?: () => void;
 
   // Rule 3.
   private windowStart: number;
@@ -798,7 +799,13 @@ export class TurnBoundary {
     limits?: Partial<TurnSafetyLimits>;
     retryBackoffMs?: readonly number[];
     navigationTrigger?: { rounds: number; calls: number };
+    /**
+     * Called when a long job settles a paper; other per-turn counters
+     * outside this class (the outside-search ledger) restart with it.
+     */
+    onSettled?: () => void;
   }) {
+    this.onSettled = params.onSettled;
     this.windowStart = params.now;
     this.maxRounds = params.maxRounds;
     this.settledTargets = params.settledTargets;
@@ -833,6 +840,7 @@ export class TurnBoundary {
     this.modelCalls = 0;
     this.inputTokens = 0;
     this.compacted = false;
+    this.onSettled?.();
     return true;
   }
 

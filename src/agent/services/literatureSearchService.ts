@@ -3,6 +3,7 @@ import type { AgentToolContext } from "../types";
 import type { EditableArticleMetadataPatch } from "./zoteroGateway";
 import type { ZoteroGateway } from "./zoteroGateway";
 import { appLogger } from "../../core/logging";
+import { parseRetryAfterMs } from "../../utils/retryAfter";
 
 type SearchMode =
   | "recommendations"
@@ -72,6 +73,7 @@ type LiteratureSearchResult =
 type FetchJsonResponse = {
   ok: boolean;
   status: number;
+  headers?: { get?: (name: string) => string | null };
   json: () => Promise<unknown>;
 };
 
@@ -124,6 +126,58 @@ function stripHtmlTags(value: string): string {
     .trim();
 }
 
+const PROVIDER_BY_HOST: Record<string, string> = {
+  "api.openalex.org": "OpenAlex",
+  "api.crossref.org": "CrossRef",
+  "api.semanticscholar.org": "Semantic Scholar",
+};
+
+function providerOf(url: string): string {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return PROVIDER_BY_HOST[host] || host;
+  } catch {
+    return "provider";
+  }
+}
+
+/**
+ * A literature provider's failed HTTP request. A rate limit is its own
+ * kind, so no caller can mistake it for an empty result.
+ */
+export class LiteratureProviderHttpError extends Error {
+  constructor(
+    readonly kind: "rate_limit" | "http",
+    readonly status: number,
+    /** The provider's name (OpenAlex, CrossRef, Semantic Scholar) or host. */
+    readonly provider: string,
+    /** The wait the provider asked for in Retry-After, when it named one. */
+    readonly retryAfterMs?: number,
+  ) {
+    super(
+      kind === "rate_limit"
+        ? `${provider} rate limit (HTTP ${status})`
+        : `HTTP ${status}`,
+    );
+    this.name = "LiteratureProviderHttpError";
+  }
+}
+
+/** Whether a literature_search failure is an OpenAlex rate limit. */
+export function isOpenAlexRateLimit(error: unknown): boolean {
+  return (
+    error instanceof LiteratureProviderHttpError &&
+    error.kind === "rate_limit" &&
+    error.provider === "OpenAlex"
+  );
+}
+
+function isRateLimit(error: unknown): boolean {
+  return (
+    error instanceof LiteratureProviderHttpError && error.kind === "rate_limit"
+  );
+}
+
 async function fetchJson(
   url: string,
   headers?: Record<string, string>,
@@ -138,7 +192,25 @@ async function fetchJson(
     },
   });
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+    if (response.status === 429) {
+      let retryAfter: string | null | undefined;
+      try {
+        retryAfter = response.headers?.get?.("retry-after");
+      } catch {
+        retryAfter = undefined;
+      }
+      throw new LiteratureProviderHttpError(
+        "rate_limit",
+        response.status,
+        providerOf(url),
+        parseRetryAfterMs(retryAfter, Date.now()),
+      );
+    }
+    throw new LiteratureProviderHttpError(
+      "http",
+      response.status,
+      providerOf(url),
+    );
   }
   return response.json();
 }
@@ -280,6 +352,8 @@ async function resolveOpenAlexWork(
     )) as Record<string, unknown>;
     return raw ?? null;
   } catch (err) {
+    // A rate limit is not "the paper is not on OpenAlex".
+    if (isRateLimit(err)) throw err;
     appLogger.warn("LLM: OpenAlex DOI fetch failed", err);
     return null;
   }
@@ -1130,12 +1204,12 @@ export class LiteratureSearchService {
           query: query || `author:${author}`,
         };
       } catch (error) {
-        return {
-          results: [],
-          source: "OpenAlex",
-          query: query || `author:${author}`,
-          message: `OpenAlex search failed: ${error instanceof Error ? error.message : String(error)}`,
-        };
+        // A failed search is an error, not "no results": a rate limit
+        // keeps its type for the tool's latch.
+        if (isRateLimit(error)) throw error;
+        throw new Error(
+          `OpenAlex search failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
 

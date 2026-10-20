@@ -82,7 +82,9 @@ import {
 import {
   classifyTool,
   formatSummaryTable,
+  observeToolResult,
   redactSecrets,
+  statesAbsence,
   summarizeRoutingRep,
   type RoutingCall,
   type RoutingCard,
@@ -213,9 +215,27 @@ type RepRecord = {
   /** Used IDs that point to the active paper's passages. */
   paperCitationIdsUsed: string[];
   citesPaper: boolean;
+  /** Approximate: the answer says a search found no study (statesAbsence). */
+  absenceAnswer: boolean;
   hardFailures: string[];
   softResults: Record<string, boolean | null>;
 };
+
+/**
+ * Cases whose prompt asks no find or recommend request: a workflow:'review'
+ * search there is a card leak (reported, never asserted).
+ */
+const NON_FIND_CASES = new Set([
+  "S1",
+  "S1-control",
+  "S1b-check",
+  "S1b-lookup",
+  "S2",
+  "S3",
+  "S5",
+  "S6",
+  "S10",
+]);
 
 const NO_CARD = [
   {
@@ -876,7 +896,15 @@ describe("live: search routing and the evidence ladder", function () {
           }
           if (event?.type === "tool_result") {
             const call = calls.get(String(event.callId || ""));
-            if (call) call.ok = Boolean(event.ok);
+            if (call) {
+              call.ok = Boolean(event.ok);
+              // Result count, provider message and warnings, and whether
+              // the result carried the finish-now note.
+              Object.assign(
+                call,
+                redactSecrets(observeToolResult(event.content)),
+              );
+            }
           }
           if (event?.type === "tool_error") {
             const call = calls.get(String(event.callId || ""));
@@ -952,6 +980,7 @@ describe("live: search routing and the evidence ladder", function () {
       citationIdsUsed: used,
       paperCitationIdsUsed: paperUsed,
       citesPaper: paperUsed.length > 0,
+      absenceAnswer: statesAbsence(answer),
       hardFailures: [],
       softResults: {},
     };
@@ -959,6 +988,9 @@ describe("live: search routing and the evidence ladder", function () {
       if (!check.check(record)) record.hardFailures.push(check.label);
     for (const check of routingCase.soft || [])
       record.softResults[check.label] = check.check(record);
+    if (NON_FIND_CASES.has(routingCase.id))
+      record.softResults["no workflow:'review' search"] =
+        record.summary.reviewWorkflowCalls === 0;
     return record;
   }
 
@@ -1168,6 +1200,15 @@ describe("live: search routing and the evidence ladder", function () {
           card: record.summary.familyCounts.card,
           confirmations: record.cards.length,
           localBeforeOutside: record.summary.localBeforeOutside,
+          searchesScholarly: record.summary.outsideSearchesScholarly,
+          searchesWeb: record.summary.outsideSearchesWeb,
+          nudgeFired: record.summary.nudgeFired,
+          callsAfterNudge: record.summary.callsAfterNudge,
+          latchFired: record.summary.latchFired,
+          callsAfterLatch: record.summary.callsAfterLatch,
+          latchRejections: record.summary.latchRejections,
+          absenceAnswer: record.absenceAnswer,
+          reviewWorkflowCalls: record.summary.reviewWorkflowCalls,
           citesPaper: record.citesPaper,
           answerChars: record.answerChars,
           hardFailures: record.hardFailures,

@@ -70,10 +70,15 @@ describe("direct Agent model tool surface", function () {
     // search and web-read tools, never with shell commands, raised the cap
     // with the fixed prompt by its measured 185 characters, to 34,778
     // (2026-10-20); "or scripts" in that rule raised it by 11, to 34,789.
-    assert.isAtMost(serializedToolCharacters, 25_190);
+    // literature_search's description naming the find path
+    // (workflow:'review' leads to the selection card) and that a review
+    // search needs no gap, which replaced the card branch on every answer
+    // result, raised both caps by its measured 62 tool characters, to
+    // 25,252 and 34,851 (2026-10-21).
+    assert.isAtMost(serializedToolCharacters, 25_252);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      34_789,
+      34_851,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

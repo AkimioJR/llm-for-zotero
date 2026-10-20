@@ -301,6 +301,8 @@ export async function identifyLiteratureCandidates(
   reviewRequired: boolean,
   routeImports = false,
   count?: number,
+  /** The closing note: the turn's outside-search ledger and stop note. */
+  closingNote: string = OUTSIDE_SEARCH_STOP_NOTE,
 ): Promise<Record<string, unknown>> {
   const results = Array.isArray(content.results) ? content.results : [];
   const discovery = reviewRequired
@@ -325,7 +327,7 @@ export async function identifyLiteratureCandidates(
     return {
       ...content,
       reviewRequired: false,
-      nextStep: OUTSIDE_SEARCH_STOP_NOTE,
+      nextStep: closingNote,
     };
   await upsertAgentToolResultHandles([record]);
   if (discovery) {
@@ -352,8 +354,8 @@ export async function identifyLiteratureCandidates(
         }
       : {
           nextStep: routeImports
-            ? `${CANDIDATE_ROUTE} ${OUTSIDE_SEARCH_STOP_NOTE}`
-            : OUTSIDE_SEARCH_STOP_NOTE,
+            ? `${CANDIDATE_ROUTE} ${closingNote}`
+            : closingNote,
         }),
   };
 }
@@ -361,20 +363,21 @@ export async function identifyLiteratureCandidates(
 /**
  * A workflow:'answer' search opens no discovery, so its result routes by the
  * user's request, read when the model picks its next tool. Answering is the
- * default; for callers that can open the card, the explicit-import branch
- * comes before the card branch, and each applies only to the request it
- * names. Every answer result ends with the stop note; MCP callers, which
- * cannot show the card, get the stop note alone. A workflow:'review' search
- * opened a discovery, whose candidates import only through the card
- * (discoveryImportRefusal), so its next step offers the card alone.
+ * default; for callers that can import, the explicit-import branch follows.
+ * An answer result never names the selection card: a find or recommend
+ * request takes workflow:'review' (the tool description says so), and a
+ * card branch on every evidence result led evidence questions to the card.
+ * Every answer result ends with the closing note (the turn's outside-search
+ * ledger and stop note); MCP callers get the closing note alone. A
+ * workflow:'review' search opened a discovery, whose candidates import only
+ * through the card (discoveryImportRefusal), so its next step offers the
+ * card alone.
  */
 const ANSWER_ROUTE =
   "Unless the user asked to import papers or only to find or recommend them, answer the user's question from these results as supporting evidence; the turn's own papers remain the primary source.";
 const IMPORT_ROUTE =
   "If the user asked to import or add papers to Zotero without asking to choose them first, skip the selection card: rank these candidates, skip papers already in the library, then call library_import with the DOI or arXiv identifiers of exactly the number the user requested and the requested destination (targetCollectionId; create the collection first only when the user named a new one).";
-const CARD_ROUTE =
-  "If the user only asked you to find or recommend papers, call literature_review with the number they asked for as count (five when unspecified) and that many ranked candidateSetId/candidateIndex selections.";
-const CANDIDATE_ROUTE = `${ANSWER_ROUTE} ${IMPORT_ROUTE} ${CARD_ROUTE}`;
+const CANDIDATE_ROUTE = `${ANSWER_ROUTE} ${IMPORT_ROUTE}`;
 
 function discoveryInstruction(record: AgentToolResultHandleRecord): string {
   const s = record.content as LiteratureDiscoverySession;
