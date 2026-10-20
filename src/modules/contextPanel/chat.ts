@@ -157,6 +157,17 @@ import {
   updateStreamingTurnNavigator,
 } from "./conversationTurnNavigator";
 import { resizeTextareaToContent } from "./textareaSizing";
+import {
+  PROGRESSIVE_CHAT_RENDER_FILL_STEP,
+  PROGRESSIVE_CHAT_RENDER_FRAME_BUDGET_MS,
+  cancelPendingChatRender,
+  clearPendingChatRender,
+  getPendingChatRender,
+  planProgressiveChatRenderRange,
+  resolveAnchorMessageIndex,
+  setPendingChatRender,
+  type PendingChatRender,
+} from "./progressiveChatRender";
 export { withScrollGuard } from "./chatScrollSnapshots";
 
 import { type BlockStreamFlushReason } from "./blockStreamCoalescer";
@@ -10645,6 +10656,22 @@ function renderChatForPanel(
   const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
   if (!chatBox) return;
   if (item) initializeChatScrollViewport(getConversationKey(item), chatBox);
+  const pendingRender = getPendingChatRender(chatBox);
+  if (
+    item &&
+    options.rerenderAssistantMessages?.size &&
+    pendingRender?.conversationKey === getConversationKey(item)
+  ) {
+    // A message still waiting to be drawn is drawn from its current state
+    // when its turn comes; only the drawn ones need the targeted update.
+    const drawnRerenders = new Set(
+      Array.from(options.rerenderAssistantMessages).filter(
+        (message) => !pendingRender.isPending(message),
+      ),
+    );
+    if (!drawnRerenders.size) return;
+    options = { ...options, rerenderAssistantMessages: drawnRerenders };
+  }
   if (item && options.rerenderAssistantMessages) {
     const rerenderConversationKey = getConversationKey(item);
     let updatedInPlace = false;
@@ -10676,6 +10703,7 @@ function renderChatForPanel(
     resolvePaperContextDisplayRef(paperContext, paperContextDisplayCache);
 
   if (!item) {
+    cancelPendingChatRender(chatBox);
     setChatBoxConversation(chatBox, null);
     chatBox.innerHTML = getPaperChatStartPageHtml();
     const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
@@ -10800,8 +10828,12 @@ function renderChatForPanel(
     endInlineEdit(body);
   }
 
-  // From here a full rebuild makes the box show this conversation.
-  if (!useTargetedRerender) setChatBoxConversation(chatBox, conversationKey);
+  if (!useTargetedRerender) {
+    // A full rebuild replaces whatever an earlier render still had to draw,
+    // and from here the box shows this conversation.
+    cancelPendingChatRender(chatBox);
+    setChatBoxConversation(chatBox, conversationKey);
+  }
   if (history.length === 0) {
     // [webchat] Show webchat-specific welcome instead of generic instructions
     const effectiveRequestConfig = resolveEffectiveRequestConfig({
@@ -10864,7 +10896,9 @@ function renderChatForPanel(
     item,
     surface: resolveSelectionSurfaceForBody(body),
   }).providerProtocol;
-  const conversationIsIdle = !history.some((m) => m.streaming);
+  // Older messages of a long conversation can be drawn on later frames; they
+  // read the conversation's busy state when they are drawn.
+  let conversationIsIdle = !history.some((m) => m.streaming);
   const canEditPromptAt = (index: number) =>
     !turnRewriteDisabled &&
     canEditUserPromptTurn({
@@ -10896,10 +10930,11 @@ function renderChatForPanel(
       }
     }
   }
-  for (const [index, msg] of history.entries()) {
-    if (useTargetedRerender && !targetedMessageWrappers.has(msg)) {
-      continue;
-    }
+  const renderMessageInto = (
+    index: number,
+    msg: Message,
+    target: Node,
+  ): void => {
     const isUser = msg.role === "user";
     const assistantPairMsg = history[index + 1];
     const hasAssistantPair = isUser && assistantPairMsg?.role === "assistant";
@@ -12575,7 +12610,7 @@ function renderChatForPanel(
       existingTargetedWrapper.replaceWith(wrapper);
       restoreExpandedQuoteCards(wrapper, expandedQuoteCards);
     } else {
-      chatBox.appendChild(wrapper);
+      target.appendChild(wrapper);
     }
     if (
       !useTargetedRerender &&
@@ -12590,11 +12625,244 @@ function renderChatForPanel(
       markerBubble.className = "llm-bubble";
       renderForkSourceMarkerInto(markerBubble, body, doc, forkLink);
       markerWrapper.appendChild(markerBubble);
-      chatBox.appendChild(markerWrapper);
+      target.appendChild(markerWrapper);
     }
     if (isUser && hasUserContext) {
       wrapper.classList.add("llm-user-context-aligned");
     }
+  };
+
+  // A long conversation draws the messages at the reading position (the
+  // newest ones, or the ones around a restored scroll anchor) now and the
+  // rest on later frames (see progressiveChatRender.ts).
+  const renderMessagesProgressively = (): void => {
+    const total = history.length;
+    const anchorIndex =
+      baselineSnapshot.mode === "manual"
+        ? resolveAnchorMessageIndex(history, baselineSnapshot.anchor)
+        : -1;
+    const firstPassRange = planProgressiveChatRenderRange({
+      total,
+      allowed:
+        !panelExtensions?.afterRender &&
+        !panelExtensions?.readOnly &&
+        !panelExtensions?.sideChat,
+      scrollMode: baselineSnapshot.mode,
+      anchorIndex,
+      requiredIndices: panelEditIndex >= 0 ? [panelEditIndex] : [],
+    });
+    const firstPass = doc.createDocumentFragment();
+    for (
+      let index = firstPassRange.start;
+      index < firstPassRange.end;
+      index += 1
+    ) {
+      renderMessageInto(index, history[index], firstPass);
+    }
+    chatBox.appendChild(firstPass);
+    if (firstPassRange.start <= 0 && firstPassRange.end >= total) return;
+
+    // Messages [drawnFrom, drawnTo) are in the DOM.
+    let drawnFrom = firstPassRange.start;
+    let drawnTo = firstPassRange.end;
+    const messageWrapperAt = (index: number): HTMLElement | null => {
+      for (const child of Array.from(chatBox.children) as HTMLElement[]) {
+        if (child.dataset.messageIndex === `${index}`) return child;
+      }
+      return null;
+    };
+    // Older messages go before the first drawn one; newer ones after the
+    // last drawn one and its fork marker, before any card that follows.
+    const insertionPoint = (
+      side: "above" | "below",
+    ): { parent: HTMLDivElement; before: ChildNode | null } | null => {
+      if (side === "above") {
+        const first = messageWrapperAt(drawnFrom);
+        return first ? { parent: chatBox, before: first } : null;
+      }
+      const last = messageWrapperAt(drawnTo - 1);
+      if (!last) return null;
+      let before = last.nextElementSibling;
+      while (before?.classList.contains("llm-fork-source-marker-wrapper")) {
+        before = before.nextElementSibling;
+      }
+      return { parent: chatBox, before };
+    };
+    const drawRange = (from: number, to: number, side: "above" | "below") => {
+      const point = insertionPoint(side);
+      if (!point) return false;
+      const fragment = doc.createDocumentFragment();
+      for (let index = from; index < to; index += 1) {
+        renderMessageInto(index, history[index], fragment);
+      }
+      point.parent.insertBefore(fragment, point.before);
+      return true;
+    };
+    // The first paint has two viewports of messages on each side of the
+    // reading position (the bottom, or the restored anchor), so the position
+    // lands exactly and a short scroll never reaches an edge before the
+    // next frame adds more.
+    const readingTop = (): number | null => {
+      if (anchorIndex < 0) return null;
+      const anchor = messageWrapperAt(anchorIndex);
+      return anchor ? anchor.getBoundingClientRect().top : null;
+    };
+    const heightAbove = (): number => {
+      const first = messageWrapperAt(drawnFrom);
+      const top = readingTop();
+      if (!first) return Number.POSITIVE_INFINITY;
+      if (top === null) return chatBox.scrollHeight;
+      return top - first.getBoundingClientRect().top;
+    };
+    const heightBelow = (): number => {
+      const last = messageWrapperAt(drawnTo - 1);
+      const top = readingTop();
+      if (!last || top === null) return Number.POSITIVE_INFINITY;
+      return last.getBoundingClientRect().bottom - top;
+    };
+    const wanted = () => chatBox.clientHeight * 2;
+    while (
+      drawnTo < total &&
+      chatBox.clientHeight > 0 &&
+      heightBelow() < wanted()
+    ) {
+      const to = Math.min(total, drawnTo + PROGRESSIVE_CHAT_RENDER_FILL_STEP);
+      if (!drawRange(drawnTo, to, "below")) break;
+      drawnTo = to;
+    }
+    while (
+      drawnFrom > 0 &&
+      chatBox.clientHeight > 0 &&
+      heightAbove() < wanted()
+    ) {
+      const from = Math.max(0, drawnFrom - PROGRESSIVE_CHAT_RENDER_FILL_STEP);
+      if (!drawRange(from, drawnFrom, "above")) break;
+      drawnFrom = from;
+    }
+    if (drawnFrom <= 0 && drawnTo >= total) return;
+
+    const win = doc.defaultView;
+    const now = () => win?.performance?.now?.() ?? Date.now();
+    const rawHistoryAtRender = rawHistory;
+    const rawLengthAtRender = rawHistory.length;
+    const waiting = new Set<Message>([
+      ...history.slice(0, drawnFrom),
+      ...history.slice(drawnTo),
+    ]);
+    let frameHandle: number | null = null;
+    let done = false;
+    const stop = () => {
+      done = true;
+      if (frameHandle !== null) win?.cancelAnimationFrame(frameHandle);
+      frameHandle = null;
+      waiting.clear();
+      clearPendingChatRender(chatBox, pending);
+    };
+    const isStillShown = () =>
+      chatBox.isConnected &&
+      Number(panelRoot?.dataset.itemId || 0) === conversationKey;
+    const drawWaiting = (budgetMs: number) => {
+      frameHandle = null;
+      if (done) return;
+      if (
+        !isStillShown() ||
+        chatHistory.get(conversationKey) !== rawHistoryAtRender ||
+        rawHistoryAtRender.length !== rawLengthAtRender
+      ) {
+        // The history changed under the waiting messages without a full
+        // render of this panel; draw it again from the current history.
+        const redraw = isStillShown();
+        stop();
+        if (redraw) refreshChat(body, item);
+        return;
+      }
+      conversationIsIdle = !history.some((m) => m.streaming);
+      const started = now();
+      const overBudget = () => now() - started >= budgetMs;
+      let inserted = true;
+      withScrollGuard(chatBox, conversationKey, () => {
+        // Newer messages first: the end of the conversation is where new
+        // turns and their cards arrive.
+        if (drawnTo < total) {
+          const point = insertionPoint("below");
+          if (!point) {
+            inserted = false;
+            return;
+          }
+          const fragment = doc.createDocumentFragment();
+          let to = drawnTo;
+          do {
+            renderMessageInto(to, history[to], fragment);
+            waiting.delete(history[to]);
+            to += 1;
+          } while (to < total && !overBudget());
+          point.parent.insertBefore(fragment, point.before);
+          drawnTo = to;
+        }
+        if (drawnFrom > 0 && !overBudget()) {
+          const point = insertionPoint("above");
+          if (!point) {
+            inserted = false;
+            return;
+          }
+          const fragment = doc.createDocumentFragment();
+          let from = drawnFrom;
+          do {
+            from -= 1;
+            const messageNodes = doc.createDocumentFragment();
+            renderMessageInto(from, history[from], messageNodes);
+            fragment.insertBefore(messageNodes, fragment.firstChild);
+            waiting.delete(history[from]);
+          } while (from > 0 && !overBudget());
+          point.parent.insertBefore(fragment, point.before);
+          drawnFrom = from;
+        }
+        syncUserContextAlignmentWidths(body);
+      });
+      if (!inserted) {
+        stop();
+        return;
+      }
+      if (drawnFrom > 0 || drawnTo < total) {
+        schedule();
+        return;
+      }
+      stop();
+      syncConversationTurnNavigator(body, history, { conversationKey });
+    };
+    const schedule = () => {
+      if (done || frameHandle !== null) return;
+      if (win?.requestAnimationFrame) {
+        frameHandle = win.requestAnimationFrame(() =>
+          drawWaiting(PROGRESSIVE_CHAT_RENDER_FRAME_BUDGET_MS),
+        );
+      } else {
+        drawWaiting(Number.POSITIVE_INFINITY);
+      }
+    };
+    const pending: PendingChatRender = {
+      conversationKey,
+      isPending: (message) => waiting.has(message as Message),
+      flush: () => {
+        if (done) return;
+        if (frameHandle !== null) win?.cancelAnimationFrame(frameHandle);
+        frameHandle = null;
+        drawWaiting(Number.POSITIVE_INFINITY);
+      },
+      cancel: stop,
+    };
+    setPendingChatRender(chatBox, pending);
+    schedule();
+  };
+
+  if (useTargetedRerender) {
+    for (const [index, msg] of history.entries()) {
+      if (targetedMessageWrappers.has(msg)) {
+        renderMessageInto(index, msg, chatBox);
+      }
+    }
+  } else {
+    renderMessagesProgressively();
   }
 
   syncTaskProgressPanel(body);
