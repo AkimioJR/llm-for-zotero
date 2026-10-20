@@ -16,6 +16,12 @@ import { readOnlyInvocationPlan } from "../../authorization/invocationPlan";
 import { neverSelected } from "../guidance";
 import { fail, ok, validateObject } from "../shared";
 import {
+  buildOutsideSearchReasonDetail,
+  OUTSIDE_SEARCH_NEED_PROPERTIES,
+  OUTSIDE_SEARCH_NEED_SENTENCE,
+  outsideSearchNeedError,
+} from "./outsideSearchNeed";
+import {
   createConfiguredWebAccessProvider,
   isWebAccessToolAvailable,
   type WebAccessProviderFactory,
@@ -103,7 +109,8 @@ export function validateWebSearchInput(
     if (
       Object.keys(args).some(
         (key) =>
-          !["query", "maxResults"].includes(key) && args[key] !== undefined,
+          !["query", "maxResults", "need", "gap"].includes(key) &&
+          args[key] !== undefined,
       )
     ) {
       return fail(
@@ -176,6 +183,20 @@ export function validateWebSearchInput(
   });
 }
 
+/**
+ * The model's call: the search parameters plus the need that sends it
+ * outside the turn's papers and the library. The need stays out of the
+ * validated input, so the provider never receives it.
+ */
+export function validateWebSearchCall(
+  args: unknown,
+): AgentToolInputValidation<WebSearchInput> {
+  const validated = validateWebSearchInput(args);
+  if (!validated.ok) return validated;
+  const needError = outsideSearchNeedError(args as Record<string, unknown>);
+  return needError ? fail(needError) : validated;
+}
+
 function buildSearchTraceDetails(
   args: unknown,
   content: unknown,
@@ -189,6 +210,8 @@ function buildSearchTraceDetails(
   if (input.ok) {
     details.push({ label: "Query", value: input.value.query });
   }
+  const reason = buildOutsideSearchReasonDetail(args);
+  if (reason) details.push(reason);
   for (const source of result.results || []) {
     details.push({
       label: "URL",
@@ -211,10 +234,12 @@ export function createWebSearchTool(
     spec: {
       name: "web_search",
       description:
-        "Search the current public web with Tavily; write the query in the user's language by default. Returns ranked results with snippets; web_read reads a result's page text.",
+        "Search the current public web with Tavily; write the query in the user's language by default. Returns ranked results with snippets; web_read reads a result's page text. " +
+        OUTSIDE_SEARCH_NEED_SENTENCE +
+        ".",
       inputSchema: {
         type: "object",
-        required: ["query", "depth"],
+        required: ["query", "depth", "need"],
         additionalProperties: false,
         properties: {
           query: {
@@ -248,6 +273,7 @@ export function createWebSearchTool(
             maxItems: 10,
             items: { type: "string" },
           },
+          ...OUTSIDE_SEARCH_NEED_PROPERTIES,
         },
       },
       executionClass: "read",
@@ -285,7 +311,7 @@ export function createWebSearchTool(
       buildTraceDetails: ({ args, content }) =>
         buildSearchTraceDetails(args, content),
     },
-    validate: validateWebSearchInput,
+    validate: validateWebSearchCall,
     planInvocation: (input) =>
       readOnlyInvocationPlan({
         domains: ["network"],
@@ -323,14 +349,17 @@ export function createWebSearchTool(
       return {
         ...tool.spec,
         description:
-          "Search the public web with AnySearch. Supports query and result count only, not depth, topic, date/domain filters or vertical selection. Write the query in the user's language by default; use web_read for page text.",
+          "Search the public web with AnySearch. Supports query and result count only, not depth, topic, date/domain filters or vertical selection. Write the query in the user's language by default; use web_read for page text. " +
+          OUTSIDE_SEARCH_NEED_SENTENCE +
+          ".",
         inputSchema: {
           type: "object",
-          required: ["query"],
+          required: ["query", "need"],
           additionalProperties: false,
           properties: {
             query: { type: "string", minLength: 1, maxLength: 2000 },
             maxResults: { type: "integer", minimum: 1, maximum: 10 },
+            ...OUTSIDE_SEARCH_NEED_PROPERTIES,
           },
         },
       };

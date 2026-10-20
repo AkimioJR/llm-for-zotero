@@ -462,6 +462,8 @@ describe("AgentRuntime HITL review workflow", function () {
                 workflow: "review",
                 query: "population coding",
                 limit: 12,
+                need: "not_in_scope_or_library",
+                gap: "The library has no other population-coding papers.",
               }),
               () =>
                 callStep("literature_review", {

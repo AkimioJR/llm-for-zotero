@@ -203,6 +203,8 @@ for (const mode of ["safe", "auto", "yolo"] as const)
       assert.isTrue(result.ok);
       if (!result.ok) return;
       assert.equal(searchArgs?.doi, "10.1000/seed");
+      // A host action searches on the user's command, not the model's.
+      assert.equal(searchArgs?.need, "host_action");
       assert.deepEqual(importArgs?.identifiers, ["10.1000/r1", "10.1000/r2"]);
       assert.deepEqual(result.output, {
         seedTitle: "Seed Paper",

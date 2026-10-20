@@ -31,6 +31,7 @@ import type {
 import { createPaperReadTool } from "../src/agent/tools/read/paperRead";
 import { createLibraryRetrieveTool } from "../src/agent/tools/read/libraryRetrieve";
 import { createLiteratureSearchTool } from "../src/agent/tools/read/literatureSearch";
+import { OUTSIDE_SEARCH_NEED_SENTENCE } from "../src/agent/tools/read/outsideSearchNeed";
 import { createFileIOTool } from "../src/agent/tools/write/fileIO";
 import { ChangeJournalTestDb } from "./helpers/changeJournalTestDb";
 import {
@@ -1404,6 +1405,7 @@ describe("Zotero MCP server", function () {
     const tools = JSON.parse(response[2]).result.tools as Array<{
       name: string;
       description: string;
+      inputSchema: unknown;
     }>;
     const names = tools.map((entry) => entry.name);
     assert.include(names, "literature_search");
@@ -1415,6 +1417,17 @@ describe("Zotero MCP server", function () {
     assert.include(description, "not available over MCP");
     assert.include(description, "library_import");
     assert.include(description, "mode:'metadata'");
+    // An outside search states its need over MCP too; the host-only value
+    // stays out of the schema a client sees.
+    assert.include(description, OUTSIDE_SEARCH_NEED_SENTENCE);
+    const schema = tools.find((entry) => entry.name === "literature_search")!
+      .inputSchema as { properties: Record<string, { enum?: string[] }> };
+    assert.deepEqual(schema.properties.need.enum, [
+      "not_in_scope_or_library",
+      "current_or_public_facts",
+      "user_named_outside_source",
+    ]);
+    assert.property(schema.properties, "gap");
   });
 
   it("returns MCP literature_search results without a literature_review route", async function () {
@@ -1460,7 +1473,12 @@ describe("Zotero MCP server", function () {
           method: "tools/call",
           params: {
             name: "literature_search",
-            arguments: { mode: "search", query: "hippocampal replay" },
+            arguments: {
+              mode: "search",
+              query: "hippocampal replay",
+              need: "not_in_scope_or_library",
+              gap: "The library has no replay studies.",
+            },
           },
         },
       });

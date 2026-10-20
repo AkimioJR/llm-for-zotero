@@ -8059,7 +8059,11 @@ describe("web attribution runtime guard", function () {
       {
         id: "web-call-1",
         name: "web_search",
-        arguments: { query: "current fact", depth: "basic" },
+        arguments: {
+          query: "current fact",
+          depth: "basic",
+          need: "current_or_public_facts",
+        },
       },
     ],
     assistantMessage: {
@@ -8069,7 +8073,11 @@ describe("web attribution runtime guard", function () {
         {
           id: "web-call-1",
           name: "web_search",
-          arguments: { query: "current fact", depth: "basic" },
+          arguments: {
+            query: "current fact",
+            depth: "basic",
+            need: "current_or_public_facts",
+          },
         },
       ],
     },
@@ -8116,7 +8124,10 @@ describe("web attribution runtime guard", function () {
                   {
                     id: "web-call-missing-depth",
                     name: "web_search",
-                    arguments: { query: "current fact" },
+                    arguments: {
+                      query: "current fact",
+                      need: "current_or_public_facts",
+                    },
                   },
                 ],
                 assistantMessage: {
@@ -8126,7 +8137,10 @@ describe("web attribution runtime guard", function () {
                     {
                       id: "web-call-missing-depth",
                       name: "web_search",
-                      arguments: { query: "current fact" },
+                      arguments: {
+                        query: "current fact",
+                        need: "current_or_public_facts",
+                      },
                     },
                   ],
                 },
@@ -8144,7 +8158,11 @@ describe("web attribution runtime guard", function () {
                   {
                     id: "web-call-corrected",
                     name: "web_search",
-                    arguments: { query: "current fact", depth: "basic" },
+                    arguments: {
+                      query: "current fact",
+                      depth: "basic",
+                      need: "current_or_public_facts",
+                    },
                   },
                 ],
                 assistantMessage: {
@@ -8154,7 +8172,11 @@ describe("web attribution runtime guard", function () {
                     {
                       id: "web-call-corrected",
                       name: "web_search",
-                      arguments: { query: "current fact", depth: "basic" },
+                      arguments: {
+                        query: "current fact",
+                        depth: "basic",
+                        need: "current_or_public_facts",
+                      },
                     },
                   ],
                 },

@@ -8,6 +8,11 @@ import { createBuiltInToolRegistry } from "../src/agent/tools";
 import type { AgentToolContext, AgentToolResult } from "../src/agent/types";
 import { literaturePaperIdentities } from "../src/agent/services/literatureDiscovery";
 
+/** Every outside evidence search states why the library cannot hold it. */
+const OUTSIDE_NEED = {
+  need: "not_in_scope_or_library",
+  gap: "The library lacks related work.",
+} as const;
 describe("ranked literature discovery workflow", function () {
   const originalFetch = globalThis.fetch;
   const originalZotero = globalThis.Zotero;
@@ -91,6 +96,7 @@ describe("ranked literature discovery workflow", function () {
   ) {
     const tool = createLiteratureSearchTool(gateway as never);
     const input = tool.validate({
+      ...OUTSIDE_NEED,
       mode: "search",
       workflow: "review",
       query: "population coding",
@@ -507,6 +513,7 @@ describe("ranked literature discovery workflow", function () {
   async function answerSearch(context: AgentToolContext) {
     const tool = createLiteratureSearchTool(gateway as never);
     const input = tool.validate({
+      ...OUTSIDE_NEED,
       mode: "search",
       workflow: "answer",
       query: "population coding",
@@ -614,7 +621,12 @@ describe("ranked literature discovery workflow", function () {
   it("accepts a count of 1 to 25 papers on both discovery tools", function () {
     const search = createLiteratureSearchTool(gateway as never);
     const review = createLiteratureReviewTool(gateway as never);
-    const searchArgs = { mode: "search", workflow: "review", query: "x" };
+    const searchArgs = {
+      mode: "search",
+      workflow: "review",
+      query: "x",
+      ...OUTSIDE_NEED,
+    };
     const reviewArgs = {
       selections: [
         { candidateSetId: "trh_abc", candidateIndex: 1, reason: "Relevant" },
@@ -646,6 +658,7 @@ describe("ranked literature discovery workflow", function () {
       "What does recent research say about representational drift?";
     const tool = createLiteratureSearchTool(gateway as never);
     const parsed = tool.validate({
+      ...OUTSIDE_NEED,
       mode: "search",
       workflow: "answer",
       query: "representational drift",
@@ -702,6 +715,7 @@ describe("ranked literature discovery workflow", function () {
     const context = makeContext();
     const tool = createLiteratureSearchTool(gateway as never);
     const parsed = tool.validate({
+      ...OUTSIDE_NEED,
       mode: "search",
       workflow: "answer",
       query: "hippocampal replay",
@@ -726,6 +740,7 @@ describe("ranked literature discovery workflow", function () {
     context.isToolVisible = (spec) => spec.name !== "literature_review";
     const tool = createLiteratureSearchTool(gateway as never);
     const parsed = tool.validate({
+      ...OUTSIDE_NEED,
       mode: "search",
       workflow: "answer",
       query: "hippocampal replay",
@@ -767,6 +782,7 @@ describe("ranked literature discovery workflow", function () {
     }) as typeof fetch;
     const tool = createLiteratureSearchTool(gateway as never);
     const parsed = tool.validate({
+      ...OUTSIDE_NEED,
       mode: "references",
       query: "A seed without a DOI",
       workflow: "review",

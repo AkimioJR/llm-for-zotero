@@ -213,6 +213,7 @@ describe("literature_search tool", function () {
       mode: "search",
       source: "openalex",
       query: "neural networks",
+      need: "user_named_outside_source",
     });
     assert.isTrue(validated.ok);
     if (!validated.ok) return;
@@ -291,6 +292,8 @@ describe("literature_search tool", function () {
       mode: "search",
       source: "openalex",
       query: "reviewable papers",
+      need: "not_in_scope_or_library",
+      gap: "The library has no reviewable papers.",
     });
     assert.isTrue(validated.ok);
     if (!validated.ok) return;

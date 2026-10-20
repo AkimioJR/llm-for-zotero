@@ -51,12 +51,17 @@ import {
  * paper_read) and 22 or 6 turn characters (paper_read guidance, single-paper
  * line), for net growth of 497, 513 and 497 characters (2026-10-20). Raised by 30
  * each (29 fixed prompt characters for the rule to use a source the user
- * names, and one turn character), to 37,974, 36,707 and 38,072.
+ * names, and one turn character), to 37,974, 36,707 and 38,072. Raised by
+ * 294 tool characters each for literature_search's required reason for an
+ * outside search: the need and gap fields and one sentence defining them
+ * (2026-10-20), to 38,268, 37,001 and 38,366. Lowered by 30 each by dropping the source
+ * list from literature_search's description (2026-10-20), to 38,238, 36,971
+ * and 38,336.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 37_974,
-  paper: 36_707,
-  collection: 38_072,
+  global: 38_238,
+  paper: 36_971,
+  collection: 38_336,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

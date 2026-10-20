@@ -15,6 +15,12 @@ import type { ZoteroGateway } from "../../services/zoteroGateway";
 import { readOnlyInvocationPlan } from "../../authorization/invocationPlan";
 import { neverSelected } from "../guidance";
 import {
+  buildOutsideSearchReasonDetail,
+  OUTSIDE_SEARCH_NEED_PROPERTIES,
+  OUTSIDE_SEARCH_NEED_SENTENCE,
+  outsideSearchNeedError,
+} from "./outsideSearchNeed";
+import {
   createSearchLiteratureReviewAction,
   resolveSearchLiteratureReview,
 } from "../../reviewCards";
@@ -144,6 +150,8 @@ function buildLiteratureTraceDetails(
     readTraceString(input.title) ||
     readTraceString(input.author);
   if (query) details.push({ label: "Query", value: query });
+  const reason = buildOutsideSearchReasonDetail(input);
+  if (reason) details.push(reason);
 
   const results = Array.isArray(result.results) ? result.results : [];
   for (const entry of results) {
@@ -181,7 +189,9 @@ export function createLiteratureSearchTool(
     spec: {
       name: "literature_search",
       description:
-        "Search scholarly sources outside the library (OpenAlex, arXiv, Europe PMC); workflow:'answer' returns evidence for an answer. To finish a find or recommend request, call literature_review to show the selection card; discovery never imports silently. Explicit imports use workflow:'answer', then library_import. To read a paper's abstract or details, use workflow:'answer'; workflow:'review' with mode:'metadata' proposes metadata changes the user must approve, so use it only when the user asks to check or fix an item's metadata.",
+        "Search scholarly sources outside the library; workflow:'answer' returns evidence for an answer. To finish a find or recommend request, call literature_review to show the selection card; discovery never imports silently. Explicit imports use workflow:'answer', then library_import. To read a paper's abstract or details, use workflow:'answer'; workflow:'review' with mode:'metadata' proposes metadata changes the user must approve, so use it only when the user asks to check or fix an item's metadata. " +
+        OUTSIDE_SEARCH_NEED_SENTENCE +
+        "; mode:'metadata' needs none.",
       inputSchema: {
         type: "object",
         required: ["mode"],
@@ -229,6 +239,7 @@ export function createLiteratureSearchTool(
               "workflow:'review': papers the user asked for, five when unspecified.",
           },
           libraryID: { type: "number" },
+          ...OUTSIDE_SEARCH_NEED_PROPERTIES,
         },
       },
       executionClass: "read",
@@ -350,6 +361,11 @@ export function createLiteratureSearchTool(
         return fail(
           `count must be an integer from 1 to ${MAX_DISCOVERY_COUNT}.`,
         );
+      // A metadata lookup identifies a known item; every other mode brings
+      // outside evidence and states why the turn and library cannot hold it.
+      const needError =
+        mode === "metadata" ? null : outsideSearchNeedError(args);
+      if (needError) return fail(needError);
 
       return ok<LiteratureSearchInput>({
         workflow,

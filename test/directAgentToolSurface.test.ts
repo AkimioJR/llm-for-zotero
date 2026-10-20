@@ -61,11 +61,15 @@ describe("direct Agent model tool surface", function () {
     // Agent's search-tool map raised that cap by exactly their measured net
     // growth, 519 characters, to 34,519 (34,300 characters, from 33,781;
     // 24,926 tool characters, 2026-10-20), and by 29 more for the rule to use
-    // a source the user names, to 34,548.
-    assert.isAtMost(serializedToolCharacters, 25_000);
+    // a source the user names, to 34,548. literature_search's required
+    // reason for an outside search (the need and gap fields and one
+    // sentence defining them) raised both caps by its measured 294 tool
+    // characters, to 25,220 and 34,623 (2026-10-20); dropping the source list from
+    // literature_search's description lowered both by 30, to 25,190 and 34,593.
+    assert.isAtMost(serializedToolCharacters, 25_190);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      34_548,
+      34_593,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

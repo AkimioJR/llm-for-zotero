@@ -294,7 +294,10 @@ describe("AnySearch native integration (offline)", function () {
         },
       });
       const search = createWebSearchTool();
-      const validated = search.validate({ query });
+      const validated = search.validate({
+        query,
+        need: "current_or_public_facts",
+      });
       assert.deepEqual(validated, {
         ok: true,
         value: { query, maxResults: 5 },
@@ -380,14 +383,20 @@ describe("AnySearch native integration (offline)", function () {
       required: string[];
       properties: object;
     };
-    assert.deepEqual(schema.required, ["query"]);
-    assert.deepEqual(Object.keys(schema.properties), ["query", "maxResults"]);
+    assert.deepEqual(schema.required, ["query", "need"]);
+    assert.deepEqual(Object.keys(schema.properties), [
+      "query",
+      "maxResults",
+      "need",
+      "gap",
+    ]);
     assert.notInclude(JSON.stringify(specs), "costs 1 credit");
     assert.notInclude(search.guidance!.instruction, "explicitly choose basic");
     assert.isFalse(
       search.guidance!.matches(context.request, { matchedSkillIds: [] }),
     );
-    assert.isTrue(search.validate({ query: "hello" }).ok);
+    const need = "current_or_public_facts";
+    assert.isTrue(search.validate({ query: "hello", need }).ok);
     for (const key of [
       "depth",
       "topic",
@@ -400,7 +409,7 @@ describe("AnySearch native integration (offline)", function () {
       "zone",
     ]) {
       assert.isFalse(
-        search.validate({ query: "hello", [key]: "unsupported" }).ok,
+        search.validate({ query: "hello", need, [key]: "unsupported" }).ok,
         key,
       );
     }
@@ -412,7 +421,7 @@ describe("AnySearch native integration (offline)", function () {
       );
     }
     setWebAccessProvider("tavily");
-    assert.isFalse(search.validate({ query: "hello" }).ok);
+    assert.isFalse(search.validate({ query: "hello", need }).ok);
     assert.include(JSON.stringify(search.spec.inputSchema), "advanced");
     assert.isFalse(
       search.guidance!.matches(context.request, { matchedSkillIds: [] }),

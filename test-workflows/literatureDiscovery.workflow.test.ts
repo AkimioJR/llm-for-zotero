@@ -78,6 +78,8 @@ describe("workflow: expandable ranked discovery", function () {
         query: "discovery fixture",
         workflow: "answer",
         limit: 12,
+        need: "not_in_scope_or_library",
+        gap: "The library has no other papers on this topic.",
       });
       if (!searchInput.ok) throw new Error(searchInput.error);
       const candidates = (await search.execute(
@@ -315,6 +317,8 @@ describe("workflow: expandable ranked discovery", function () {
         workflow: "review",
         query: "discovery import fixture",
         limit: 12,
+        need: "not_in_scope_or_library",
+        gap: "The library has no other papers on this topic.",
       });
       const found = search.content as {
         candidateSetId: string;
@@ -439,6 +443,8 @@ describe("workflow: expandable ranked discovery", function () {
         workflow: "answer",
         query: "discovery import fixture",
         limit: 12,
+        need: "not_in_scope_or_library",
+        gap: "The library has no other papers on this topic.",
       });
       assert.isFalse(
         (answer.content as { reviewRequired?: boolean }).reviewRequired,
