@@ -7,6 +7,7 @@ import { resolvedAgentRequest } from "./helpers/resolvedAgentRequest";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
 import type { AgentToolContext, AgentToolResult } from "../src/agent/types";
 import { literaturePaperIdentities } from "../src/agent/services/literatureDiscovery";
+import { OUTSIDE_SEARCH_STOP_NOTE } from "../src/agent/tools/read/outsideSearchNeed";
 
 /** Every outside evidence search states why the library cannot hold it. */
 const OUTSIDE_NEED = {
@@ -602,6 +603,10 @@ describe("ranked literature discovery workflow", function () {
     if (more.kind !== "deliver") throw new Error("Did not continue discovery");
     const continuation = more.toolMessageContent as any;
     assert.equal(continuation.batchSize, 3);
+    // Find more may search again; that search must state its need, or the
+    // tool rejects it.
+    assert.include(continuation.nextStep, "A further search must set need.");
+    assert.notInclude(continuation.nextStep, OUTSIDE_SEARCH_STOP_NOTE);
     let error = "";
     try {
       await tool.execute(
@@ -707,6 +712,9 @@ describe("ranked literature discovery workflow", function () {
       nextStep,
       "Never import during discovery or finish with prose instead of the card",
     );
+    // A discovery ends with the card, not an answer: no stop note.
+    assert.include(nextStep, "A further search must set need.");
+    assert.notInclude(nextStep, OUTSIDE_SEARCH_STOP_NOTE);
   });
 
   it("routes an unclassified answer-workflow search by the user's request", async function () {
@@ -724,6 +732,13 @@ describe("ranked literature discovery workflow", function () {
     const content = (await tool.execute(parsed.value, context)) as any;
     assert.isFalse(content.reviewRequired);
     const nextStep = String(content.nextStep);
+    // Answering is the default; the import and card branches follow, each
+    // only for the request that names it, and the stop note closes it.
+    assert.match(
+      nextStep,
+      /^Unless the user asked to import papers or only to find or recommend them, answer the user's question from these results as supporting evidence; the turn's own papers remain the primary source\. /,
+      nextStep,
+    );
     assert.match(nextStep, /If the user asked to import/);
     assert.isBelow(
       nextStep.indexOf("library_import"),
@@ -731,11 +746,41 @@ describe("ranked literature discovery workflow", function () {
       nextStep,
     );
     assert.isAtLeast(nextStep.indexOf("library_import"), 0, nextStep);
-    assert.match(nextStep, /Otherwise answer from these results/);
+    assert.include(
+      nextStep,
+      "If the user only asked you to find or recommend papers, call literature_review",
+    );
+    assert.notInclude(nextStep, "Otherwise answer");
+    assert.isTrue(nextStep.endsWith(` ${OUTSIDE_SEARCH_STOP_NOTE}`), nextStep);
+  });
+
+  it("closes a search whose candidates cannot be saved with the stop note alone", async function () {
+    // Without a conversation the candidates get no handle, so neither the
+    // card nor an import can name them; the result still ends with the note.
+    const context = makeContext();
+    context.request.conversationKey = 0;
+    const content = await answerSearch(context);
+    assert.isUndefined(content.candidateSetId);
+    assert.isFalse(content.reviewRequired);
+    assert.equal(content.nextStep, OUTSIDE_SEARCH_STOP_NOTE);
+  });
+
+  it("closes an answer-workflow search without results with the stop note", async function () {
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [] }),
+    })) as typeof fetch;
+    const content = await answerSearch(makeContext());
+    assert.lengthOf(content.results, 0);
+    assert.isTrue(
+      String(content.nextStep).endsWith(OUTSIDE_SEARCH_STOP_NOTE),
+      content.nextStep,
+    );
   });
   it("offers no card route to a caller that cannot see literature_review", async function () {
     // MCP clients never see literature_review; the routing must not send
-    // them there (the answer path returns no nextStep, as before).
+    // them there. They over-search too, so they get the stop note alone.
     const context = makeContext();
     context.isToolVisible = (spec) => spec.name !== "literature_review";
     const tool = createLiteratureSearchTool(gateway as never);
@@ -748,7 +793,28 @@ describe("ranked literature discovery workflow", function () {
     if (!parsed.ok) throw new Error(parsed.error);
     const content = (await tool.execute(parsed.value, context)) as any;
     assert.isString(content.candidateSetId);
-    assert.isUndefined(content.nextStep);
+    assert.equal(content.nextStep, OUTSIDE_SEARCH_STOP_NOTE);
+  });
+
+  it("opens no discovery for a review-workflow search from a caller that cannot see literature_review", async function () {
+    const context = makeContext();
+    context.isToolVisible = (spec) => spec.name !== "literature_review";
+    const tool = createLiteratureSearchTool(gateway as never);
+    const parsed = tool.validate({
+      ...OUTSIDE_NEED,
+      mode: "search",
+      workflow: "review",
+      query: "hippocampal replay",
+    });
+    if (!parsed.ok) throw new Error(parsed.error);
+    const content = (await tool.execute(parsed.value, context)) as any;
+    assert.isFalse(content.reviewRequired);
+    assert.isUndefined(content.sessionId);
+    assert.equal(content.nextStep, OUTSIDE_SEARCH_STOP_NOTE);
+    assert.notMatch(
+      JSON.stringify(content),
+      /literature_review|selection card/,
+    );
   });
 
   it("requires the current expansion even when an earlier card was presented", async function () {

@@ -122,6 +122,16 @@ describe("prompt rules have a single owner", function () {
       owner: "persona",
     },
     {
+      rule: "outside sources are never read with shell commands",
+      marker: "never with shell commands",
+      owner: "persona",
+    },
+    {
+      rule: "an unreadable outside text is named, not worked around",
+      marker: "say what was not read",
+      owner: "persona",
+    },
+    {
       rule: "the selection card answers only a find or recommend request",
       marker: "only when the user asks you to find or recommend papers",
       owner: "persona",

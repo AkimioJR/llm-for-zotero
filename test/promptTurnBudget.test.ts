@@ -56,12 +56,16 @@ import {
  * outside search: the need and gap fields and one sentence defining them
  * (2026-10-20), to 38,268, 37,001 and 38,366. Lowered by 30 each by dropping the source
  * list from literature_search's description (2026-10-20), to 38,238, 36,971
- * and 38,336.
+ * and 38,336. Raised by 185 fixed prompt characters each for the search
+ * routing contract's rule to read outside sources only with search and
+ * web-read tools, never with shell commands (2026-10-20), to 38,423, 37,156
+ * and 38,521. Raised by 11 fixed prompt characters each for "or scripts"
+ * in that rule (2026-10-20), to 38,434, 37,167 and 38,532.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 38_238,
-  paper: 36_971,
-  collection: 38_336,
+  global: 38_434,
+  paper: 37_167,
+  collection: 38_532,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

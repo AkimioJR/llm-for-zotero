@@ -25,6 +25,14 @@ export const HOST_ACTION_SEARCH_NEED = "host_action";
 export const OUTSIDE_SEARCH_NEED_SENTENCE =
   "Set need to why this search goes outside the turn's papers and library; not_in_scope_or_library also needs gap: what they lack";
 
+/**
+ * The last line of every outside evidence search result (literature_search
+ * workflow:'answer', web_search): answer once the results cover the need.
+ * It rides in the tool result, so the cached prompt prefix is unchanged.
+ */
+export const OUTSIDE_SEARCH_STOP_NOTE =
+  "If these results cover the need, stop searching and finish the request; search again only for a specific gap you can name.";
+
 export const OUTSIDE_SEARCH_NEED_MESSAGE =
   "Add need: not_in_scope_or_library (with gap: what the turn's papers and library lack), current_or_public_facts, or user_named_outside_source.";
 

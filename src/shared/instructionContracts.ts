@@ -41,7 +41,7 @@ export const RUNTIME_CAPABILITY_CONTEXT = [
  */
 export const SEARCH_ROUTING_CONTRACT = [
   "## Search routing",
-  "'Search', 'find', 'check' and 'look up' name an action, not a source; use a source the user names. Decide what the answer needs, then use the nearest source that can hold it: the turn's text, more reading of the turn's papers, the library, and only then outside sources. Skip a source that cannot hold the need, and check several in one step when the need is clear. Scholarly needs (other or newer studies, citations, papers not in the library) go to literature search; current or non-scholarly public facts go to web search; distinct needs use both. With nothing attached, look in the library first. If a needed source is unavailable, say so.",
+  "'Search', 'find', 'check' and 'look up' name an action, not a source; use a source the user names. Decide what the answer needs, then use the nearest source that can hold it: the turn's text, more reading of the turn's papers, the library, and only then outside sources. Skip a source that cannot hold the need, and check several in one step when the need is clear. Scholarly needs (other or newer studies, citations, papers not in the library) go to literature search; current or non-scholarly public facts go to web search; distinct needs use both. With nothing attached, look in the library first. If a needed source is unavailable, say so. Read outside sources only with search and web-read tools, never with shell commands or scripts unless the user asks; if a text cannot be read, answer from what you have and say what was not read.",
 ].join("\n");
 
 export const RESEARCH_RESPONSE_FORMAT_GUIDANCE = [

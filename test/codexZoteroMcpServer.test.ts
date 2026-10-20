@@ -31,7 +31,10 @@ import type {
 import { createPaperReadTool } from "../src/agent/tools/read/paperRead";
 import { createLibraryRetrieveTool } from "../src/agent/tools/read/libraryRetrieve";
 import { createLiteratureSearchTool } from "../src/agent/tools/read/literatureSearch";
-import { OUTSIDE_SEARCH_NEED_SENTENCE } from "../src/agent/tools/read/outsideSearchNeed";
+import {
+  OUTSIDE_SEARCH_NEED_SENTENCE,
+  OUTSIDE_SEARCH_STOP_NOTE,
+} from "../src/agent/tools/read/outsideSearchNeed";
 import { createFileIOTool } from "../src/agent/tools/write/fileIO";
 import { ChangeJournalTestDb } from "./helpers/changeJournalTestDb";
 import {
@@ -1487,8 +1490,10 @@ describe("Zotero MCP server", function () {
       const text = payload.result.content[0].text as string;
       const body = JSON.parse(text).result;
       assert.isString(body.candidateSetId, text);
-      assert.isUndefined(body.nextStep, text);
+      // MCP clients get the stop note alone, never card or import routing.
+      assert.equal(body.nextStep, OUTSIDE_SEARCH_STOP_NOTE, text);
       assert.notInclude(text, "literature_review");
+      assert.notInclude(text, "selection card");
     } finally {
       scope.clear();
       globalThis.fetch = originalFetch;

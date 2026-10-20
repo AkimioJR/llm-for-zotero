@@ -19,6 +19,7 @@ import {
   buildOutsideSearchReasonDetail,
   OUTSIDE_SEARCH_NEED_PROPERTIES,
   OUTSIDE_SEARCH_NEED_SENTENCE,
+  OUTSIDE_SEARCH_STOP_NOTE,
   outsideSearchNeedError,
 } from "./outsideSearchNeed";
 import {
@@ -42,6 +43,8 @@ export type WebSearchInput = {
 
 export type WebSearchToolResult = WebSearchResponse & {
   citation: ReturnType<typeof webCitationInstruction>;
+  /** The stop note; last, so the model reads it after the results. */
+  nextStep: string;
 };
 
 function normalizeTopic(value: unknown): WebSearchTopic {
@@ -339,6 +342,7 @@ export function createWebSearchTool(
         citation: webCitationInstruction(
           results.map((source) => source.sourceId),
         ),
+        nextStep: OUTSIDE_SEARCH_STOP_NOTE,
       };
     },
   };

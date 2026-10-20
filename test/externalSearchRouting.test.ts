@@ -57,6 +57,10 @@ function guidanceMatches(
   return tool.guidance?.matches(value) || false;
 }
 
+/** Outside sources are read with search and web-read tools, not shell. */
+const NO_SHELL_RULE =
+  "Read outside sources only with search and web-read tools, never with shell commands or scripts unless the user asks; if a text cannot be read, answer from what you have and say what was not read.";
+
 describe("external search guidance routing", function () {
   it("does not route absent semantic intent from English or multilingual words", function () {
     const { web, literature } = guidanceTools();
@@ -80,8 +84,15 @@ describe("external search guidance routing", function () {
       "distinct needs use both",
       "With nothing attached, look in the library first",
       "If a needed source is unavailable, say so",
+      NO_SHELL_RULE,
     ])
       assert.include(SEARCH_ROUTING_CONTRACT, rule);
+    // The capability context's escape hatch stays for explicit or
+    // unsupported work; outside reading has its own rule above.
+    assert.include(
+      RUNTIME_CAPABILITY_CONTEXT,
+      "use shell, file, or script escape hatches only for explicit or unsupported work",
+    );
     // The language rule is owned by the core research contract.
     assert.include(CORE_RESEARCH_CONTRACT, "use the user's language");
     assert.notInclude(persona, "Preserve the user's language");
@@ -115,14 +126,17 @@ describe("external search guidance routing", function () {
     );
     const fixedPrompt = rendered.inventory.fixedPrompt;
     assert.equal(count(fixedPrompt, SEARCH_ROUTING_CONTRACT), 1);
+    assert.equal(count(fixedPrompt, NO_SHELL_RULE), 1);
     assert.equal(count(fixedPrompt, AGENT_SEARCH_TOOL_ROUTES), 1);
     const turn = stringifyMessageContent(rendered.envelope.turnMessage.content);
     assert.notInclude(turn, "## Search routing");
+    assert.notInclude(turn, NO_SHELL_RULE);
     assert.notInclude(turn, cardRule);
 
     // Claude Code bridge: it sends the persona as its Agent-mode block.
     const bridgeBlock = AGENT_PERSONA_INSTRUCTIONS.join("\n\n");
     assert.equal(count(bridgeBlock, SEARCH_ROUTING_CONTRACT), 1);
+    assert.equal(count(bridgeBlock, NO_SHELL_RULE), 1);
     assert.notInclude(bridgeBlock, cardRule);
     assert.notInclude(bridgeBlock, "literature_review");
 
@@ -142,6 +156,7 @@ describe("external search guidance routing", function () {
         mcpReady,
       });
       assert.equal(count(manifest, SEARCH_ROUTING_CONTRACT), 1);
+      assert.equal(count(manifest, NO_SHELL_RULE), 1);
       assert.notInclude(manifest, cardRule);
       assert.notInclude(manifest, "literature_review");
     }

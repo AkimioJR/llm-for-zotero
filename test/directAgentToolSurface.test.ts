@@ -66,10 +66,14 @@ describe("direct Agent model tool surface", function () {
     // sentence defining them) raised both caps by its measured 294 tool
     // characters, to 25,220 and 34,623 (2026-10-20); dropping the source list from
     // literature_search's description lowered both by 30, to 25,190 and 34,593.
+    // The search routing contract's rule to read outside sources only with
+    // search and web-read tools, never with shell commands, raised the cap
+    // with the fixed prompt by its measured 185 characters, to 34,778
+    // (2026-10-20); "or scripts" in that rule raised it by 11, to 34,789.
     assert.isAtMost(serializedToolCharacters, 25_190);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      34_593,
+      34_789,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

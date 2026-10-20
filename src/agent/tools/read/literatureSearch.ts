@@ -406,7 +406,7 @@ export function createLiteratureSearchTool(
       return identifyLiteratureCandidates(
         content,
         context,
-        input.workflow === "review",
+        input.workflow === "review" && canShowLiteratureReview(context),
         canShowLiteratureReview(context),
         input.count,
       );

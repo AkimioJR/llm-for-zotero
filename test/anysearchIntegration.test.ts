@@ -18,6 +18,7 @@ import {
 } from "../src/agent/tools/read/webAccessShared";
 import { createWebSearchTool } from "../src/agent/tools/read/webSearch";
 import { createWebReadTool } from "../src/agent/tools/read/webRead";
+import { OUTSIDE_SEARCH_STOP_NOTE } from "../src/agent/tools/read/outsideSearchNeed";
 import { registerWebAccessPreferences } from "../src/modules/preferences/webAccessPanel";
 import { AgentToolRegistry } from "../src/agent/tools/registry";
 import {
@@ -461,6 +462,8 @@ describe("AnySearch native integration (offline)", function () {
       context,
     );
     assert.equal(result.results[0].sourceId, extracted.pages[0].sourceId);
+    assert.equal(result.nextStep, OUTSIDE_SEARCH_STOP_NOTE);
+    assert.notProperty(extracted, "nextStep");
     assert.deepEqual(extracted.citation.availableSourceIds, [
       result.results[0].sourceId,
     ]);
