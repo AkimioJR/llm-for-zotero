@@ -12796,6 +12796,14 @@ function renderChatForPanel(
             waiting.delete(history[to]);
             to += 1;
           } while (to < total && !overBudget());
+          // A render started while these were built owns the box now.
+          if (
+            done ||
+            (point.before && point.before.parentNode !== point.parent)
+          ) {
+            inserted = false;
+            return;
+          }
           point.parent.insertBefore(fragment, point.before);
           drawnTo = to;
         }
@@ -12814,6 +12822,13 @@ function renderChatForPanel(
             fragment.insertBefore(messageNodes, fragment.firstChild);
             waiting.delete(history[from]);
           } while (from > 0 && !overBudget());
+          if (
+            done ||
+            (point.before && point.before.parentNode !== point.parent)
+          ) {
+            inserted = false;
+            return;
+          }
           point.parent.insertBefore(fragment, point.before);
           drawnFrom = from;
         }

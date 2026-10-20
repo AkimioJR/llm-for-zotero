@@ -670,12 +670,11 @@ export function createConversationTurnNavigator(params: {
 
   const activateMarker = (index: number) => {
     const entry = entries[index];
-    let wrapper = entry ? wrapperByTurnKey.get(entry.key) : null;
-    // An older turn of a long conversation may still be waiting to be
-    // drawn; drawing it re-syncs this navigator.
-    if (entry && !wrapper && flushPendingChatRender(chatBox)) {
-      wrapper = wrapperByTurnKey.get(entry.key);
-    }
+    // Older turns of a long conversation may still be waiting to be drawn.
+    // Draw them all first: one landing above the target later would move
+    // it under the scroll, and drawing re-syncs this navigator.
+    if (entry) flushPendingChatRender(chatBox);
+    const wrapper = entry ? wrapperByTurnKey.get(entry.key) : null;
     if (!entry || !wrapper || !conversationKey) return;
     const paddingTop = Number.parseFloat(
       ownerWindow.getComputedStyle(chatBox)?.paddingTop || "0",
