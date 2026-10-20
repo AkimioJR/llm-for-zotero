@@ -85,6 +85,11 @@ How to do a library chat literature review with llm-for-zotero agent
   Zotero, using your own Claude Code login. The plugin starts and stops the
   small bridge it needs for you. It is experimental and does not yet support
   native Zotero API operations.
+- **One history** lists Agent, Codex and Claude chats together. Click the
+  runtime badge in the message box to switch runtimes, and attach an earlier
+  conversation from the slash menu or by asking for it in plain words.
+- **Side panel** in the standalone window opens read-only past chats or a
+  temporary side chat next to the main chat.
 - **Skills** let you customize how Agent Mode handles research workflows. The
   plugin ships with 8 built-in skills and a portal for creating your own.
 - **General Web Search** lets the in-plugin Agent search the current public web with Tavily, read relevant pages, and attach source links to its answers.
@@ -275,8 +280,9 @@ plugins, and many Markdown readers.
 
 ## Agent Mode (beta)
 
-Agent Mode is disabled by default. Enable it in `Preferences`, then toggle
-`Agent (beta)` in the context bar.
+Agent Mode is disabled by default. Turn on **Original Agent** in `Preferences`
+-> **Agent** tab. While it is on, new chats use the Agent. If you also turn on Codex or
+Claude Code, click the runtime badge in the message box to switch between them.
 
 It can read and search your library, draft notes, update metadata or tags with
 confirmation, and undo recent write actions from the conversation.
@@ -291,18 +297,18 @@ turns when the model context fills up. This lets follow-up questions reuse
 grounded evidence when it is still relevant, while still asking the agent to read
 again when the needed source or coverage layer is missing.
 
-| Tool area                | Tools                                                                                                                                              | What they do                                                                                                                                                                      |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Library and PDF reading  | `library_search`, `library_read`, `library_retrieve`, `paper_read`, `read_attachment`, `context_read`                                              | Search items and collections, read metadata, read papers, search paper passages, render PDF pages, inspect attachments and the chat context                                       |
-| Scholarly discovery      | `literature_search`, `literature_review`                                                                                                           | Search OpenAlex, arXiv, and Europe PMC for papers, recommendations, references, and citations (metadata lookup via CrossRef and Semantic Scholar), then present ranked candidates |
-| General web research     | `web_search`, `web_read`                                                                                                                           | Search the current public web with Tavily, read relevant pages, and show source links with the answer (only when a Tavily key is set)                                             |
-| Library writes           | `library_update`, `library_import`, `library_delete`, `annotate_pdf`                                                                               | Apply tags, update metadata, move items, manage collections and attachments, merge duplicates, trash items, import identifiers or local files, highlight PDF passages             |
-| Citations and settings   | `library_cite`, `library_settings`                                                                                                                 | Format citations and bibliographies with Zotero's citation engine, and read or change the Zotero preferences the agent may touch                                                  |
-| Notes and documents      | `note_write`, `note_write_batch`, `submit_document`                                                                                                | Create, append to, or edit Zotero notes, write one note on each of many items, and finalize longer documents                                                                      |
-| Filesystem and scripting | `file_io`, `run_command`, `zotero_script`                                                                                                          | Read/write local files, run analysis commands, or execute Zotero JavaScript with write confirmations                                                                              |
-| Skills and questions     | `load_skill`, `request_user_input`                                                                                                                 | Load a skill's instructions when the task needs them, and ask you a question when a choice is ambiguous                                                                           |
-| Plans                    | `update_plan`, `amend_plan`, `prepare_plan_execution`, `task_update`, `research_update`, `approve_research_expansion`, `approve_research_mutation` | Draft a plan for your approval, then track and report its execution                                                                                                               |
-| Safety                   | `undo`                                                                                                                                             | Undo recorded write actions from the conversation's durable change history, one at a time or several newest-first                                                                 |
+| Tool area                | Tools                                                                                                 | What they do                                                                                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Library and PDF reading  | `library_search`, `library_read`, `library_retrieve`, `paper_read`, `read_attachment`, `context_read` | Search items and collections, read metadata, read papers, search paper passages, render PDF pages, inspect attachments and the chat context                                       |
+| Scholarly discovery      | `literature_search`, `literature_review`                                                              | Search OpenAlex, arXiv, and Europe PMC for papers, recommendations, references, and citations (metadata lookup via CrossRef and Semantic Scholar), then present ranked candidates |
+| General web research     | `web_search`, `web_read`                                                                              | Search the current public web with Tavily, read relevant pages, and show source links with the answer (only when a Tavily key is set)                                             |
+| Library writes           | `library_update`, `library_import`, `library_delete`, `annotate_pdf`                                  | Apply tags, update metadata, move items, manage collections and attachments, merge duplicates, trash items, import identifiers or local files, highlight PDF passages             |
+| Citations and settings   | `library_cite`, `library_settings`                                                                    | Format citations and bibliographies with Zotero's citation engine, and read or change the Zotero preferences the agent may touch                                                  |
+| Notes and documents      | `note_write`, `note_write_batch`, `submit_document`                                                   | Create, append to, or edit Zotero notes, write one note on each of many items, and finalize longer documents                                                                      |
+| Filesystem and scripting | `file_io`, `run_command`, `zotero_script`                                                             | Read/write local files, run analysis commands, or execute Zotero JavaScript with write confirmations                                                                              |
+| Skills and questions     | `load_skill`, `request_user_input`, `past_chat_attach`                                                | Load a skill's instructions when the task needs them, ask you a question when a choice is ambiguous, and add an earlier conversation to the chat                                  |
+| Task tracking            | `task_update`, `workflow_script`                                                                      | Split a compound request into parts the plugin tracks, and run several tool calls in one script with loops and conditions                                                         |
+| Safety                   | `undo`                                                                                                | Undo recorded write actions from the conversation's durable change history, one at a time or several newest-first                                                                 |
 
 The design philosophy is simple: read tools are unrestricted; write tools stay
 reviewable and undoable.
@@ -501,9 +507,16 @@ Legacy notes:
 ## Claude Code Setup (Experimental)
 
 Claude Code mode runs Claude Code as a separate conversation system inside
-Zotero. It reuses the sidebar and standalone-window UI, but has separate
-conversation history, scope state, model settings, permission semantics, slash
-commands, and project skills.
+Zotero. It reuses the sidebar and standalone-window UI, but has its own scope
+state, model settings, permission semantics, slash commands, and project
+skills. Claude chats appear in the same history list as your other chats, with
+a small **Claude** label.
+
+_Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang), who
+built the Claude Code integration and its bridge
+([`cc-llm4zotero-adapter`](https://github.com/jianghao-zhang/cc-llm4zotero-adapter)).
+The bridge now ships inside the plugin, with the author's permission, under
+[`packages/claude-bridge`](./packages/claude-bridge)._
 
 > Claude Code mode currently does **not** support native Zotero API operations.
 > Use built-in [Agent Mode](#agent-mode-beta) for native library tools such as
@@ -546,8 +559,8 @@ Open `Preferences` -> `llm-for-zotero` -> **Agent** tab, and switch on
 | **Default model**     | `sonnet`                           |
 | **Default reasoning** | `auto`                             |
 
-Then click the **Claude Code** button in the chat header to enter Claude Code
-mode.
+Then click the **Claude Code** button in the chat header, or click the runtime
+badge in the message box and pick **Claude**, to enter Claude Code mode.
 
 That is all. You do **not** need to download or start a bridge yourself. While
 Claude Code mode is on, Zotero starts a small helper program (the "bridge")
