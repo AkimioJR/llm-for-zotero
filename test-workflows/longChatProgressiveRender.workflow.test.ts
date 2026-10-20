@@ -72,6 +72,18 @@ describe("workflow: long chat draws the reading position first", function () {
       indices.every((value, position) => value === position)
     );
   };
+  const startNewChat = async () => {
+    // An empty chat is already new; the button would keep it.
+    if (mountedKey() > 0 && wrappers().length === 0) return;
+    const before = mountedKey();
+    doc()
+      .querySelector<HTMLButtonElement>('[data-sidebar-action="new-chat"]')!
+      .click();
+    await waitUntil(
+      () => mountedKey() > 0 && mountedKey() !== before,
+      "a new chat mounts",
+    );
+  };
   /** Clicks a row; resolves on the first frame that shows the target. */
   const switchTo = async (key: number, marker: string, index: number) => {
     rowFor(key)!.click();
@@ -96,15 +108,12 @@ describe("workflow: long chat draws the reading position first", function () {
     await api.openStandaloneForItem(fixture.parentItemId);
     win = (Zotero as any).LLMForZotero.data.standaloneWindow as Window;
     await api.clickStandaloneTab("open");
+    // Both chats start new, so neither has a saved reading position from
+    // an earlier test (the window opens on the last library chat).
+    await startNewChat();
     await api.seedStandaloneConversation(seed("A"));
     keyA = mountedKey();
-    doc()
-      .querySelector<HTMLButtonElement>('[data-sidebar-action="new-chat"]')!
-      .click();
-    await waitUntil(
-      () => mountedKey() > 0 && mountedKey() !== keyA,
-      "new chat mounts",
-    );
+    await startNewChat();
     await api.seedStandaloneConversation(seed("B"));
     keyB = mountedKey();
     await waitUntil(() => Boolean(rowFor(keyA) && rowFor(keyB)), "rows");
@@ -118,14 +127,7 @@ describe("workflow: long chat draws the reading position first", function () {
       chatBox().scrollTop = chatBox().scrollHeight;
       await nextFrame();
       await Zotero.Promise.delay(150);
-      const before = mountedKey();
-      doc()
-        .querySelector<HTMLButtonElement>('[data-sidebar-action="new-chat"]')
-        ?.click();
-      await waitUntil(
-        () => mountedKey() > 0 && mountedKey() !== before,
-        "a new empty chat mounts",
-      );
+      await startNewChat();
     }
     await api.closeStandalone();
     await api.reset();
