@@ -5093,6 +5093,14 @@ export function setupHandlers(
     }
     refreshConversationPanels(body, item);
   };
+  const refreshOwnChatPreservingScroll = () => {
+    if (!item) {
+      refreshChatPreservingScroll();
+      return;
+    }
+    chatDrawCount += 1;
+    refreshChat(body, item);
+  };
 
   resetComposePreviewUI = () => {
     updatePaperPreviewPreservingScroll();
@@ -5165,6 +5173,7 @@ export function setupHandlers(
     syncQueuedFollowUpRegistration,
     updateRuntimeModeButton,
     refreshChatPreservingScroll,
+    refreshOwnChatPreservingScroll,
     resetComposePreviewUI,
     updateModelButton: () => updateModelButton(),
     updateReasoningButton: () => updateReasoningButton(),

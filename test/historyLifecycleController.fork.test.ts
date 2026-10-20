@@ -383,6 +383,7 @@ function createControllerHarness(
     syncQueuedFollowUpRegistration: () => undefined,
     updateRuntimeModeButton: () => undefined,
     refreshChatPreservingScroll: () => undefined,
+    refreshOwnChatPreservingScroll: () => undefined,
     resetComposePreviewUI: () => undefined,
     updateModelButton: () => undefined,
     updateReasoningButton: () => undefined,
@@ -601,6 +602,45 @@ describe("historyLifecycleController fork behavior", function () {
         initializedConversationComposeContextKeys.delete(key);
       }
     }
+  });
+
+  it("draws only its own panel when switching to an already loaded conversation", async function () {
+    conversationRepository.ensureCatalogEntry = async (params) =>
+      makeCatalogEntry({
+        conversationKey: params.conversationKey,
+        kind: "global",
+      });
+    conversationRepository.loadMessages = async () => [
+      makeMessage("user", "Stored question", 5),
+    ];
+    const refreshes: string[] = [];
+    const harness = createControllerHarness({
+      overrides: {
+        refreshChatPreservingScroll: () => refreshes.push("all panels"),
+        refreshOwnChatPreservingScroll: () => refreshes.push("own panel"),
+      },
+    });
+    chatHistory.set(TARGET_CONVERSATION_KEY, [
+      makeMessage("user", "Loaded question", 4),
+    ]);
+    loadedConversationKeys.add(TARGET_CONVERSATION_KEY);
+    assert.isTrue(
+      await harness.controller.switchGlobalConversation(
+        TARGET_CONVERSATION_KEY,
+      ),
+    );
+    assert.deepEqual(refreshes, ["own panel"]);
+
+    // A conversation loaded by the switch itself is new to every panel.
+    chatHistory.delete(SOURCE_CONVERSATION_KEY);
+    loadedConversationKeys.delete(SOURCE_CONVERSATION_KEY);
+    refreshes.length = 0;
+    assert.isTrue(
+      await harness.controller.switchGlobalConversation(
+        SOURCE_CONVERSATION_KEY,
+      ),
+    );
+    assert.deepEqual(refreshes, ["all panels"]);
   });
 
   it("finalizes a pending deleted turn before forking through a later turn and shows the top toast", async function () {

@@ -315,6 +315,8 @@ export type HistoryLifecycleControllerDeps = {
   syncQueuedFollowUpRegistration: () => void;
   updateRuntimeModeButton: () => void;
   refreshChatPreservingScroll: () => void;
+  /** Draws only this panel's chat, not the other panels showing it. */
+  refreshOwnChatPreservingScroll: () => void;
   resetComposePreviewUI: () => void;
   updateModelButton: () => void;
   updateReasoningButton: () => void;
@@ -521,6 +523,32 @@ export function createHistoryLifecycleController(
   const syncQueuedFollowUpRegistration = deps.syncQueuedFollowUpRegistration;
   const updateRuntimeModeButton = deps.updateRuntimeModeButton;
   const refreshChatPreservingScroll = deps.refreshChatPreservingScroll;
+  const refreshOwnChatPreservingScroll = deps.refreshOwnChatPreservingScroll;
+  /** The history a switch target already had in memory, if loaded. */
+  const captureLoadedHistory = (conversationKey: number) =>
+    loadedConversationKeys.has(conversationKey)
+      ? chatHistory.get(conversationKey)
+      : undefined;
+  /**
+   * Draws the chat after a switch. Other panels showing the conversation
+   * already show this history unless the load replaced it, so a switch to a
+   * loaded conversation draws only this panel.
+   */
+  const refreshChatAfterSwitchLoad = (
+    conversationKeyBefore: number,
+    historyBefore: unknown,
+  ) => {
+    const conversationKey = getConversationKey(item as Zotero.Item);
+    if (
+      historyBefore &&
+      conversationKey === conversationKeyBefore &&
+      chatHistory.get(conversationKey) === historyBefore
+    ) {
+      refreshOwnChatPreservingScroll();
+    } else {
+      refreshChatPreservingScroll();
+    }
+  };
   const resetComposePreviewUI = deps.resetComposePreviewUI;
   const updateModelButton = deps.updateModelButton;
   const updateReasoningButton = deps.updateReasoningButton;
@@ -2165,10 +2193,11 @@ export function createHistoryLifecycleController(
     // save this conversation's draft, not the last one's text.
     restoreDraftInputForCurrentConversation();
     resetComposePreviewUI();
+    const historyBeforeLoad = captureLoadedHistory(normalizedConversationKey);
     await ensureConversationLoaded(item as Zotero.Item, { body });
     if (!isPanelOperationLeaseCurrent(hostLease)) return false;
     invalidateHistorySearchDocument(normalizedConversationKey);
-    refreshChatPreservingScroll();
+    refreshChatAfterSwitchLoad(normalizedConversationKey, historyBeforeLoad);
     resetComposePreviewUI();
     updateModelButton();
     updateReasoningButton();
@@ -2422,6 +2451,12 @@ export function createHistoryLifecycleController(
     const moveToOwnWebChatSession =
       isWebChatMode() &&
       !webChatSessionConversationKeys.has(resolvedConversationKey);
+    // A WebChat switch can replace the history; only an ordinary load is
+    // checked for an unchanged history.
+    const historyBeforeLoad =
+      moveToOwnWebChatSession || isWebChatMode()
+        ? undefined
+        : captureLoadedHistory(resolvedConversationKey);
     if (moveToOwnWebChatSession) {
       // The chat's history stays as it is.
     } else if (isWebChatMode()) {
@@ -2440,7 +2475,7 @@ export function createHistoryLifecycleController(
     }
     if (!isPanelOperationLeaseCurrent(hostLease)) return false;
     invalidateHistorySearchDocument(getConversationKey(item as Zotero.Item));
-    refreshChatPreservingScroll();
+    refreshChatAfterSwitchLoad(resolvedConversationKey, historyBeforeLoad);
     resetComposePreviewUI();
     updateModelButton();
     updateReasoningButton();
