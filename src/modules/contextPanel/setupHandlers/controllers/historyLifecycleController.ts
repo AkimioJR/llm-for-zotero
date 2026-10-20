@@ -315,6 +315,8 @@ export type HistoryLifecycleControllerDeps = {
   syncQueuedFollowUpRegistration: () => void;
   updateRuntimeModeButton: () => void;
   refreshChatPreservingScroll: () => void;
+  /** Draws only this panel's chat, not the other panels showing it. */
+  refreshOwnChatPreservingScroll: () => void;
   resetComposePreviewUI: () => void;
   updateModelButton: () => void;
   updateReasoningButton: () => void;
@@ -521,6 +523,32 @@ export function createHistoryLifecycleController(
   const syncQueuedFollowUpRegistration = deps.syncQueuedFollowUpRegistration;
   const updateRuntimeModeButton = deps.updateRuntimeModeButton;
   const refreshChatPreservingScroll = deps.refreshChatPreservingScroll;
+  const refreshOwnChatPreservingScroll = deps.refreshOwnChatPreservingScroll;
+  /** The history a switch target already had in memory, if loaded. */
+  const captureLoadedHistory = (conversationKey: number) =>
+    loadedConversationKeys.has(conversationKey)
+      ? chatHistory.get(conversationKey)
+      : undefined;
+  /**
+   * Draws the chat after a switch. Other panels showing the conversation
+   * already show this history unless the load replaced it, so a switch to a
+   * loaded conversation draws only this panel.
+   */
+  const refreshChatAfterSwitchLoad = (
+    conversationKeyBefore: number,
+    historyBefore: unknown,
+  ) => {
+    const conversationKey = getConversationKey(item as Zotero.Item);
+    if (
+      historyBefore &&
+      conversationKey === conversationKeyBefore &&
+      chatHistory.get(conversationKey) === historyBefore
+    ) {
+      refreshOwnChatPreservingScroll();
+    } else {
+      refreshChatPreservingScroll();
+    }
+  };
   const resetComposePreviewUI = deps.resetComposePreviewUI;
   const updateModelButton = deps.updateModelButton;
   const updateReasoningButton = deps.updateReasoningButton;
@@ -1821,8 +1849,27 @@ export function createHistoryLifecycleController(
   // Counts this panel's history reloads, so a chat-list change this panel
   // already reloaded for (typically its own write) is not reloaded twice.
   let historyReloadsStarted = 0;
-  const refreshGlobalHistoryHeader = async () => {
-    historyReloadsStarted += 1;
+  // A reload that tells the window's list (onConversationHistoryChanged) has
+  // started and no reload has told it yet: a newer reload that replaced it
+  // tells the list instead, even a quiet one.
+  let historyChangeNoticeOwed = false;
+  const noticeHistoryChanged = () => {
+    if (!historyChangeNoticeOwed) return;
+    historyChangeNoticeOwed = false;
+    notifyConversationHistoryChanged();
+  };
+  /**
+   * Reloads the panel's history header and menu, then tells the window's
+   * list. A quiet reload (`quiet: true`) is the one after a plain
+   * conversation switch: the list is the same, so the window's list is not
+   * told. It does not count as a reload for a chat-list change either, so a
+   * change made meanwhile still reloads, and tells the list, by itself.
+   */
+  const refreshGlobalHistoryHeader = async (options?: { quiet?: boolean }) => {
+    if (options?.quiet !== true) {
+      historyReloadsStarted += 1;
+      historyChangeNoticeOwed = true;
+    }
     if (!historyBar || !titleStatic || !item) {
       if (titleStatic) {
         titleStatic.style.display = body.closest(".llm-dedicated-chat-pane")
@@ -1835,7 +1882,7 @@ export function createHistoryLifecycleController(
       // A live pending deletion keeps its undo toast even while the header
       // is unavailable — hiding it here silently withdrew undo mid-window.
       if (!pendingDeletionStore.getLatestPending()) hideHistoryUndoToast();
-      notifyConversationHistoryChanged();
+      noticeHistoryChanged();
       return;
     }
     const libraryID = getCurrentLibraryID();
@@ -2023,11 +2070,16 @@ export function createHistoryLifecycleController(
     titleStatic.style.display = "none";
     historyBar.style.display = "inline-flex";
     renderGlobalHistoryMenu();
-    notifyConversationHistoryChanged();
+    noticeHistoryChanged();
   };
 
+  /**
+   * `quietHistory`: the caller (the standalone window) keeps its own list
+   * current for this switch, so the history reload after it is quiet.
+   */
   const switchGlobalConversation = async (
     nextConversationKey: number,
+    options?: { quietHistory?: boolean },
   ): Promise<boolean> => {
     if (
       !requireCurrentPanelOwnership(body, null, "switch-global-conversation")
@@ -2136,15 +2188,20 @@ export function createHistoryLifecycleController(
     closeExportMenu();
     closeHistoryNewMenu();
     closeHistoryMenu();
+    // The panel is on this conversation now, so its own draft goes into the
+    // composer before the load below: a switch that overtakes this one must
+    // save this conversation's draft, not the last one's text.
+    restoreDraftInputForCurrentConversation();
+    resetComposePreviewUI();
+    const historyBeforeLoad = captureLoadedHistory(normalizedConversationKey);
     await ensureConversationLoaded(item as Zotero.Item, { body });
     if (!isPanelOperationLeaseCurrent(hostLease)) return false;
     invalidateHistorySearchDocument(normalizedConversationKey);
-    restoreDraftInputForCurrentConversation();
-    refreshChatPreservingScroll();
+    refreshChatAfterSwitchLoad(normalizedConversationKey, historyBeforeLoad);
     resetComposePreviewUI();
     updateModelButton();
     updateReasoningButton();
-    void refreshGlobalHistoryHeader();
+    void refreshGlobalHistoryHeader({ quiet: options?.quietHistory === true });
     return true;
   };
 
@@ -2153,6 +2210,8 @@ export function createHistoryLifecycleController(
     options?: {
       paperItem?: Zotero.Item | null;
       allowedCatalogPaperItemID?: number;
+      /** As for switchGlobalConversation. */
+      quietHistory?: boolean;
     },
   ): Promise<boolean> => {
     if (
@@ -2367,6 +2426,21 @@ export function createHistoryLifecycleController(
     syncConversationIdentity();
     refreshAutoLoadedPaperContextForCurrentItem();
     void renderShortcuts(body, item as Zotero.Item, resolveShortcutMode(item));
+    setActiveEditSession(null);
+    endInlineEdit(body);
+    clearForcedSkill();
+    closePaperPicker();
+    closePromptMenu();
+    closeResponseMenu();
+    closeRetryModelMenu();
+    closeExportMenu();
+    closeHistoryNewMenu();
+    closeHistoryMenu();
+    // The panel is on this conversation now, so its own draft goes into the
+    // composer before any load below: a switch that overtakes this one must
+    // save this conversation's draft, not the last one's text.
+    restoreDraftInputForCurrentConversation();
+    resetComposePreviewUI();
     // In WebChat the panel is only ever on a WebChat session row (isolated
     // above), never on the paper's ordinary chat: WebChat empties the chat it
     // is on, and the other surface (on an API model) may show that chat. On
@@ -2377,6 +2451,12 @@ export function createHistoryLifecycleController(
     const moveToOwnWebChatSession =
       isWebChatMode() &&
       !webChatSessionConversationKeys.has(resolvedConversationKey);
+    // A WebChat switch can replace the history; only an ordinary load is
+    // checked for an unchanged history.
+    const historyBeforeLoad =
+      moveToOwnWebChatSession || isWebChatMode()
+        ? undefined
+        : captureLoadedHistory(resolvedConversationKey);
     if (moveToOwnWebChatSession) {
       // The chat's history stays as it is.
     } else if (isWebChatMode()) {
@@ -2394,23 +2474,12 @@ export function createHistoryLifecycleController(
       await ensureConversationLoaded(item as Zotero.Item, { body });
     }
     if (!isPanelOperationLeaseCurrent(hostLease)) return false;
-    setActiveEditSession(null);
-    endInlineEdit(body);
-    clearForcedSkill();
-    closePaperPicker();
-    closePromptMenu();
-    closeResponseMenu();
-    closeRetryModelMenu();
-    closeExportMenu();
-    closeHistoryNewMenu();
-    closeHistoryMenu();
     invalidateHistorySearchDocument(getConversationKey(item as Zotero.Item));
-    restoreDraftInputForCurrentConversation();
-    refreshChatPreservingScroll();
+    refreshChatAfterSwitchLoad(resolvedConversationKey, historyBeforeLoad);
     resetComposePreviewUI();
     updateModelButton();
     updateReasoningButton();
-    void refreshGlobalHistoryHeader();
+    void refreshGlobalHistoryHeader({ quiet: options?.quietHistory === true });
     if (moveToOwnWebChatSession) {
       void deps.moveToOwnWebChatSession().catch((error) => {
         appLogger.warn("LLM: Failed to open the WebChat session", error);
@@ -4466,15 +4535,19 @@ export function createHistoryLifecycleController(
       syncStateFromDeps();
       return refreshGlobalHistoryHeader();
     },
-    switchGlobalConversation: async (nextConversationKey: number) => {
+    switchGlobalConversation: async (
+      nextConversationKey: number,
+      options?: { quietHistory?: boolean },
+    ) => {
       syncStateFromDeps();
-      return switchGlobalConversation(nextConversationKey);
+      return switchGlobalConversation(nextConversationKey, options);
     },
     switchPaperConversation: async (
       nextConversationKey?: number,
       options?: {
         paperItem?: Zotero.Item | null;
         allowedCatalogPaperItemID?: number;
+        quietHistory?: boolean;
       },
     ) => {
       syncStateFromDeps();

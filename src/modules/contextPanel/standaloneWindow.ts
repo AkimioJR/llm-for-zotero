@@ -74,6 +74,7 @@ import {
   bindStandalonePanelHost,
   clearPanelHostBinding,
 } from "./panelHostOwnership";
+import { getPanelHandle } from "./panelHandle";
 import type { ConversationSystem } from "../../shared/types";
 import type { ChatRuntimeMode } from "./types";
 import {
@@ -1653,10 +1654,15 @@ export function openStandaloneChat(options?: {
         }, 0);
       };
 
+      // Timing for the debug log of each conversation switch.
+      const standaloneNowMs = (): number =>
+        newWin.performance?.now?.() ?? Date.now();
+
       const mountChatPanel = (
         nextItem: Zotero.Item,
         rawContextItem?: Zotero.Item | null,
       ) => {
+        const mountStartedAt = standaloneNowMs();
         const mountGeneration = ++standaloneMountGeneration;
         const isCurrentMount = () =>
           !cancelled &&
@@ -1792,6 +1798,7 @@ export function openStandaloneChat(options?: {
         } catch (err) {
           appLogger.warn("LLM: standalone side panel follow failed", err);
         }
+        const mountSyncMs = standaloneNowMs() - mountStartedAt;
 
         void (async () => {
           try {
@@ -1803,10 +1810,181 @@ export function openStandaloneChat(options?: {
             refreshChat(contentArea, mountedItem);
             // Refresh sidebar after conversation is confirmed loaded
             scheduleStandaloneSidebarRender();
+            appLogger.debug("LLM: standalone conversation shown", {
+              path: "remount",
+              conversationKey: activeConversationKey,
+              syncMs: Math.round(mountSyncMs * 10) / 10,
+              totalMs:
+                Math.round((standaloneNowMs() - mountStartedAt) * 10) / 10,
+            });
           } catch (err) {
             appLogger.warn("LLM: standalone mount async failed", err);
           }
         })();
+      };
+
+      /**
+       * Marks `conversationKey`'s row in the History list as the active one,
+       * without reading the list again. Returns false when the list has no
+       * row for it (the list content changed: render it again).
+       */
+      const markStandaloneSidebarActiveRow = (
+        conversationKey: number,
+      ): boolean => {
+        let found = false;
+        for (const row of Array.from(
+          sidebarList.querySelectorAll(".llm-standalone-conv-item"),
+        ) as HTMLElement[]) {
+          const isActive =
+            Number(row.dataset.conversationKey || 0) === conversationKey;
+          row.classList.toggle("active", isActive);
+          if (isActive) found = true;
+        }
+        return found;
+      };
+
+      /**
+       * Shows `nextItem`'s conversation in the mounted panel. When the panel
+       * can move there in place (same runtime, mode, library and paper; see
+       * standaloneConversationSwitch.ts), it keeps its DOM, listeners and
+       * controllers and swaps only the conversation, which it draws once.
+       * Otherwise, or when the in-place switch is refused, this is the full
+       * remount (mountChatPanel).
+       *
+       * In place, the window's History list is not read again: the switch
+       * marks the active row, and renders the list again only when the row
+       * is missing or the chat being left was an empty draft (the list
+       * collapses duplicate drafts around the active chat). Chat-list
+       * changes still reach the list through the panel's history hook.
+       *
+       * The window's state moves at once, as with a mount. The promise
+       * settles once the panel shows the conversation (in place, or rebuilt
+       * after a refused switch), or a newer switch took over; it never
+       * rejects. Callers that act on the panel's conversation next (adding
+       * context to it) wait for it.
+       */
+      const showStandaloneConversation = (
+        nextItem: Zotero.Item,
+        rawContextItem?: Zotero.Item | null,
+      ): Promise<void> => {
+        const startedAt = standaloneNowMs();
+        const resolvedState = resolveInitialPanelItemState(nextItem, {
+          conversationSystem: currentConversationSystem,
+          conversationMode: standaloneMode === "open" ? "global" : "paper",
+          surface: "standalone",
+        });
+        const targetItem = resolvedState.item || nextItem;
+        const handle = getPanelHandle(contentArea);
+        const decision = handle?.resolveConversationSwitch(targetItem) || {
+          inPlace: false as const,
+          reason: "no-panel" as const,
+        };
+        if (!handle || !decision.inPlace) {
+          appLogger.debug("LLM: standalone conversation switch remounts", {
+            reason: decision.inPlace ? "no-panel" : decision.reason,
+          });
+          mountChatPanel(nextItem, rawContextItem);
+          return Promise.resolve();
+        }
+        try {
+          return switchStandaloneConversationInPlace(
+            handle,
+            targetItem,
+            rawContextItem,
+            startedAt,
+          );
+        } catch (err) {
+          // A throw before the switch started leaves the window half-moved;
+          // a rebuild puts it back in one consistent state.
+          appLogger.warn("LLM: standalone in-place switch failed", err);
+          mountChatPanel(nextItem, rawContextItem);
+          return Promise.resolve();
+        }
+      };
+      const switchStandaloneConversationInPlace = (
+        handle: NonNullable<ReturnType<typeof getPanelHandle>>,
+        targetItem: Zotero.Item,
+        rawContextItem: Zotero.Item | null | undefined,
+        startedAt: number,
+      ): Promise<void> => {
+        const switchGeneration = ++standaloneMountGeneration;
+        const isCurrentSwitch = () =>
+          !cancelled &&
+          !newWin.closed &&
+          switchGeneration === standaloneMountGeneration;
+        // Callers may already have moved activeConversationKey; the chat
+        // being left is the one the panel shows.
+        const shownItem = activeContextPanels.get(contentArea)?.() || null;
+        const previousKey = shownItem ? getConversationKey(shownItem) : 0;
+        const rawItemForPanel =
+          rawContextItem ||
+          currentRawContextItem ||
+          resolveConversationBaseItem(targetItem) ||
+          targetItem;
+        // The window's own state, as mountChatPanel writes it. The runtime is
+        // unchanged: an in-place switch never changes it.
+        currentRawContextItem = rawItemForPanel;
+        activeItem = targetItem;
+        activeConversationKey = getConversationKey(targetItem);
+        if (standaloneMode === "paper" && currentBasePaperItem) {
+          const paperItemID = Number(currentBasePaperItem.id || 0);
+          if (paperItemID > 0) {
+            rememberStandalonePaperConversation(
+              currentConversationSystem,
+              getCurrentPaperLibraryID(),
+              paperItemID,
+              activeConversationKey,
+            );
+          }
+        }
+        updateContentTitle();
+        syncPaperTabLabel();
+        // As a mount does, bind the host to the item shown. The new binding
+        // also retires the panel leases taken for the chat being left, so a
+        // request still running there keeps saving but no longer draws here.
+        bindStandalonePanelHost(contentArea, targetItem);
+        activeContextPanelRawItems.set(contentArea, rawItemForPanel);
+        const leftEntry = standaloneSidebarEntriesByKey.get(previousKey);
+        if (
+          !markStandaloneSidebarActiveRow(activeConversationKey) ||
+          (leftEntry && !(Number(leftEntry.userTurnCount) > 0))
+        ) {
+          scheduleStandaloneSidebarRender();
+        }
+        const remountInstead = (reason: string, err?: unknown) => {
+          if (!isCurrentSwitch()) return;
+          (err ? appLogger.warn : appLogger.debug)(
+            "LLM: standalone in-place switch refused",
+            { reason, error: err },
+          );
+          mountChatPanel(targetItem, rawItemForPanel);
+        };
+        return handle.switchConversationInPlace(targetItem).then(
+          (switched) => {
+            if (!isCurrentSwitch()) return;
+            const panelItem = activeContextPanels.get(contentArea)?.() || null;
+            if (
+              !switched ||
+              !panelItem ||
+              getConversationKey(panelItem) !== activeConversationKey
+            ) {
+              remountInstead(switched ? "other-conversation" : "refused");
+              return;
+            }
+            activeItem = panelItem;
+            try {
+              standaloneSidePanel?.onMainMounted();
+            } catch (err) {
+              appLogger.warn("LLM: standalone side panel follow failed", err);
+            }
+            appLogger.debug("LLM: standalone conversation shown", {
+              path: "in-place",
+              conversationKey: activeConversationKey,
+              totalMs: Math.round((standaloneNowMs() - startedAt) * 10) / 10,
+            });
+          },
+          (err) => remountInstead("error", err),
+        );
       };
 
       // -----------------------------------------------------------------------
@@ -2348,7 +2526,7 @@ export function openStandaloneChat(options?: {
               paperTab.classList.add("active");
               openTab.classList.remove("active");
               syncPaperTabLabel();
-              mountChatPanel(portalItem, paperItem);
+              await showStandaloneConversation(portalItem, paperItem);
               mounted = true;
             } finally {
               if (!mounted) targetModeSnapshot.restore();
@@ -2375,7 +2553,7 @@ export function openStandaloneChat(options?: {
               standaloneMode = "open";
               paperTab.classList.remove("active");
               openTab.classList.add("active");
-              mountChatPanel(portalItem);
+              await showStandaloneConversation(portalItem);
               mounted = true;
             } finally {
               if (!mounted) targetModeSnapshot.restore();
@@ -3065,7 +3243,7 @@ export function openStandaloneChat(options?: {
             conversationKey: key,
           });
           if (!newItem) return false;
-          mountChatPanel(newItem);
+          await showStandaloneConversation(newItem);
           return true;
         }
         if (!currentBasePaperItem) return false;
@@ -3077,7 +3255,7 @@ export function openStandaloneChat(options?: {
         });
         currentPaperItem = currentBasePaperItem;
         if (!newItem) return false;
-        mountChatPanel(newItem);
+        await showStandaloneConversation(newItem);
         return true;
       };
 
@@ -3445,15 +3623,7 @@ export function openStandaloneChat(options?: {
 
         const openRow = () => {
           activeConversationKey = key;
-
-          // Update active class
-          const conversationItems = Array.from(
-            sidebarList.querySelectorAll(".llm-standalone-conv-item"),
-          ) as HTMLElement[];
-          for (const el of conversationItems) {
-            el.classList.remove("active");
-          }
-          target.classList.add("active");
+          markStandaloneSidebarActiveRow(key);
 
           if (standaloneMode === "open") {
             const currentLibraryID = getCurrentLibraryScopeID();
@@ -3466,7 +3636,7 @@ export function openStandaloneChat(options?: {
               mode: "open",
               conversationKey: key,
             });
-            if (newItem) mountChatPanel(newItem);
+            if (newItem) void showStandaloneConversation(newItem);
           } else {
             if (currentBasePaperItem) {
               const sessionVersion = Number(
@@ -3479,7 +3649,7 @@ export function openStandaloneChat(options?: {
                 sessionVersion,
               });
               currentPaperItem = currentBasePaperItem;
-              if (newItem) mountChatPanel(newItem);
+              if (newItem) void showStandaloneConversation(newItem);
             }
           }
         };
@@ -3594,9 +3764,9 @@ export function openStandaloneChat(options?: {
         });
       };
 
-      const mountStandaloneOpenConversation = (
+      const mountStandaloneOpenConversation = async (
         conversationKey: number,
-      ): boolean => {
+      ): Promise<boolean> => {
         const normalizedKey = Number.isFinite(conversationKey)
           ? Math.floor(conversationKey)
           : 0;
@@ -3618,8 +3788,8 @@ export function openStandaloneChat(options?: {
         if (!nextItem) {
           return false;
         }
-        mountChatPanel(nextItem);
         scheduleStandaloneSidebarRender();
+        await showStandaloneConversation(nextItem);
         return true;
       };
 
@@ -3638,7 +3808,7 @@ export function openStandaloneChat(options?: {
           }
           if (cancelled) return false;
           await touchStandaloneEmptyDraftActivity(conversationKey, "global");
-          return mountStandaloneOpenConversation(conversationKey);
+          return await mountStandaloneOpenConversation(conversationKey);
         };
 
       const restoreStandaloneOpenConversation = async (
@@ -3661,7 +3831,7 @@ export function openStandaloneChat(options?: {
         if (!conversationKey || cancelled) {
           return false;
         }
-        return mountStandaloneOpenConversation(conversationKey);
+        return await mountStandaloneOpenConversation(conversationKey);
       };
 
       // Icon strip handlers — new chat
@@ -3695,7 +3865,7 @@ export function openStandaloneChat(options?: {
               conversationKey: newKey,
             });
             if (!newItem) return;
-            mountChatPanel(newItem);
+            await showStandaloneConversation(newItem);
             await renderSidebar();
           } else {
             if (currentBasePaperItem) {
@@ -3712,7 +3882,7 @@ export function openStandaloneChat(options?: {
               if (!newItem) return;
               activeConversationKey = newKey;
               currentPaperItem = currentBasePaperItem;
-              mountChatPanel(newItem);
+              await showStandaloneConversation(newItem);
               await renderSidebar();
             }
           }
@@ -4158,7 +4328,7 @@ export function openStandaloneChat(options?: {
             const key = rememberedItem ? getConversationKey(rememberedItem) : 0;
             if (!key) return;
             commitStandaloneMode("open");
-            mountStandaloneOpenConversation(key);
+            await mountStandaloneOpenConversation(key);
             return;
           }
 

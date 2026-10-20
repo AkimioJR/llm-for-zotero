@@ -103,6 +103,16 @@ export function createActionLayoutController(
     );
   })();
 
+  // The last applied layout: what it was computed from and what it wrote.
+  // updateImagePreview and every layout flush call this; most calls change
+  // nothing, and the full pass writes then measures up to five states.
+  let lastLayout: {
+    inputs: string;
+    modelText: string | null;
+    reasoningText: string | null;
+    mode: string | undefined;
+  } | null = null;
+
   const applyResponsiveActionButtonsLayout = () => {
     if (
       !body.isConnected ||
@@ -132,6 +142,42 @@ export function createActionLayoutController(
     // Retained native tabs can stay hidden indefinitely. Their ResizeObserver
     // requests layout when they become measurable again; do not poll frames.
     if (immediateAvailableWidth <= 0) return;
+
+    const layoutInputs = [
+      modelLabel,
+      modelHint,
+      reasoningLabel,
+      reasoningHint,
+      immediateAvailableWidth,
+      panelRoot.clientWidth || 0,
+      Math.ceil(
+        (body as HTMLElement | null)?.getBoundingClientRect?.().width || 0,
+      ),
+      Math.ceil(
+        (uploadBtn?.parentElement || uploadBtn)?.getBoundingClientRect?.()
+          .width || 0,
+      ),
+      // Font changes (Zotero font size, the panel's font scale) change the
+      // measured label widths without changing the row width.
+      body.ownerDocument?.defaultView?.getComputedStyle(modelBtn)?.font || "",
+    ].join("\u0001");
+    if (
+      lastLayout &&
+      lastLayout.inputs === layoutInputs &&
+      lastLayout.modelText === modelBtn.textContent &&
+      lastLayout.reasoningText === (reasoningBtn?.textContent ?? null) &&
+      lastLayout.mode === panelRoot.dataset.llmActionLayoutMode
+    ) {
+      return;
+    }
+    const rememberLayout = () => {
+      lastLayout = {
+        inputs: layoutInputs,
+        modelText: modelBtn.textContent,
+        reasoningText: reasoningBtn?.textContent ?? null,
+        mode: panelRoot.dataset.llmActionLayoutMode,
+      };
+    };
 
     const getComputedSizePx = (
       style: CSSStyleDeclaration | null | undefined,
@@ -468,10 +514,12 @@ export function createActionLayoutController(
     for (const state of candidateStates) {
       if (!doesStateFit(state)) continue;
       applyState(state);
+      rememberLayout();
       return;
     }
 
     applyState(iconOnlyState);
+    rememberLayout();
   };
 
   return {

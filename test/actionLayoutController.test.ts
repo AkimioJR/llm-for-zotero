@@ -5,6 +5,7 @@ function layoutFixture(initialWidth: number, connected = true) {
   let width = initialWidth;
   let geometryReads = 0;
   let styleReads = 0;
+  let classToggles = 0;
   const pendingFrames: FrameRequestCallback[] = [];
   function element(label = "") {
     const classes = new Set<string>();
@@ -22,6 +23,7 @@ function layoutFixture(initialWidth: number, connected = true) {
       getBoundingClientRect: () => ({ width }),
       classList: {
         toggle(name: string, enabled: boolean) {
+          classToggles++;
           if (enabled) classes.add(name);
           else classes.delete(name);
         },
@@ -83,6 +85,9 @@ function layoutFixture(initialWidth: number, connected = true) {
     get styleReads() {
       return styleReads;
     },
+    get classToggles() {
+      return classToggles;
+    },
     advanceFrames(count: number) {
       for (let frame = 0; frame < count; frame++) {
         const callbacks = pendingFrames.splice(0);
@@ -142,5 +147,37 @@ describe("action layout lifetime", function () {
     assert.equal(fixture.modelBtn.textContent, "New model");
     assert.equal(fixture.panelRoot.dataset.llmActionLayoutMode, "full");
     assert.lengthOf(fixture.pendingFrames, 0);
+  });
+
+  it("skips the measure-and-apply pass when nothing it reads has changed", function () {
+    const fixture = layoutFixture(600);
+    const layout = fixture.controller.applyResponsiveActionButtonsLayout;
+    layout();
+    assert.equal(fixture.modelBtn.textContent, "Example model");
+    const togglesAfterFirst = fixture.classToggles;
+    const styleReadsAfterFirst = fixture.styleReads;
+
+    layout();
+    layout();
+    assert.equal(fixture.classToggles, togglesAfterFirst);
+    assert.isAtMost(fixture.styleReads - styleReadsAfterFirst, 2);
+
+    fixture.modelBtn.dataset.modelLabel = "Other model";
+    layout();
+    assert.equal(fixture.modelBtn.textContent, "Other model");
+    assert.isAbove(fixture.classToggles, togglesAfterFirst);
+
+    const togglesAfterLabel = fixture.classToggles;
+    fixture.setWidth(40);
+    layout();
+    assert.isAbove(fixture.classToggles, togglesAfterLabel);
+    assert.equal(fixture.modelBtn.textContent, "");
+
+    // Something else rewrote a label: the next layout restores it.
+    fixture.setWidth(600);
+    layout();
+    fixture.modelBtn.textContent = "stale";
+    layout();
+    assert.equal(fixture.modelBtn.textContent, "Other model");
   });
 });

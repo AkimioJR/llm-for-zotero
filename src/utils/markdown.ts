@@ -2581,6 +2581,84 @@ export function renderMarkdown(
 }
 
 /**
+ * Rendered HTML for whole chat messages, keyed by render target and text.
+ * Switching conversations rebuilds every message bubble, and parsing plus
+ * KaTeX is most of that cost although the text has not changed. The output is
+ * a pure function of (target, text) as long as no image resolver is active and
+ * the Marked parser is in use: the renderer keeps no counters, ids, or dates,
+ * and its raw-HTML tag stack lives in a renderer created per call. Calls that
+ * break one of those conditions skip the cache.
+ */
+export const RENDERED_MARKDOWN_CACHE_MAX_ENTRIES = 2000;
+const RENDERED_MARKDOWN_CACHE_MAX_CHARS = 8 * 1024 * 1024;
+const renderedMarkdownCache = new Map<string, string>();
+let renderedMarkdownCacheChars = 0;
+let renderedMarkdownCacheHits = 0;
+let renderedMarkdownCacheMisses = 0;
+
+/**
+ * renderMarkdown with a bounded LRU cache of its output. Use it for settled
+ * text only; a streaming tail changes every frame and would only churn the
+ * cache, so callers render that with renderMarkdown directly.
+ */
+export function renderMarkdownMemoized(text: string): string {
+  if (!text || !text.trim()) return "";
+  if (markedMarkdownDisabled || activeImageResolver) {
+    return renderMarkdown(text);
+  }
+  const target = getCurrentMarkdownRenderTarget();
+  const cacheKey = `${target}\u0000${text}`;
+  const cached = renderedMarkdownCache.get(cacheKey);
+  if (cached !== undefined) {
+    renderedMarkdownCache.delete(cacheKey);
+    renderedMarkdownCache.set(cacheKey, cached);
+    renderedMarkdownCacheHits += 1;
+    return cached;
+  }
+  renderedMarkdownCacheMisses += 1;
+  const html = renderMarkdown(text);
+  // A failure inside renderMarkdown switches to the legacy parser; that
+  // output is not cached so the cache only ever holds Marked output.
+  if (markedMarkdownDisabled) return html;
+  const entryChars = cacheKey.length + html.length;
+  if (entryChars > RENDERED_MARKDOWN_CACHE_MAX_CHARS / 4) return html;
+  renderedMarkdownCache.set(cacheKey, html);
+  renderedMarkdownCacheChars += entryChars;
+  while (
+    renderedMarkdownCache.size > RENDERED_MARKDOWN_CACHE_MAX_ENTRIES ||
+    renderedMarkdownCacheChars > RENDERED_MARKDOWN_CACHE_MAX_CHARS
+  ) {
+    const oldestKey = renderedMarkdownCache.keys().next().value as
+      | string
+      | undefined;
+    if (oldestKey === undefined) break;
+    const oldest = renderedMarkdownCache.get(oldestKey) || "";
+    renderedMarkdownCache.delete(oldestKey);
+    renderedMarkdownCacheChars -= oldestKey.length + oldest.length;
+  }
+  return html;
+}
+
+export function __getRenderedMarkdownCacheStatsForTest(): {
+  size: number;
+  hits: number;
+  misses: number;
+} {
+  return {
+    size: renderedMarkdownCache.size,
+    hits: renderedMarkdownCacheHits,
+    misses: renderedMarkdownCacheMisses,
+  };
+}
+
+export function __resetRenderedMarkdownCacheForTest(): void {
+  renderedMarkdownCache.clear();
+  renderedMarkdownCacheChars = 0;
+  renderedMarkdownCacheHits = 0;
+  renderedMarkdownCacheMisses = 0;
+}
+
+/**
  * Render markdown to HTML suitable for Zotero note-editor.
  *
  * Math is emitted as the editor's native format

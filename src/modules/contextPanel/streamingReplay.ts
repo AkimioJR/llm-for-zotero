@@ -31,6 +31,7 @@ import {
   taskTurnIndexFor,
 } from "./taskProgress/store";
 import { flushTaskProgressPanels } from "./taskProgress/panel";
+import { flushPendingChatRender } from "./progressiveChatRender";
 
 /** The run events Task progress rebuilds from; streaming text reads none. */
 const RUN_EVENTS_TABLE = "llm_for_zotero_agent_run_events";
@@ -216,6 +217,9 @@ export async function exerciseStreamingReplay(
   setTaskOutcomes(key, runId, checkpoint);
   refreshConversationPanels(body, item);
   await Zotero.Promise.delay(100);
+  // The replay reads the whole history in the DOM; a long one is drawn over
+  // several frames.
+  flushPendingChatRender(box);
   // The scope listing resolves asynchronously from the library index; let it
   // land before measuring, so only text chunks run while mutations count.
   for (
@@ -693,6 +697,9 @@ async function exerciseChatStreamingReplay(
   try {
     refreshConversationPanels(body, item);
     await Zotero.Promise.delay(100);
+    // The replay reads the whole history in the DOM; a long one is drawn
+    // over several frames.
+    flushPendingChatRender(box);
     let wrapper = findWrapper();
     if (!wrapper)
       throw new Error("Chat replay never mounted the streaming answer wrapper");

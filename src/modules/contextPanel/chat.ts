@@ -120,9 +120,11 @@ import {
 } from "../../modelCapabilities";
 import {
   applyModelInputTokenCap,
+  resolveModelInputTokenLimit,
   type ModelInputTokenLimitSource,
 } from "../../utils/modelInputCap";
 import { subscribeModelProviderGroups } from "../../utils/modelProviders";
+import { createModelProviderGroupsPanelSync } from "./modelProviderPanelSync";
 import { formatDisplayModelName } from "../../utils/modelDisplayLabel";
 import type { ProviderProtocol } from "../../utils/providerProtocol";
 import { inferLegacyProviderProtocol } from "../../utils/providerProtocol";
@@ -143,6 +145,7 @@ import {
   writeChatScrollTop,
   persistChatScrollSnapshotForConversationKey,
   setFollowBottomChatScrollSnapshot,
+  setChatBoxConversation,
   withScrollGuard,
 } from "./chatScrollSnapshots";
 import {
@@ -154,6 +157,17 @@ import {
   updateStreamingTurnNavigator,
 } from "./conversationTurnNavigator";
 import { resizeTextareaToContent } from "./textareaSizing";
+import {
+  PROGRESSIVE_CHAT_RENDER_FILL_STEP,
+  PROGRESSIVE_CHAT_RENDER_FRAME_BUDGET_MS,
+  cancelPendingChatRender,
+  clearPendingChatRender,
+  getPendingChatRender,
+  planProgressiveChatRenderRange,
+  resolveAnchorMessageIndex,
+  setPendingChatRender,
+  type PendingChatRender,
+} from "./progressiveChatRender";
 export { withScrollGuard } from "./chatScrollSnapshots";
 
 import { type BlockStreamFlushReason } from "./blockStreamCoalescer";
@@ -437,7 +451,10 @@ import {
 } from "../../agent/store/traceStore";
 import { deliverPendingPlanDocumentMessage } from "../../agent/documents/publication";
 import { materialRefFromDocument } from "../../agent/documents/workflowMaterial";
-import { loadDocumentIdForMessageOwner } from "../../agent/documents/store";
+import {
+  listPlanDocumentOutboxForConversation,
+  loadDocumentIdsForMessageOwners,
+} from "../../agent/documents/store";
 import type { PlanDocument } from "../../agent/documents/types";
 import {
   applyHistoryCompression,
@@ -1823,19 +1840,21 @@ export function syncUserContextAlignmentWidths(body: Element): void {
       ".llm-message-wrapper.user.llm-user-context-aligned",
     ),
   ) as HTMLDivElement[];
-  for (const wrapper of wrappers) {
+  // Read every width first, then write: a layout read after each style
+  // write forced a synchronous reflow per message. A wrapper's width only
+  // sizes its own context rows, so batching does not change the result.
+  const widths = wrappers.map((wrapper) => {
     const bubble = getUserBubbleElement(wrapper);
-    if (!bubble) {
-      wrapper.style.removeProperty("--llm-user-bubble-width");
-      continue;
-    }
-    const bubbleWidth = Math.round(bubble.getBoundingClientRect().width);
+    return bubble ? Math.round(bubble.getBoundingClientRect().width) : 0;
+  });
+  wrappers.forEach((wrapper, index) => {
+    const bubbleWidth = widths[index];
     if (bubbleWidth > 0) {
       wrapper.style.setProperty("--llm-user-bubble-width", `${bubbleWidth}px`);
     } else {
       wrapper.style.removeProperty("--llm-user-bubble-width");
     }
-  }
+  });
 }
 
 /** Legacy cumulative API token usage per conversation key for this UI session. */
@@ -1922,36 +1941,106 @@ function renderContextUsageSnapshot(
   );
 }
 
+/**
+ * Last display estimate per conversation. Every full render recomputes the
+ * gauge, and the estimate walks the whole history (and, above the soft limit,
+ * drops messages one by one), so switching back to a long conversation paid
+ * for it again although nothing had changed. The cap result depends only on
+ * the history messages and the resolved limit, so the key holds both.
+ */
+const historyContextUsageEstimates = new Map<
+  number,
+  { signature: string; snapshot: ContextUsageSnapshot | undefined }
+>();
+const HISTORY_CONTEXT_USAGE_ESTIMATE_LIMIT = 64;
+
+function buildHistoryContextUsageSignature(
+  history: Message[],
+  limitTokens: number,
+  limitSource: ModelInputTokenLimitSource,
+): string {
+  let totalTextLength = 0;
+  for (const message of history) totalTextLength += message.text?.length || 0;
+  const last = history[history.length - 1];
+  return [
+    limitTokens,
+    limitSource,
+    history.length,
+    history[0]?.timestamp ?? "",
+    last?.timestamp ?? "",
+    last?.role ?? "",
+    last?.text?.length ?? 0,
+    totalTextLength,
+  ].join("\u0000");
+}
+
 function estimateHistoryContextUsageSnapshot(
   item: Zotero.Item,
   history: Message[],
   surface?: SelectionSurface,
+  conversationKey?: number,
 ): ContextUsageSnapshot | undefined {
   if (!history.length) return undefined;
   const effectiveRequestConfig = resolveEffectiveRequestConfig({
     item,
     surface,
   });
+  const modelName = effectiveRequestConfig.model || "";
+  const inputTokenCap = effectiveRequestConfig.advanced?.inputTokenCap;
+  const identity = {
+    apiBase: effectiveRequestConfig.apiBase,
+    protocol: effectiveRequestConfig.providerProtocol,
+    authMode: effectiveRequestConfig.authMode,
+    profileOverride: effectiveRequestConfig.advanced?.profileOverride,
+  };
+  let signature = "";
+  if (typeof conversationKey === "number") {
+    const resolvedLimit = resolveModelInputTokenLimit(
+      modelName,
+      inputTokenCap,
+      identity,
+    );
+    signature = buildHistoryContextUsageSignature(
+      history,
+      resolvedLimit.limitTokens,
+      resolvedLimit.source,
+    );
+    const cached = historyContextUsageEstimates.get(conversationKey);
+    if (cached && cached.signature === signature) {
+      return cached.snapshot ? { ...cached.snapshot } : undefined;
+    }
+  }
   const messages = buildLLMHistoryMessages(history);
   const inputCap = applyModelInputTokenCap(
     messages,
-    effectiveRequestConfig.model || "",
-    effectiveRequestConfig.advanced?.inputTokenCap,
-    {
-      apiBase: effectiveRequestConfig.apiBase,
-      protocol: effectiveRequestConfig.providerProtocol,
-      authMode: effectiveRequestConfig.authMode,
-      profileOverride: effectiveRequestConfig.advanced?.profileOverride,
-    },
+    modelName,
+    inputTokenCap,
+    identity,
   );
-  if (inputCap.estimatedAfterTokens <= 0) return undefined;
-  return {
-    contextTokens: inputCap.estimatedAfterTokens,
-    contextWindow: inputCap.limitTokens,
-    inputLimitSource: inputCap.limitSource,
-    estimated: true,
-    source: "estimated",
-  };
+  const snapshot: ContextUsageSnapshot | undefined =
+    inputCap.estimatedAfterTokens <= 0
+      ? undefined
+      : {
+          contextTokens: inputCap.estimatedAfterTokens,
+          contextWindow: inputCap.limitTokens,
+          inputLimitSource: inputCap.limitSource,
+          estimated: true,
+          source: "estimated",
+        };
+  if (typeof conversationKey === "number") {
+    historyContextUsageEstimates.delete(conversationKey);
+    if (
+      historyContextUsageEstimates.size >= HISTORY_CONTEXT_USAGE_ESTIMATE_LIMIT
+    ) {
+      const oldest = historyContextUsageEstimates.keys().next().value;
+      if (oldest !== undefined) historyContextUsageEstimates.delete(oldest);
+    }
+    historyContextUsageEstimates.set(conversationKey, {
+      signature,
+      snapshot: snapshot ? { ...snapshot } : undefined,
+    });
+  }
+  return snapshot;
 }
 
 export function refreshActiveConversationPanels(
@@ -1973,7 +2062,22 @@ export function refreshActiveConversationPanels(
   }
 }
 
-subscribeModelProviderGroups(refreshActiveConversationPanels);
+// Saved model providers changed (Settings). Each open panel syncs its model
+// controls; chats rebuild only when the runtime model entries they render
+// with changed. See modelProviderPanelSync.ts.
+const modelProviderGroupsPanelSync = createModelProviderGroupsPanelSync({
+  listPanels: () => activeContextPanels.keys(),
+  readModelEntriesSignature: () => JSON.stringify(getAvailableModelEntries()),
+  refreshAllPanels: () => refreshActiveConversationPanels(),
+});
+
+/** Register a panel's light model-control sync for provider changes. */
+export const registerContextPanelModelSync =
+  modelProviderGroupsPanelSync.register;
+
+subscribeModelProviderGroups(
+  modelProviderGroupsPanelSync.onModelProviderGroupsChanged,
+);
 
 // The one writer of a past chat the agent attached (past_chat_attach): the
 // in-memory user message gets the chip, then its row is saved.
@@ -2149,9 +2253,12 @@ async function publishPersistedPlanDocumentIfPresent(params: {
       ? Math.floor(Number(params.timestamp))
       : Date.now(),
     documentId: params.documentId || params.planDocumentId,
+    // Announce before the delivered mark commits: a failure here leaves the
+    // outbox entry pending, so the next first load repairs the trace.
+    beforeDelivered: (pending) =>
+      announceFinalizedMaterialForRun(params.agentRunId, pending),
   });
   if (!document) return;
-  await announceFinalizedMaterialForRun(params.agentRunId, document);
   // Delivery is what announces the finalized material. Refresh this
   // conversation's views once it is durable, so the trace paints the material
   // row, without rebuilding unrelated chats that the user may be reading.
@@ -2934,35 +3041,54 @@ export async function ensureConversationLoaded(
         PERSISTED_HISTORY_LIMIT,
         conversationSystem,
       );
-      for (const storedMessage of storedMessages) {
-        if (
-          storedMessage.role !== "assistant" ||
-          storedMessage.documentId ||
-          !Number.isFinite(storedMessage.timestamp)
-        ) {
-          continue;
+      const ownerlessAssistantMessages = storedMessages.filter(
+        (storedMessage) =>
+          storedMessage.role === "assistant" &&
+          !storedMessage.documentId &&
+          Number.isFinite(storedMessage.timestamp),
+      );
+      if (ownerlessAssistantMessages.length) {
+        // One query for the conversation instead of one per message.
+        const documentIdsByTimestamp = await loadDocumentIdsForMessageOwners({
+          conversationKey,
+          sourceMessageTimestamps: ownerlessAssistantMessages.map(
+            (storedMessage) => Math.floor(storedMessage.timestamp),
+          ),
+        });
+        for (const storedMessage of ownerlessAssistantMessages) {
+          storedMessage.documentId =
+            documentIdsByTimestamp.get(Math.floor(storedMessage.timestamp)) ||
+            undefined;
         }
-        storedMessage.documentId =
-          (await loadDocumentIdForMessageOwner({
-            conversationKey,
-            sourceMessageTimestamp: Math.floor(storedMessage.timestamp),
-          })) || undefined;
       }
       // A saved quote location holds only while its PDF is the file it was
       // found in; drop the others in memory so the gate checks them again.
       await reconcilePersistedQuoteLocations(storedMessages);
       // Recover the application-level document outbox after a crash between
       // durable message insertion and publication evidence/event delivery.
-      for (const storedMessage of storedMessages) {
-        if (storedMessage.role !== "assistant" || !storedMessage.text) continue;
-        await publishPersistedPlanDocumentIfPresent({
-          conversationKey,
-          text: storedMessage.text,
-          timestamp: storedMessage.timestamp,
-          agentRunId: storedMessage.agentRunId,
-          documentId: storedMessage.documentId,
-          planDocumentId: storedMessage.planDocumentId,
-        });
+      // Only a pending outbox entry needs recovery. Delivering an already
+      // delivered document again opened a transaction and refreshed every
+      // panel showing this chat, an extra full render on each first load.
+      const publishableMessages = storedMessages.filter(
+        (storedMessage) =>
+          storedMessage.role === "assistant" && Boolean(storedMessage.text),
+      );
+      const hasPendingDocumentDelivery =
+        publishableMessages.length > 0 &&
+        (await listPlanDocumentOutboxForConversation(conversationKey)).some(
+          (entry) => entry.status === "pending",
+        );
+      if (hasPendingDocumentDelivery) {
+        for (const storedMessage of publishableMessages) {
+          await publishPersistedPlanDocumentIfPresent({
+            conversationKey,
+            text: storedMessage.text,
+            timestamp: storedMessage.timestamp,
+            agentRunId: storedMessage.agentRunId,
+            documentId: storedMessage.documentId,
+            planDocumentId: storedMessage.planDocumentId,
+          });
+        }
       }
       // Render reads the existence result from a cache; fill it before the
       // freshness check so no await sits between that check and the write.
@@ -10530,6 +10656,22 @@ function renderChatForPanel(
   const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
   if (!chatBox) return;
   if (item) initializeChatScrollViewport(getConversationKey(item), chatBox);
+  const pendingRender = getPendingChatRender(chatBox);
+  if (
+    item &&
+    options.rerenderAssistantMessages?.size &&
+    pendingRender?.conversationKey === getConversationKey(item)
+  ) {
+    // A message still waiting to be drawn is drawn from its current state
+    // when its turn comes; only the drawn ones need the targeted update.
+    const drawnRerenders = new Set(
+      Array.from(options.rerenderAssistantMessages).filter(
+        (message) => !pendingRender.isPending(message),
+      ),
+    );
+    if (!drawnRerenders.size) return;
+    options = { ...options, rerenderAssistantMessages: drawnRerenders };
+  }
   if (item && options.rerenderAssistantMessages) {
     const rerenderConversationKey = getConversationKey(item);
     let updatedInPlace = false;
@@ -10561,6 +10703,8 @@ function renderChatForPanel(
     resolvePaperContextDisplayRef(paperContext, paperContextDisplayCache);
 
   if (!item) {
+    cancelPendingChatRender(chatBox);
+    setChatBoxConversation(chatBox, null);
     chatBox.innerHTML = getPaperChatStartPageHtml();
     const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
     if (panelRoot) panelRoot.dataset.startPageActive = "true";
@@ -10611,6 +10755,7 @@ function renderChatForPanel(
       item,
       history,
       resolveSelectionSurfaceForBody(body),
+      conversationKey,
     );
     const configuredLimitIsUserAuthoritative =
       recomputedSnapshot?.inputLimitSource === "advanced" ||
@@ -10683,6 +10828,12 @@ function renderChatForPanel(
     endInlineEdit(body);
   }
 
+  if (!useTargetedRerender) {
+    // A full rebuild replaces whatever an earlier render still had to draw,
+    // and from here the box shows this conversation.
+    cancelPendingChatRender(chatBox);
+    setChatBoxConversation(chatBox, conversationKey);
+  }
   if (history.length === 0) {
     // [webchat] Show webchat-specific welcome instead of generic instructions
     const effectiveRequestConfig = resolveEffectiveRequestConfig({
@@ -10745,7 +10896,9 @@ function renderChatForPanel(
     item,
     surface: resolveSelectionSurfaceForBody(body),
   }).providerProtocol;
-  const conversationIsIdle = !history.some((m) => m.streaming);
+  // Older messages of a long conversation can be drawn on later frames; they
+  // read the conversation's busy state when they are drawn.
+  let conversationIsIdle = !history.some((m) => m.streaming);
   const canEditPromptAt = (index: number) =>
     !turnRewriteDisabled &&
     canEditUserPromptTurn({
@@ -10777,10 +10930,11 @@ function renderChatForPanel(
       }
     }
   }
-  for (const [index, msg] of history.entries()) {
-    if (useTargetedRerender && !targetedMessageWrappers.has(msg)) {
-      continue;
-    }
+  const renderMessageInto = (
+    index: number,
+    msg: Message,
+    target: Node,
+  ): void => {
     const isUser = msg.role === "user";
     const assistantPairMsg = history[index + 1];
     const hasAssistantPair = isUser && assistantPairMsg?.role === "assistant";
@@ -10899,7 +11053,9 @@ function renderChatForPanel(
         previewWrap.appendChild(previewImg);
 
         const thumbButtons: HTMLButtonElement[] = [];
-        screenshotImages.forEach((imageUrl, index) => {
+        const thumbImages: HTMLImageElement[] = [];
+        let thumbSourcesSet = false;
+        screenshotImages.forEach((_imageUrl, index) => {
           const thumbBtn = doc.createElementNS(
             HTML_NS,
             "button",
@@ -10910,8 +11066,10 @@ function renderChatForPanel(
 
           const thumbImg = doc.createElement("img") as HTMLImageElement;
           thumbImg.className = "llm-user-screenshot-thumb-img";
-          thumbImg.src = imageUrl;
+          // The source is set on first expand (see applyScreenshotState):
+          // decoding base64 images for a collapsed strip slowed every render.
           thumbImg.alt = `Screenshot ${index + 1}`;
+          thumbImages.push(thumbImg);
           thumbBtn.appendChild(thumbImg);
 
           const activateScreenshotThumb = (e: Event) => {
@@ -10959,7 +11117,15 @@ function renderChatForPanel(
           );
           screenshotExpandedEl.hidden = !expanded;
           screenshotExpandedEl.style.display = expanded ? "flex" : "none";
-          previewImg.src = screenshotImages[activeIndex];
+          if (expanded) {
+            if (!thumbSourcesSet) {
+              thumbSourcesSet = true;
+              thumbImages.forEach((thumbImg, index) => {
+                thumbImg.src = screenshotImages[index];
+              });
+            }
+            previewImg.src = screenshotImages[activeIndex];
+          }
           thumbButtons.forEach((btn, index) => {
             btn.classList.toggle("active", index === activeIndex);
           });
@@ -11893,6 +12059,9 @@ function renderChatForPanel(
       const agentTraceReplacesAssistantTurn =
         agentTraceEl?.dataset.llmAssistantTurnReplacement === "true";
       let answerHost: HTMLElement | undefined;
+      // renderAssistantRichText decorates citations inside the answer host;
+      // the whole-bubble pass below is only needed for other content.
+      let answerCitationsDecorated = false;
       if (hasAnswerText && !agentUsesInterleavedText) {
         const safeText = buildAssistantDisplayMarkdownForRender(
           msg,
@@ -11923,6 +12092,7 @@ function renderChatForPanel(
                 scheduleChatScrollReconciliation(conversationKey, chatBox);
               },
             });
+            answerCitationsDecorated = true;
           } catch (err) {
             appLogger.warn("LLM render error:", err);
             answerHost.textContent = safeText;
@@ -12046,7 +12216,16 @@ function renderChatForPanel(
         }
       }
 
-      if (!agentTraceReplacesAssistantTurn) {
+      // A second, whole-bubble pass covers citations that live outside the
+      // answer host: trace text (including interleaved answer text), the
+      // reasoning panel, and generated images. When the answer host is the
+      // only content, it was already decorated while it rendered.
+      const bubbleHasOnlyDecoratedAnswer =
+        answerCitationsDecorated &&
+        !agentTraceEl &&
+        !mountedReasoning &&
+        !hasGeneratedImages;
+      if (!agentTraceReplacesAssistantTurn && !bubbleHasOnlyDecoratedAnswer) {
         decorateCompletedAssistantCitationLinks({
           body,
           panelItem: item,
@@ -12431,7 +12610,7 @@ function renderChatForPanel(
       existingTargetedWrapper.replaceWith(wrapper);
       restoreExpandedQuoteCards(wrapper, expandedQuoteCards);
     } else {
-      chatBox.appendChild(wrapper);
+      target.appendChild(wrapper);
     }
     if (
       !useTargetedRerender &&
@@ -12446,11 +12625,259 @@ function renderChatForPanel(
       markerBubble.className = "llm-bubble";
       renderForkSourceMarkerInto(markerBubble, body, doc, forkLink);
       markerWrapper.appendChild(markerBubble);
-      chatBox.appendChild(markerWrapper);
+      target.appendChild(markerWrapper);
     }
     if (isUser && hasUserContext) {
       wrapper.classList.add("llm-user-context-aligned");
     }
+  };
+
+  // A long conversation draws the messages at the reading position (the
+  // newest ones, or the ones around a restored scroll anchor) now and the
+  // rest on later frames (see progressiveChatRender.ts).
+  const renderMessagesProgressively = (): void => {
+    const total = history.length;
+    const anchorIndex =
+      baselineSnapshot.mode === "manual"
+        ? resolveAnchorMessageIndex(history, baselineSnapshot.anchor)
+        : -1;
+    const firstPassRange = planProgressiveChatRenderRange({
+      total,
+      allowed:
+        !panelExtensions?.afterRender &&
+        !panelExtensions?.readOnly &&
+        !panelExtensions?.sideChat,
+      scrollMode: baselineSnapshot.mode,
+      anchorIndex,
+      requiredIndices: panelEditIndex >= 0 ? [panelEditIndex] : [],
+    });
+    const firstPass = doc.createDocumentFragment();
+    for (
+      let index = firstPassRange.start;
+      index < firstPassRange.end;
+      index += 1
+    ) {
+      renderMessageInto(index, history[index], firstPass);
+    }
+    chatBox.appendChild(firstPass);
+    if (firstPassRange.start <= 0 && firstPassRange.end >= total) return;
+
+    // Messages [drawnFrom, drawnTo) are in the DOM.
+    let drawnFrom = firstPassRange.start;
+    let drawnTo = firstPassRange.end;
+    const messageWrapperAt = (index: number): HTMLElement | null => {
+      for (const child of Array.from(chatBox.children) as HTMLElement[]) {
+        if (child.dataset.messageIndex === `${index}`) return child;
+      }
+      return null;
+    };
+    // Older messages go before the first drawn one; newer ones after the
+    // last drawn one and its fork marker, before any card that follows.
+    const insertionPoint = (
+      side: "above" | "below",
+    ): { parent: HTMLDivElement; before: ChildNode | null } | null => {
+      if (side === "above") {
+        const first = messageWrapperAt(drawnFrom);
+        return first ? { parent: chatBox, before: first } : null;
+      }
+      const last = messageWrapperAt(drawnTo - 1);
+      if (!last) return null;
+      let before = last.nextElementSibling;
+      while (before?.classList.contains("llm-fork-source-marker-wrapper")) {
+        before = before.nextElementSibling;
+      }
+      return { parent: chatBox, before };
+    };
+    const drawRange = (from: number, to: number, side: "above" | "below") => {
+      const point = insertionPoint(side);
+      if (!point) return false;
+      const fragment = doc.createDocumentFragment();
+      for (let index = from; index < to; index += 1) {
+        renderMessageInto(index, history[index], fragment);
+      }
+      point.parent.insertBefore(fragment, point.before);
+      return true;
+    };
+    // The first paint has two viewports of messages on each side of the
+    // reading position (the bottom, or the restored anchor), so the position
+    // lands exactly and a short scroll never reaches an edge before the
+    // next frame adds more.
+    const readingTop = (): number | null => {
+      if (anchorIndex < 0) return null;
+      const anchor = messageWrapperAt(anchorIndex);
+      return anchor ? anchor.getBoundingClientRect().top : null;
+    };
+    const heightAbove = (): number => {
+      const first = messageWrapperAt(drawnFrom);
+      const top = readingTop();
+      if (!first) return Number.POSITIVE_INFINITY;
+      if (top === null) return chatBox.scrollHeight;
+      return top - first.getBoundingClientRect().top;
+    };
+    const heightBelow = (): number => {
+      const last = messageWrapperAt(drawnTo - 1);
+      const top = readingTop();
+      if (!last || top === null) return Number.POSITIVE_INFINITY;
+      return last.getBoundingClientRect().bottom - top;
+    };
+    const wanted = () => chatBox.clientHeight * 2;
+    while (
+      drawnTo < total &&
+      chatBox.clientHeight > 0 &&
+      heightBelow() < wanted()
+    ) {
+      const to = Math.min(total, drawnTo + PROGRESSIVE_CHAT_RENDER_FILL_STEP);
+      if (!drawRange(drawnTo, to, "below")) break;
+      drawnTo = to;
+    }
+    while (
+      drawnFrom > 0 &&
+      chatBox.clientHeight > 0 &&
+      heightAbove() < wanted()
+    ) {
+      const from = Math.max(0, drawnFrom - PROGRESSIVE_CHAT_RENDER_FILL_STEP);
+      if (!drawRange(from, drawnFrom, "above")) break;
+      drawnFrom = from;
+    }
+    if (drawnFrom <= 0 && drawnTo >= total) return;
+
+    const win = doc.defaultView;
+    const now = () => win?.performance?.now?.() ?? Date.now();
+    const rawHistoryAtRender = rawHistory;
+    const rawLengthAtRender = rawHistory.length;
+    const waiting = new Set<Message>([
+      ...history.slice(0, drawnFrom),
+      ...history.slice(drawnTo),
+    ]);
+    let frameHandle: number | null = null;
+    let done = false;
+    const stop = () => {
+      done = true;
+      if (frameHandle !== null) win?.cancelAnimationFrame(frameHandle);
+      frameHandle = null;
+      waiting.clear();
+      clearPendingChatRender(chatBox, pending);
+    };
+    const isStillShown = () =>
+      chatBox.isConnected &&
+      Number(panelRoot?.dataset.itemId || 0) === conversationKey;
+    const drawWaiting = (budgetMs: number) => {
+      frameHandle = null;
+      if (done) return;
+      if (
+        !isStillShown() ||
+        chatHistory.get(conversationKey) !== rawHistoryAtRender ||
+        rawHistoryAtRender.length !== rawLengthAtRender
+      ) {
+        // The history changed under the waiting messages without a full
+        // render of this panel; draw it again from the current history.
+        const redraw = isStillShown();
+        stop();
+        if (redraw) refreshChat(body, item);
+        return;
+      }
+      conversationIsIdle = !history.some((m) => m.streaming);
+      const started = now();
+      const overBudget = () => now() - started >= budgetMs;
+      let inserted = true;
+      withScrollGuard(chatBox, conversationKey, () => {
+        // Newer messages first: the end of the conversation is where new
+        // turns and their cards arrive.
+        if (drawnTo < total) {
+          const point = insertionPoint("below");
+          if (!point) {
+            inserted = false;
+            return;
+          }
+          const fragment = doc.createDocumentFragment();
+          let to = drawnTo;
+          do {
+            renderMessageInto(to, history[to], fragment);
+            waiting.delete(history[to]);
+            to += 1;
+          } while (to < total && !overBudget());
+          // A render started while these were built owns the box now.
+          if (
+            done ||
+            (point.before && point.before.parentNode !== point.parent)
+          ) {
+            inserted = false;
+            return;
+          }
+          point.parent.insertBefore(fragment, point.before);
+          drawnTo = to;
+        }
+        if (drawnFrom > 0 && !overBudget()) {
+          const point = insertionPoint("above");
+          if (!point) {
+            inserted = false;
+            return;
+          }
+          const fragment = doc.createDocumentFragment();
+          let from = drawnFrom;
+          do {
+            from -= 1;
+            const messageNodes = doc.createDocumentFragment();
+            renderMessageInto(from, history[from], messageNodes);
+            fragment.insertBefore(messageNodes, fragment.firstChild);
+            waiting.delete(history[from]);
+          } while (from > 0 && !overBudget());
+          if (
+            done ||
+            (point.before && point.before.parentNode !== point.parent)
+          ) {
+            inserted = false;
+            return;
+          }
+          point.parent.insertBefore(fragment, point.before);
+          drawnFrom = from;
+        }
+        syncUserContextAlignmentWidths(body);
+      });
+      if (!inserted) {
+        stop();
+        return;
+      }
+      if (drawnFrom > 0 || drawnTo < total) {
+        schedule();
+        return;
+      }
+      stop();
+      syncConversationTurnNavigator(body, history, { conversationKey });
+    };
+    const schedule = () => {
+      if (done || frameHandle !== null) return;
+      if (win?.requestAnimationFrame) {
+        frameHandle = win.requestAnimationFrame(() =>
+          drawWaiting(PROGRESSIVE_CHAT_RENDER_FRAME_BUDGET_MS),
+        );
+      } else {
+        drawWaiting(Number.POSITIVE_INFINITY);
+      }
+    };
+    const pending: PendingChatRender = {
+      conversationKey,
+      isPending: (message) => waiting.has(message as Message),
+      flush: () => {
+        if (done) return;
+        if (frameHandle !== null) win?.cancelAnimationFrame(frameHandle);
+        frameHandle = null;
+        drawWaiting(Number.POSITIVE_INFINITY);
+      },
+      cancel: stop,
+    };
+    setPendingChatRender(chatBox, pending);
+    schedule();
+  };
+
+  if (useTargetedRerender) {
+    for (const [index, msg] of history.entries()) {
+      if (targetedMessageWrappers.has(msg)) {
+        renderMessageInto(index, msg, chatBox);
+      }
+    }
+  } else {
+    renderMessagesProgressively();
   }
 
   syncTaskProgressPanel(body);

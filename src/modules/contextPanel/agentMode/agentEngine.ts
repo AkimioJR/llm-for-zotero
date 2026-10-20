@@ -148,6 +148,7 @@ import {
 import { synthesizeSelectedTextContexts } from "../../../services/context/normalizers";
 import { resolveSelectedTextAnchors } from "../selectedTextAnchors";
 import { getPanelHandle } from "../panelHandle";
+import { flushPendingChatRender } from "../progressiveChatRender";
 
 function readUsageNumber(record: Record<string, unknown>, key: string): number {
   const value = record[key];
@@ -1069,6 +1070,8 @@ function findRenderedPendingActionCard(
   chatBox: HTMLElement,
   requestId: string,
 ): HTMLElement | null {
+  // The card's message may still be waiting to be drawn.
+  flushPendingChatRender(chatBox);
   const cards = Array.from(
     chatBox.querySelectorAll(".llm-agent-hitl-card[data-request-id]"),
   ) as HTMLElement[];

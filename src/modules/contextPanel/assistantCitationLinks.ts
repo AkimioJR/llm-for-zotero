@@ -320,6 +320,9 @@ export const INLINE_CITATION_SKIP_SELECTOR = [
   ".llm-quote-citation-anchor",
   ".llm-quote-card",
   ".llm-paper-source-indicator",
+  // KaTeX's hidden MathML copy repeats the formula's text; a citation found
+  // there would be decorated a second time where no reader can see it.
+  ".katex-mathml",
 ].join(", ");
 
 const INLINE_CITATION_PATTERN =
@@ -4495,16 +4498,20 @@ export function decorateAssistantCitationLinks(params: {
   ) as Element[];
   const rawBlockquoteTexts =
     extractMarkdownBlockquoteTextsForCitationDecoration(display.markdown);
-  appLogger.debug(
-    "LLM citation decoration: blockquotes found =",
-    blockquotes.length,
-    "candidates =",
-    candidates.length,
-    "bubble HTML length =",
-    String(params.bubble.innerHTML || "").length,
-    "bubble child count =",
-    params.bubble.childElementCount,
-  );
+  // Serializing the bubble is expensive; build the argument only when the
+  // debug level is on.
+  if (appLogger.isEnabled("debug")) {
+    appLogger.debug(
+      "LLM citation decoration: blockquotes found =",
+      blockquotes.length,
+      "candidates =",
+      candidates.length,
+      "bubble HTML length =",
+      String(params.bubble.innerHTML || "").length,
+      "bubble child count =",
+      params.bubble.childElementCount,
+    );
+  }
   for (const [blockquoteIndex, blockquote] of blockquotes.entries()) {
     if (
       blockquote.closest(

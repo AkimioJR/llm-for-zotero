@@ -200,6 +200,7 @@ import {
   editLatestUserMessageAndRetry,
   editUserTurnAndRetry,
   findLatestRetryPair,
+  registerContextPanelModelSync,
   type EditLatestTurnMarker,
 } from "./chat";
 import { scheduleConversationQuoteRevalidation } from "./quoteValidation/scheduling";
@@ -232,6 +233,11 @@ import {
   unpublishPanelHandle,
   type PanelHandle,
 } from "./panelHandle";
+import {
+  resolveStandaloneConversationSwitch,
+  type StandaloneConversationSwitchDecision,
+} from "./standaloneConversationSwitch";
+import { createChatInputLock } from "./chatInputLock";
 import {
   getActiveContextAttachmentFromTabs,
   addSelectedTextContext,
@@ -1268,7 +1274,9 @@ export function setupHandlers(
     }
     if (codexModelCatalogInFlight && !pathChanged)
       return codexModelCatalogInFlight;
-    if (pathChanged) codexModelCatalogModels = [];
+    if (pathChanged) {
+      codexModelCatalogModels = [];
+    }
     const requestId = ++codexModelCatalogRequestId;
     const isCurrentRequest = () =>
       !setupHandlersCleaned &&
@@ -1492,12 +1500,14 @@ export function setupHandlers(
   let refreshGlobalHistoryHeader: () => Promise<void> = async () => {};
   let switchGlobalConversation: (
     nextConversationKey: number,
+    options?: { quietHistory?: boolean },
   ) => Promise<boolean> = async () => false;
   let switchPaperConversation: (
     nextConversationKey?: number,
     options?: {
       paperItem?: Zotero.Item | null;
       allowedCatalogPaperItemID?: number;
+      quietHistory?: boolean;
     },
   ) => Promise<boolean | void> = async () => {};
   let createAndSwitchGlobalConversation: (
@@ -2097,6 +2107,7 @@ export function setupHandlers(
   let cleanupPrefObservers: (() => void) | null = null;
   let cleanupMineruPaperSourceObservers: (() => void) | null = null;
   let cleanupModelCapabilitySubscription: (() => void) | null = null;
+  let cleanupModelProviderSync: (() => void) | null = null;
   let codexDirectController: CodexDirectModelReasoningController | null = null;
   {
     const agentPrefKey = `${config.prefsPrefix}.enableAgentMode`;
@@ -5083,6 +5094,14 @@ export function setupHandlers(
     }
     refreshConversationPanels(body, item);
   };
+  const refreshOwnChatPreservingScroll = () => {
+    if (!item) {
+      refreshChatPreservingScroll();
+      return;
+    }
+    chatDrawCount += 1;
+    refreshChat(body, item);
+  };
 
   resetComposePreviewUI = () => {
     updatePaperPreviewPreservingScroll();
@@ -5155,6 +5174,7 @@ export function setupHandlers(
     syncQueuedFollowUpRegistration,
     updateRuntimeModeButton,
     refreshChatPreservingScroll,
+    refreshOwnChatPreservingScroll,
     resetComposePreviewUI,
     updateModelButton: () => updateModelButton(),
     updateReasoningButton: () => updateReasoningButton(),
@@ -5440,20 +5460,23 @@ export function setupHandlers(
       (screenshotBtn.disabled !==
         (screenshotUnsupported || imageCount >= MAX_SELECTED_IMAGES) ||
         (screenshotUnsupported && imageCount > 0));
-    if (
-      onlyIfChanged &&
-      !screenshotStateChanged &&
-      modelBtn.dataset.modelLabel === modelLabel &&
-      modelBtn.dataset.modelHint === modelHint &&
-      modelBtn.disabled === !item
-    )
-      return;
+    const buttonChanged =
+      modelBtn.dataset.modelLabel !== modelLabel ||
+      modelBtn.dataset.modelHint !== modelHint ||
+      modelBtn.disabled !== !item;
+    if (onlyIfChanged && !screenshotStateChanged && !buttonChanged) return;
     withScrollGuard(chatBox, conversationKey, () => {
       modelBtn.dataset.modelLabel = modelLabel;
       modelBtn.dataset.modelHint = modelHint;
       modelBtn.disabled = !item;
       scheduleResponsiveLayoutSync();
-      updateImagePreviewPreservingScroll();
+      // The image preview shows the model's screenshot support and names the
+      // model in its disabled hint. Rebuilding every preview (paper chips,
+      // files, task progress) when neither changed made each model-menu open
+      // pay for a full panel-state refresh.
+      if (buttonChanged || screenshotStateChanged) {
+        updateImagePreviewPreservingScroll();
+      }
     });
   };
 
@@ -5641,10 +5664,8 @@ export function setupHandlers(
 
   const rebuildModelMenu = () => {
     if (!item || !modelMenu) return;
-    // Refresh cached provider catalogs when the picker is opened.  The current
-    // snapshot renders synchronously; a subsequent open reflects new models.
-    void refreshModelCapabilityRegistry();
-    void refreshConfiguredProviderModelCatalogs();
+    // No catalog refresh here: a refresh notifies capability listeners, which
+    // rebuild an open menu. openModelMenu starts the refresh once per open.
     const { groupedChoices, selectedEntryId } = getSelectedModelInfo();
 
     modelMenu.innerHTML = "";
@@ -6752,6 +6773,12 @@ export function setupHandlers(
     if (setupHandlersCleaned) return;
     syncModelFromPrefs();
   });
+  // Settings edits to the saved providers: update the model and reasoning
+  // controls in place (chat.ts rebuilds the chat only when needed).
+  cleanupModelProviderSync = registerContextPanelModelSync(body, () => {
+    if (setupHandlersCleaned) return;
+    syncModelFromPrefs(true);
+  });
   codexDirectController = createCodexDirectModelReasoningController({
     getSelectedEntry: () =>
       item ? panelChoices.getSelectedModelEntry() : null,
@@ -6768,6 +6795,51 @@ export function setupHandlers(
   ) => Promise<void> = async () => undefined;
   // Latest in-place paper switch; only it may re-enable the chat box.
   let paperItemSwitchToken = 0;
+  let conversationInPlaceSwitchToken = 0;
+  const conversationSwitchInputLock = chatBox
+    ? createChatInputLock(chatBox)
+    : null;
+  /** See standaloneConversationSwitch.ts. */
+  const resolveConversationSwitchForPanel = (
+    nextItem: Zotero.Item,
+  ): StandaloneConversationSwitchDecision => {
+    const currentKind = item ? resolveDisplayConversationKind(item) : null;
+    const nextKind = resolveDisplayConversationKind(nextItem);
+    const panelAlive =
+      !setupHandlersCleaned && Boolean(item) && panelRoot.isConnected;
+    if (panelAlive && (!currentKind || !nextKind)) {
+      return { inPlace: false, reason: "mode-changed" };
+    }
+    const kindOrGlobal = (kind: "global" | "paper" | null) =>
+      kind === "paper" ? "paper" : "global";
+    const nextBasePaper =
+      nextKind === "paper" ? resolveConversationBaseItem(nextItem) : null;
+    const currentBasePaper =
+      currentKind === "paper" ? resolveCurrentPaperBaseItem() : null;
+    return resolveStandaloneConversationSwitch({
+      panelAlive,
+      standalonePanel: isStandalonePanel,
+      sidePanel: isSidePanel,
+      ownershipBlocked: Boolean(panelRoot.dataset.ownershipBlocked),
+      webChat: isWebChatModeActive(),
+      runtimeSwitchInFlight: runtimeSystemSwitchInFlight,
+      inlineEditOpen: Boolean(getInlineEditTarget(body)),
+      current: {
+        system: currentConversationSystem,
+        kind: kindOrGlobal(currentKind),
+        libraryID: getCurrentLibraryID(),
+        basePaperItemID: Number(currentBasePaper?.id || 0),
+        isNote: isNoteSession(),
+      },
+      next: {
+        system: resolveConversationSystemForItem(nextItem) || "upstream",
+        kind: kindOrGlobal(nextKind),
+        libraryID: Number(nextItem.libraryID || 0),
+        basePaperItemID: Number(nextBasePaper?.id || 0),
+        isNote: Boolean(resolveActiveNoteSession(nextItem)),
+      },
+    });
+  };
   const panelHandle: PanelHandle = {
     addItemsAsDefaultContext: (zoteroItems) =>
       addItemsAsDefaultContextForHandle(zoteroItems),
@@ -6909,6 +6981,53 @@ export function setupHandlers(
         },
       });
       return true;
+    },
+    resolveConversationSwitch: (nextItem) =>
+      resolveConversationSwitchForPanel(nextItem),
+    switchConversationInPlace: async (nextItem) => {
+      if (!resolveConversationSwitchForPanel(nextItem).inPlace) return false;
+      const nextKey = getConversationKey(nextItem);
+      if (!Number.isFinite(nextKey) || nextKey <= 0) return false;
+      const isGlobal = resolveDisplayConversationKind(nextItem) === "global";
+      // The last conversation's messages stay on screen until the next one is
+      // drawn; they must not take input meanwhile (retry/edit would act on
+      // the next conversation's history). Only the latest switch clears it.
+      // (Not `inert`: that restyles every message of a long chat.)
+      const switchToken = ++conversationInPlaceSwitchToken;
+      conversationSwitchInputLock?.lock();
+      try {
+        const switched = isGlobal
+          ? await switchGlobalConversation(nextKey, { quietHistory: true })
+          : (await switchPaperConversation(nextKey, {
+              paperItem:
+                resolveConversationBaseItem(nextItem) ||
+                resolveCurrentPaperBaseItem(),
+              quietHistory: true,
+            })) === true;
+        if (
+          switched &&
+          status &&
+          switchToken === conversationInPlaceSwitchToken
+        ) {
+          // Status writes reach only panels showing the request's
+          // conversation, so the last conversation's status would linger.
+          // Start from the text a fresh mount shows, then let this
+          // conversation's own request state (if any) take over.
+          setStatus(
+            status,
+            isGlobal
+              ? t("No active paper context. Type / to add papers.")
+              : t("Ready"),
+            "ready",
+          );
+          syncRequestUiForCurrentConversation();
+        }
+        return switched;
+      } finally {
+        if (switchToken === conversationInPlaceSwitchToken) {
+          conversationSwitchInputLock?.unlock();
+        }
+      }
     },
   };
   publishPanelHandle(body, panelHandle);
@@ -8526,6 +8645,11 @@ export function setupHandlers(
     if (!modelMenu || !modelBtn) return;
     if ((modelBtn as HTMLButtonElement).disabled) return;
     menus.closeMany(MENUS_CLOSED_BY_MODEL_MENU);
+    // Refresh cached provider catalogs when the picker is opened.  The current
+    // snapshot renders synchronously; the menu updates when a changed list
+    // lands (failed refreshes back off inside the capability service).
+    void refreshModelCapabilityRegistry();
+    void refreshConfiguredProviderModelCatalogs();
     if (isCodexConversationSystem()) {
       // A loaded catalog can change while this chat stays mounted. Revalidate
       // on each user opening and update the menu when model/list returns.
@@ -8866,6 +8990,8 @@ export function setupHandlers(
     cleanupMineruPaperSourceObservers?.();
     cleanupModelCapabilitySubscription?.();
     cleanupModelCapabilitySubscription = null;
+    cleanupModelProviderSync?.();
+    cleanupModelProviderSync = null;
     disposeHistoryActivity?.();
     // Before the panel's teardown, which would repaint the button.
     unbindTaskProgressToggle?.();

@@ -8,6 +8,7 @@ import {
   withScrollGuard,
 } from "./chatScrollSnapshots";
 import { sanitizeText } from "../../utils/textSanitization";
+import { flushPendingChatRender } from "./progressiveChatRender";
 import type { Message } from "./types";
 
 export const SIDEBAR_TURN_NAVIGATOR_MIN_WIDTH_PX = 400;
@@ -669,6 +670,10 @@ export function createConversationTurnNavigator(params: {
 
   const activateMarker = (index: number) => {
     const entry = entries[index];
+    // Older turns of a long conversation may still be waiting to be drawn.
+    // Draw them all first: one landing above the target later would move
+    // it under the scroll, and drawing re-syncs this navigator.
+    if (entry) flushPendingChatRender(chatBox);
     const wrapper = entry ? wrapperByTurnKey.get(entry.key) : null;
     if (!entry || !wrapper || !conversationKey) return;
     const paddingTop = Number.parseFloat(

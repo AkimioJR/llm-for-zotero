@@ -62,6 +62,7 @@ import type {
   AgentPendingAction,
 } from "../../../agent/types";
 import { getPanelRequestUI } from "../panelRequestUI";
+import { flushPendingChatRender } from "../progressiveChatRender";
 
 function syncInlineActionCardAttr(body: Element): void {
   const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
@@ -78,6 +79,8 @@ function findNativeMcpActionCard(
   chatBox: HTMLElement,
   requestId: string,
 ): HTMLElement | null {
+  // The card's message may still be waiting to be drawn.
+  flushPendingChatRender(chatBox);
   const cards = Array.from(
     chatBox.querySelectorAll(
       ".llm-agent-hitl-card[data-request-id], .llm-action-inline-card[data-request-id]",

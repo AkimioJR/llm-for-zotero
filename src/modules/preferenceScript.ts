@@ -35,6 +35,7 @@ import {
   getFirstSelectableModelEntryId,
   getLastUsedModelEntryId,
   getModelProviderGroups,
+  notifyModelProviderGroupsChanged,
   setModelProviderGroups,
   setLastUsedModelEntryId,
   type ModelProviderAuthMode,
@@ -67,6 +68,7 @@ import {
 } from "../utils/providerCardModelSection";
 import { describeProviderRow } from "./preferences/providerCards/providerRowHeader";
 import { registerUsagePreferencePanel } from "./preferences/usagePanel";
+import { createDeferredNotifier } from "./preferences/deferredNotifier";
 import {
   getModelCapabilities,
   getModelCatalogStatus,
@@ -906,8 +908,27 @@ function cloneGroups(groups: ModelProviderGroup[]): ModelProviderGroup[] {
   });
 }
 
+// Text fields save on every keystroke, and each save used to rebuild every
+// open chat panel. The value is still stored at once; only the notification
+// to open panels waits for a 300 ms pause, a blur, or the window closing.
+const typedGroupsNotifier = createDeferredNotifier({
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (handle) =>
+    clearTimeout(handle as ReturnType<typeof setTimeout>),
+  notify: notifyModelProviderGroupsChanged,
+  delayMs: 300,
+});
+
 function persistGroups(groups: ModelProviderGroup[]) {
+  // This save notifies, which covers any typed save still waiting.
+  typedGroupsNotifier.cancel();
   setModelProviderGroups(cloneGroups(groups));
+}
+
+/** persistGroups for per-keystroke edits: store now, notify after a pause. */
+function persistGroupsWhileTyping(groups: ModelProviderGroup[]) {
+  setModelProviderGroups(cloneGroups(groups), { notify: false });
+  typedGroupsNotifier.schedule();
 }
 
 function ensureModels(
@@ -1722,6 +1743,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   _window.addEventListener("unload", disposeDirectCardControllers, {
     once: true,
   });
+  // Typed provider edits notify open chat panels once the field loses focus
+  // or the window closes, without waiting for the pause.
+  const flushTypedGroups = () => typedGroupsNotifier.flush();
+  modelSections.addEventListener("focusout", flushTypedGroups);
+  _window.addEventListener("unload", flushTypedGroups, { once: true });
 
   // ── Render ────────────────────────────────────────────────────────
 
@@ -2065,7 +2091,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           group.presetIdOverride = selectedPresetId;
         }
         group.apiBase = apiUrlInput.value;
-        persistGroups(groups);
+        persistGroupsWhileTyping(groups);
         syncAddProviderBtn();
         for (const sync of modelPickerSyncers) sync();
       });
@@ -2102,7 +2128,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       apiKeyInput.addEventListener("input", () => {
         if (group.authMode === "webchat") return;
         group.apiKey = apiKeyInput.value;
-        persistGroups(groups);
+        persistGroupsWhileTyping(groups);
         syncAddProviderBtn();
         for (const sync of modelPickerSyncers) sync();
         if (
@@ -2834,7 +2860,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
             } else {
               delete modelEntry.profileOverride;
             }
-            persistGroups(groups);
+            // The profile editor commits on each keystroke in its fields.
+            persistGroupsWhileTyping(groups);
           },
           classes: {
             input: "llm-pref-input",
@@ -2963,7 +2990,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           const previousModel = modelEntry.model;
           modelEntry.model = modelInput.value;
           onSelectedModelChanged(previousModel);
-          persistGroups(groups);
+          persistGroupsWhileTyping(groups);
           syncAddModelBtn();
           syncAddProviderBtn();
           syncAdvAvailability();

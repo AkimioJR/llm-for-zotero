@@ -61,6 +61,35 @@ const reconciliationStates = new WeakMap<
   }
 >();
 const liveReconciliationBoxes = new Set<HTMLDivElement>();
+/** The conversation whose messages each chat box shows. */
+let drawnConversationKeys = new WeakMap<HTMLDivElement, number>();
+
+/**
+ * Records which conversation the chat box's messages belong to; each full
+ * chat render calls this as it replaces them. Null forgets it.
+ */
+export function setChatBoxConversation(
+  chatBox: HTMLDivElement,
+  conversationKey: number | null,
+): void {
+  const normalized =
+    conversationKey === null ? null : normalizeConversationKey(conversationKey);
+  if (normalized) drawnConversationKeys.set(chatBox, normalized);
+  else drawnConversationKeys.delete(chatBox);
+}
+
+/**
+ * True while a panel that switched in place still shows the last
+ * conversation's messages. Their geometry says nothing about `key`: no
+ * position of `key` is applied to them or saved from them.
+ */
+function showsOtherConversation(
+  chatBox: HTMLDivElement,
+  key: number | null,
+): boolean {
+  const drawn = drawnConversationKeys.get(chatBox);
+  return drawn !== undefined && drawn !== normalizeConversationKey(key || 0);
+}
 
 function captureViewportPosition(chatBox: HTMLDivElement): void {
   viewportPositions.set(chatBox, {
@@ -115,6 +144,10 @@ export function disposeChatScrollViewport(chatBox: HTMLDivElement): void {
 export function observeChatScroll(key: number, chatBox: HTMLDivElement): void {
   if (!isCurrentChatViewport(key, chatBox) || !isChatViewportVisible(chatBox))
     return;
+  if (showsOtherConversation(chatBox, key)) {
+    captureViewportPosition(chatBox);
+    return;
+  }
   const previous = viewportPositions.get(chatBox);
   if (isChatNavigationActive(chatBox)) {
     captureViewportPosition(chatBox);
@@ -153,6 +186,7 @@ export function reconcileChatScroll(
 ): void {
   if (!isCurrentChatViewport(key, chatBox) || !isChatViewportVisible(chatBox))
     return;
+  if (showsOtherConversation(chatBox, key)) return;
   // User input can precede its scroll event or this queued layout callback.
   observeChatScroll(key, chatBox);
   if (isChatNavigationActive(chatBox)) return;
@@ -351,6 +385,7 @@ export function persistChatScrollSnapshotForConversationKey(
   const normalized = normalizeConversationKey(conversationKey);
   if (!normalized) return;
   if (!isChatViewportVisible(chatBox)) return;
+  if (showsOtherConversation(chatBox, normalized)) return;
   const activeNavigation = activeChatNavigations.get(chatBox);
   if (activeNavigation?.conversationKey === normalized) return;
   // Snapshot persistence records geometry, never user intent. Both manual and
@@ -778,6 +813,10 @@ export function withScrollGuard(
     fn();
     return;
   }
+  if (showsOtherConversation(chatBox, conversationKey)) {
+    fn();
+    return;
+  }
   observeChatScroll(conversationKey, chatBox);
   const snapshot =
     getChatScrollSnapshot(conversationKey, chatBox) ||
@@ -847,5 +886,6 @@ export function clearChatScrollSnapshotsForTests(): void {
   activeChatNavigations = new WeakMap<HTMLDivElement, ActiveChatNavigation>();
   panelScrollSnapshots = new WeakMap();
   viewportPositions = new WeakMap();
+  drawnConversationKeys = new WeakMap();
   for (const box of liveReconciliationBoxes) disposeChatScrollViewport(box);
 }
