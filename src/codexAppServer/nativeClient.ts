@@ -1707,6 +1707,19 @@ export function buildCodexNativeScopedMcpScopeForTests(params: {
   return buildCodexNativeScopedMcpScope(params);
 }
 
+/**
+ * Codex's map from the search-routing source families
+ * (SEARCH_ROUTING_CONTRACT) to its own tools: the Zotero MCP tools for the
+ * turn's papers, the library and scholarly sources, and Codex's built-in web
+ * search for the web (user decision 2a, 2026-10-20). Web search follows the
+ * user's own Codex configuration (`web_search` in config.toml; user decision
+ * D3): the plugin neither sets it per thread nor reads it per turn, so the
+ * line is conditional. Native web search has no tool description that
+ * carries the query-language rule, so the line states it.
+ */
+export const CODEX_SEARCH_TOOL_ROUTES =
+  "Search tools: the Zotero MCP tools, when listed, read the turn's papers (paper_read), search the library (library_retrieve, library_search) and search scholarly sources (literature_search); your built-in web search searches and reads the web when it is in your tool list; otherwise web search is unavailable. Write web search queries in the user's language by default.";
+
 export function buildZoteroEnvironmentManifest(params: {
   scope: CodexNativeConversationScope;
   mcpEnabled: boolean;
@@ -1780,6 +1793,7 @@ export function buildZoteroEnvironmentManifest(params: {
     AGENT_ACTION_CONTRACT,
     RUNTIME_CAPABILITY_CONTEXT,
     SEARCH_ROUTING_CONTRACT,
+    CODEX_SEARCH_TOOL_ROUTES,
   );
 
   if (!params.mcpEnabled) {

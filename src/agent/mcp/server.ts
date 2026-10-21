@@ -189,7 +189,7 @@ const MCP_TOOL_DESCRIPTION_OVERRIDES: ReadonlyMap<string, string> = new Map([
     "literature_search",
     "Search scholarly sources outside the library (OpenAlex, arXiv, Europe PMC); results come back to the client directly. The literature_review selection card is not available over MCP, so present discovery candidates yourself; discovery never imports silently. An explicit import request uses library_import directly; metadata review uses workflow:'review', mode:'metadata'. " +
       OUTSIDE_SEARCH_NEED_SENTENCE +
-      "; mode:'metadata' needs none.",
+      "; mode:'metadata' needs none. For web pages or current facts, use your client's own web search if it has one.",
   ],
 ]);
 /**

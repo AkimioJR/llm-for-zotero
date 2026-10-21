@@ -1404,6 +1404,7 @@ describe("Zotero MCP server", function () {
       "its results lead to the selection card (literature_review)",
     );
     registry.register(literature);
+    registry.register(createLibraryRetrieveTool({} as never));
     registerMcpServer({ toolRegistry: registry, zoteroGateway: {} as never });
     const response = await invokeMcpEndpoint({
       token: getOrCreateZoteroMcpBearerToken(),
@@ -1424,6 +1425,20 @@ describe("Zotero MCP server", function () {
     assert.include(description, "not available over MCP");
     assert.include(description, "library_import");
     assert.include(description, "mode:'metadata'");
+    // The server has no web search, but a client may: Claude Code and Codex
+    // map the web family to their own tools (user decision 2a).
+    assert.include(
+      description,
+      "For web pages or current facts, use your client's own web search if it has one.",
+    );
+    const searchDescription = tools.find(
+      (entry) => entry.name === "library_retrieve",
+    )!.description;
+    assert.notInclude(searchDescription, "your client's own web search");
+    assert.include(
+      searchDescription,
+      "No general web-search MCP tool is available.",
+    );
     // An outside search states its need over MCP too; the host-only value
     // stays out of the schema a client sees.
     assert.include(description, OUTSIDE_SEARCH_NEED_SENTENCE);

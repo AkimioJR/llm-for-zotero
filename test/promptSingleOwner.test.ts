@@ -7,14 +7,17 @@ import {
 import { WHOLE_LIBRARY_SCOPE_RULE } from "../src/agent/context/turnContextEnvelope";
 import { BUILTIN_SKILL_FILES } from "../src/agent/skills";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
+import { CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES } from "../src/agent/externalBackendBridge";
+import { CODEX_SEARCH_TOOL_ROUTES } from "../src/codexAppServer/nativeClient";
 
 /**
  * Every behavioral prompt rule has one owner. An owner is one tool (its
  * description, model-facing description, and guidance together), the
  * persona (all its sections, the shared contracts it carries and the plugin
  * Agent's search-tool map), one shipped skill file, the message
- * builder's hard-coded prompt sections, or the whole-library turn line. A marker phrase distinctive for a
- * rule must appear in exactly the expected owner.
+ * builder's hard-coded prompt sections, the whole-library turn line, or
+ * the Claude Code bridge's or Codex's search-tool line. A marker phrase
+ * distinctive for a rule must appear in exactly the expected owners.
  */
 function stubDependency(): never {
   const stub: unknown = new Proxy(function () {}, {
@@ -56,6 +59,9 @@ function collectOwnerTexts(): Map<string, string> {
   // The nothing-attached turn line states the scope; routing stays in the
   // persona's search routing contract.
   owners.set("turnContext:wholeLibrary", WHOLE_LIBRARY_SCOPE_RULE);
+  // Each external runtime maps the search families to its own tools.
+  owners.set("runtime:claudeBridge", CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES);
+  owners.set("runtime:codex", CODEX_SEARCH_TOOL_ROUTES);
   owners.set(
     "messageBuilder",
     readFileSync(
@@ -74,7 +80,11 @@ function ownersOf(owners: Map<string, string>, marker: string): string[] {
 }
 
 describe("prompt rules have a single owner", function () {
-  const rules: Array<{ rule: string; marker: string; owner: string }> = [
+  const rules: Array<{
+    rule: string;
+    marker: string;
+    owner: string | string[];
+  }> = [
     {
       rule: "paper_read mode selection",
       marker: "mode:'overview'",
@@ -161,6 +171,21 @@ describe("prompt rules have a single owner", function () {
       owner: "skill:literature-review.md",
     },
     {
+      rule: "the Claude Code bridge searches the web with its own tools",
+      marker: "Claude Code's WebSearch and WebFetch",
+      owner: "runtime:claudeBridge",
+    },
+    {
+      rule: "Codex web search follows the user's Codex configuration",
+      marker: "when it is in your tool list",
+      owner: "runtime:codex",
+    },
+    {
+      rule: "native web search queries default to the user's language",
+      marker: "web search queries in the user's language",
+      owner: ["runtime:claudeBridge", "runtime:codex"],
+    },
+    {
       rule: "figure crops come only from paper_read figures mode",
       marker: "figure_crops",
       owner: "skill:analyze-figures.md",
@@ -187,6 +212,8 @@ describe("prompt rules have a single owner", function () {
     assert.isTrue(owners.has("persona"));
     assert.isTrue(owners.has("messageBuilder"));
     assert.isTrue(owners.has("turnContext:wholeLibrary"));
+    assert.isTrue(owners.has("runtime:claudeBridge"));
+    assert.isTrue(owners.has("runtime:codex"));
   });
 
   it("keeps no routing copy outside the search routing contract", function () {
@@ -202,8 +229,9 @@ describe("prompt rules have a single owner", function () {
   });
 
   for (const { rule, marker, owner } of rules) {
-    it(`${rule} lives only in ${owner}`, function () {
-      assert.deepEqual(ownersOf(owners, marker), [owner], marker);
+    const expected = (Array.isArray(owner) ? [...owner] : [owner]).sort();
+    it(`${rule} lives only in ${expected.join(" and ")}`, function () {
+      assert.deepEqual(ownersOf(owners, marker), expected, marker);
     });
   }
 });

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, it } from "mocha";
 import { initAgentChangeJournal } from "../src/agent/store/changeJournal";
 import { ChangeJournalTestDb } from "./helpers/changeJournalTestDb";
 import {
+  CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES,
   createExternalBackendBridgeRuntime,
   describeClaudeRuntimeToolEffect,
 } from "../src/agent/externalBackendBridge";
@@ -637,6 +638,11 @@ describe("external bridge action approval handling", function () {
         1,
       );
       assert.notInclude(customInstruction, AGENT_SEARCH_TOOL_ROUTES);
+      // Its own search-tool line maps the web family to WebSearch/WebFetch.
+      assert.equal(
+        customInstruction.split(CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES).length - 1,
+        1,
+      );
       const mcpServers = capturedBody?.mcpServers as
         | Record<
             string,

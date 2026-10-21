@@ -8,7 +8,14 @@ import {
   stringifyMessageContent,
 } from "../src/agent/model/messageBuilder";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
-import { buildZoteroEnvironmentManifest } from "../src/codexAppServer/nativeClient";
+import {
+  buildZoteroEnvironmentManifest,
+  CODEX_SEARCH_TOOL_ROUTES,
+} from "../src/codexAppServer/nativeClient";
+import {
+  buildClaudeBridgeCustomInstructionForTests,
+  CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES,
+} from "../src/agent/externalBackendBridge";
 import {
   CORE_RESEARCH_CONTRACT,
   RUNTIME_CAPABILITY_CONTEXT,
@@ -70,6 +77,45 @@ const NO_SHELL_RULE =
  */
 const NOTHING_ATTACHED_RULE =
   "With nothing attached, search the library first, in a step of its own, for any need it could hold, unless the user named an outside source or asked for papers not in the library. If it holds relevant papers, answer from them and offer to search outside; if it holds none, search outside without asking.";
+
+/**
+ * Claude and Codex native web search have no tool description of their own
+ * that carries the plugin web_search query-language rule, so each runtime's
+ * search-tool line states it (review carry-over from commit 1, 2026-10-20).
+ */
+const WEB_QUERY_LANGUAGE_RULE =
+  "Write web search queries in the user's language by default.";
+
+function claudeBridgeInstruction(rawPdfMode: boolean): string {
+  const previousZotero = (globalThis as { Zotero?: unknown }).Zotero;
+  (globalThis as { Zotero?: unknown }).Zotero = {
+    Prefs: { get: () => "" },
+  };
+  try {
+    return buildClaudeBridgeCustomInstructionForTests(rawPdfMode);
+  } finally {
+    (globalThis as { Zotero?: unknown }).Zotero = previousZotero;
+  }
+}
+
+function codexManifest(params: {
+  mcpEnabled: boolean;
+  mcpReady: boolean;
+  rawPdfMode?: boolean;
+}): string {
+  return buildZoteroEnvironmentManifest({
+    scope: {
+      conversationKey: 1,
+      libraryID: 1,
+      kind: "paper",
+      paperItemID: 11,
+      activeItemId: 11,
+      activeContextItemId: 12,
+      paperTitle: "Prompt Paper",
+    },
+    ...params,
+  });
+}
 
 describe("external search guidance routing", function () {
   it("does not route absent semantic intent from English or multilingual words", function () {
@@ -185,6 +231,79 @@ describe("external search guidance routing", function () {
       assert.notInclude(manifest, cardRule);
       assert.notInclude(manifest, "literature_review");
     }
+  });
+
+  it("maps the search families to each runtime's own tools, once, in that runtime only", async function () {
+    const count = (text: string, needle: string) =>
+      text.split(needle).length - 1;
+
+    // Claude Code bridge (user decision 2a): local and scholarly through the
+    // Zotero MCP tools, web through Claude Code's own WebSearch/WebFetch,
+    // which the bridge allows by default.
+    for (const rule of [
+      "paper_read",
+      "library_retrieve",
+      "library_search",
+      "literature_search",
+      "Claude Code's WebSearch and WebFetch",
+      WEB_QUERY_LANGUAGE_RULE,
+    ])
+      assert.include(CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES, rule);
+    for (const rawPdfMode of [false, true]) {
+      const instruction = claudeBridgeInstruction(rawPdfMode);
+      assert.equal(count(instruction, CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES), 1);
+      assert.equal(count(instruction, WEB_QUERY_LANGUAGE_RULE), 1);
+      assert.notInclude(instruction, CODEX_SEARCH_TOOL_ROUTES);
+      assert.notInclude(instruction, AGENT_SEARCH_TOOL_ROUTES);
+    }
+
+    // Codex app-server (user decision D3): web search follows the user's own
+    // Codex configuration, which the plugin does not read per turn, so the
+    // line is conditional.
+    for (const rule of [
+      "paper_read",
+      "library_retrieve",
+      "library_search",
+      "literature_search",
+      "your built-in web search",
+      "when it is in your tool list",
+      "otherwise web search is unavailable",
+      WEB_QUERY_LANGUAGE_RULE,
+    ])
+      assert.include(CODEX_SEARCH_TOOL_ROUTES, rule);
+    for (const params of [
+      { mcpEnabled: true, mcpReady: true },
+      { mcpEnabled: true, mcpReady: false },
+      { mcpEnabled: false, mcpReady: false },
+      { mcpEnabled: true, mcpReady: true, rawPdfMode: true },
+    ]) {
+      const manifest = codexManifest(params);
+      assert.equal(count(manifest, CODEX_SEARCH_TOOL_ROUTES), 1);
+      assert.equal(count(manifest, WEB_QUERY_LANGUAGE_RULE), 1);
+      assert.notInclude(manifest, CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES);
+      assert.notInclude(manifest, "WebSearch");
+      // The runtime line follows the routing contract it maps.
+      assert.isAbove(
+        manifest.indexOf(CODEX_SEARCH_TOOL_ROUTES),
+        manifest.indexOf(SEARCH_ROUTING_CONTRACT),
+      );
+    }
+
+    // Plugin Agent: neither runtime line reaches the fixed prompt or turn.
+    const tools = registry();
+    const value = request("Search whether other studies found the same result");
+    const rendered = await renderAgentPromptEnvelope(
+      value,
+      tools.listToolDefinitionsForRequest(value),
+      [],
+    );
+    const turn = stringifyMessageContent(rendered.envelope.turnMessage.content);
+    for (const text of [rendered.inventory.fixedPrompt, turn]) {
+      assert.notInclude(text, CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES);
+      assert.notInclude(text, CODEX_SEARCH_TOOL_ROUTES);
+      assert.notInclude(text, WEB_QUERY_LANGUAGE_RULE);
+    }
+    assert.notInclude(AGENT_SEARCH_TOOL_ROUTES, "WebSearch");
   });
 
   it("keeps routing out of the external search tool descriptions", function () {
