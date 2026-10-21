@@ -253,7 +253,7 @@ export function createLiteratureSearchTool(
     spec: {
       name: "literature_search",
       description:
-        "Search scholarly sources outside the library. Use workflow:'answer' for any search that informs an answer, including whether other studies found or tested something, and explicit imports (then library_import). Use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers; with nothing attached, only if the library holds no relevant papers or the user asks for papers outside it); it leads to the selection card (literature_review); discovery never imports silently. workflow:'review' with mode:'metadata' proposes changes to approve; use it only when the user asks to check or fix an item's metadata. " +
+        "Search scholarly sources outside the library. Use workflow:'answer' for any search that informs an answer, including whether other studies found or tested something, and explicit imports (then library_import). Use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers; with nothing attached, only if the library holds no relevant papers or the user asks for papers outside it); it leads to the selection card (literature_review); discovery never imports silently. To read a paper's abstract or full text, use literature_read. workflow:'review' with mode:'metadata' proposes changes to approve; use it only when the user asks to check or fix an item's metadata. " +
         OUTSIDE_SEARCH_NEED_SENTENCE +
         `; ${REVIEW_SEARCH_NEED_CLAUSE}; mode:'metadata' needs none.`,
       inputSchema: {
@@ -405,7 +405,7 @@ export function createLiteratureSearchTool(
           : undefined;
       if (mode === "search" && !query && !title && !author) {
         return fail(
-          "search mode requires query, title, or author; to read one paper's abstract, search with its title",
+          "search mode requires query, title, or author; to read one paper by DOI, PMID, PMCID or arXiv ID, use literature_read.",
         );
       }
       // Only OpenAlex supports recommendations, references, and citations.

@@ -493,7 +493,7 @@ describe("literature_search outside-search discipline", function () {
     if (prepared.kind === "result")
       assert.deepEqual(prepared.execution.result.content, {
         error:
-          "Invalid tool input for literature_search: search mode requires query, title, or author; to read one paper's abstract, search with its title",
+          "Invalid tool input for literature_search: search mode requires query, title, or author; to read one paper by DOI, PMID, PMCID or arXiv ID, use literature_read.",
       });
     assert.equal(outsideSearchCount(RUN, "scholarly"), 0);
   });

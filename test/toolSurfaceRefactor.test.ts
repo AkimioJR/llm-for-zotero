@@ -267,6 +267,7 @@ describe("semantic tool surface", function () {
       "library_search",
       "library_settings",
       "library_update",
+      "literature_read",
       "literature_review",
       "literature_search",
       "load_skill",

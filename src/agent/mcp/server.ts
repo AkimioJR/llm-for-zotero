@@ -107,6 +107,9 @@ export const ZOTERO_MCP_SAFE_READ_TOOL_NAMES = [
   "library_retrieve",
   "paper_read",
   "literature_search",
+  // Reads one outside paper's abstract and open-access text; it stays
+  // visible in direct-path PDF turns (not in the raw-PDF hidden set).
+  "literature_read",
   // Always listed, so the tool list (and the client's prompt cache) stays the
   // same; it opens only the chats in the scope's attachedConversationScope.
   "past_chat_read",
@@ -187,7 +190,7 @@ const CURATED_WRITE_TOOL_NAMES = new Set<string>(ZOTERO_MCP_WRITE_TOOL_NAMES);
 const MCP_TOOL_DESCRIPTION_OVERRIDES: ReadonlyMap<string, string> = new Map([
   [
     "literature_search",
-    "Search scholarly sources outside the library (OpenAlex, arXiv, Europe PMC); results come back to the client directly. The literature_review selection card is not available over MCP, so present discovery candidates yourself; discovery never imports silently. An explicit import request uses library_import directly; metadata review uses workflow:'review', mode:'metadata'. " +
+    "Search scholarly sources outside the library (OpenAlex, arXiv, Europe PMC); results come back to the client directly. The literature_review selection card is not available over MCP, so present discovery candidates yourself; discovery never imports silently. An explicit import request uses library_import directly; metadata review uses workflow:'review', mode:'metadata'; literature_read reads a found paper. " +
       OUTSIDE_SEARCH_NEED_SENTENCE +
       "; mode:'metadata' needs none. For web pages or current facts, use your client's own web search if it has one.",
   ],

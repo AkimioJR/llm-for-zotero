@@ -36,6 +36,12 @@ type OnlinePaperResult = {
   citationCount?: number;
   openAccessUrl?: string;
   sourceUrl?: string;
+  /** Identifiers literature_read accepts. */
+  pmid?: string;
+  pmcid?: string;
+  arxivId?: string;
+  /** Europe PMC's open-access flag: full text is readable. */
+  openAccess?: true;
 };
 
 type ExternalMetadataResult = {
@@ -107,7 +113,7 @@ interface XmlDomParser {
 }
 
 const OA_SELECT =
-  "id,doi,display_name,authorships,publication_year,abstract_inverted_index,cited_by_count,open_access";
+  "id,doi,display_name,authorships,publication_year,abstract_inverted_index,cited_by_count,open_access,ids";
 const OA_MAILTO = "mailto=llm-for-zotero@github.com";
 const OA_BASE = "https://api.openalex.org";
 const USER_AGENT =
@@ -313,6 +319,9 @@ function normalizeOpenAlexWork(raw: unknown): OnlinePaperResult | null {
     | undefined;
   const openAccessUrl = normalizeString(openAccess?.oa_url) || undefined;
   const openAlexId = normalizeString(work.id) || undefined;
+  const pmid = normalizeString(
+    (work.ids as Record<string, unknown> | undefined)?.pmid,
+  ).replace(/^.*\//, "");
 
   return {
     title,
@@ -323,6 +332,7 @@ function normalizeOpenAlexWork(raw: unknown): OnlinePaperResult | null {
     citationCount,
     openAccessUrl,
     sourceUrl: openAlexId,
+    ...(/^\d+$/.test(pmid) ? { pmid } : {}),
   };
 }
 
@@ -507,6 +517,9 @@ async function fetchArxivSearch(
       }
     }
     const doi = entry.querySelector("doi")?.textContent?.trim() || undefined;
+    const arxivId = sourceUrl
+      ?.match(/arxiv\.org\/abs\/(.+?)(?:v\d+)?$/i)?.[1]
+      ?.trim();
     results.push({
       title,
       authors,
@@ -515,6 +528,7 @@ async function fetchArxivSearch(
       doi,
       sourceUrl,
       openAccessUrl: pdfLink || sourceUrl,
+      ...(arxivId ? { arxivId } : {}),
     });
   }
 
@@ -597,6 +611,8 @@ async function fetchEuropePmcSearch(
         )?.fullTextUrl ?? [];
       const openAccessUrl =
         urlList[0]?.url || (doi ? `https://doi.org/${doi}` : undefined);
+      const pmid = typeof item.pmid === "string" ? item.pmid.trim() : "";
+      const pmcid = typeof item.pmcid === "string" ? item.pmcid.trim() : "";
       return {
         title,
         authors,
@@ -606,6 +622,9 @@ async function fetchEuropePmcSearch(
         citationCount,
         sourceUrl,
         openAccessUrl,
+        ...(pmid ? { pmid } : {}),
+        ...(pmcid ? { pmcid } : {}),
+        ...(item.isOpenAccess === "Y" ? { openAccess: true as const } : {}),
       };
     })
     .filter((paper): paper is OnlinePaperResult => Boolean(paper));

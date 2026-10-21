@@ -27,7 +27,7 @@ describe("literature_search tool", function () {
       originalFetch;
   });
 
-  it("says its metadata mode proposes changes to approve, and reading a paper uses answer", function () {
+  it("says its metadata mode proposes changes to approve, and reading a paper uses literature_read", function () {
     const tool = createLiteratureSearchTool({} as never);
     // A literature review once called workflow:'review' to read an abstract
     // and waited on a metadata-change card nobody asked for. Reading for an
@@ -39,6 +39,10 @@ describe("literature_search tool", function () {
     assert.include(
       tool.spec.description,
       "workflow:'review' with mode:'metadata' proposes changes to approve; use it only when the user asks to check or fix an item's metadata.",
+    );
+    assert.include(
+      tool.spec.description,
+      "To read a paper's abstract or full text, use literature_read.",
     );
     // A summary of the folder once turned into a discovery card of
     // external papers nobody asked for. The plugin Agent's search-tool map

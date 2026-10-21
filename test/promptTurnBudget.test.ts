@@ -51,12 +51,15 @@ import {
  * wording of the find (workflow:'review') and answer (workflow:'answer')
  * workflows. Measured against a10986c0, that is 1,204 more fixed prompt and
  * 405 more tool characters, less 21, 5 and 21 turn characters: net growth
- * of 1,588, 1,604 and 1,588, to 39,035, 37,768 and 39,133.
+ * of 1,588, 1,604 and 1,588, to 39,035, 37,768 and 39,133. Raised for
+ * literature_read, the always-listed tool that reads an outside paper's
+ * abstract and open-access text instead of shell curl calls, and its clause
+ * in the plugin Agent's search-tool map (2026-10-20), to 39,864, 38,597 and 39,962 (+829 each).
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 39_035,
-  paper: 37_768,
-  collection: 39_133,
+  global: 39_864,
+  paper: 38_597,
+  collection: 39_962,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

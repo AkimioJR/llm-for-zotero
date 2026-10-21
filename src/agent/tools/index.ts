@@ -15,6 +15,7 @@ import { createReadAttachmentTool } from "./read/readAttachment";
 import { createLibraryReadTool } from "./read/libraryRead";
 import { createLiteratureReviewTool } from "./read/reviewLiterature";
 import { createLiteratureSearchTool } from "./read/literatureSearch";
+import { createLiteratureReadTool } from "./read/literatureRead";
 import { createContextReadTool } from "./read/contextRead";
 import { createPastChatReadTool } from "./read/pastChatRead";
 import { createPastChatSearchTool } from "./read/pastChatSearch";
@@ -659,6 +660,7 @@ export function createBuiltInToolRegistry(
     ),
   );
   registry.register(createLiteratureSearchTool(deps.zoteroGateway));
+  registry.register(createLiteratureReadTool());
   registry.register(createLiteratureReviewTool(deps.zoteroGateway));
   registry.register(
     createLibraryUpdateTool({

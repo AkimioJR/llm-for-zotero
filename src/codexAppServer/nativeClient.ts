@@ -1718,7 +1718,7 @@ export function buildCodexNativeScopedMcpScopeForTests(params: {
  * carries the query-language rule, so the line states it.
  */
 export const CODEX_SEARCH_TOOL_ROUTES =
-  "Search tools: the Zotero MCP tools, when listed, read the turn's papers (paper_read), search the library (library_retrieve, library_search) and search scholarly sources (literature_search); your built-in web search searches and reads the web when it is in your tool list; otherwise web search is unavailable. Write web search queries in the user's language by default.";
+  "Search tools: the Zotero MCP tools, when listed, read the turn's papers (paper_read), search the library (library_retrieve, library_search) search scholarly sources (literature_search) and read a found paper's abstract and open-access text (literature_read); your built-in web search searches and reads the web when it is in your tool list; otherwise web search is unavailable. Write web search queries in the user's language by default.";
 
 export function buildZoteroEnvironmentManifest(params: {
   scope: CodexNativeConversationScope;

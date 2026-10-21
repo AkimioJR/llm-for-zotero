@@ -183,8 +183,10 @@ export function literaturePaperIdentities(
           .replace(/\/$/, ""),
       );
   }
-  // Ids derived from an arXiv DOI or URL follow the provider keys, so the
-  // first key (the stored discoveryPaperId) is unchanged.
+  // Ids derived from an arXiv DOI or URL follow the provider keys. A result
+  // with an arxivId and no DOI now leads with the canonical "arxiv:<id>" key
+  // instead of its abs-URL key. Stored sessions keep their ids, and the
+  // duplicate check matches on all keys, which still overlap.
   for (const derived of [
     doi.match(/^10\.48550\/arxiv\.(.+)$/)?.[1],
     paper.id,

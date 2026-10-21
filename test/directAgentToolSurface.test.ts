@@ -63,11 +63,14 @@ describe("direct Agent model tool surface", function () {
     // states, and literature_search's find and answer workflow wording)
     // raised both caps to the measured payload on 2026-10-20: 25,367 tool
     // characters (405 more than 24,962 at a10986c0) and 35,390 with the
-    // fixed prompt (1,609 more than 33,781).
-    assert.isAtMost(serializedToolCharacters, 25_367);
+    // fixed prompt (1,609 more than 33,781). literature_read, the always-listed
+    // tool that reads an outside paper's abstract and open-access text
+    // instead of shell curl calls, raised both caps by its measured size, to
+    // 26,127 and 36,219 (+760 tool and +829 total) (2026-10-20).
+    assert.isAtMost(serializedToolCharacters, 26_127);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      35_390,
+      36_219,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

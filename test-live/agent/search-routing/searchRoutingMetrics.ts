@@ -32,6 +32,8 @@ const FAMILY_BY_TOOL: Record<string, ToolFamily> = {
   // Reads an attachment of the turn's papers; the same rung as paper_read.
   read_attachment: "local",
   literature_search: "scholarly",
+  // Reads one outside paper found by literature_search.
+  literature_read: "scholarly",
   web_search: "web",
   web_read: "web",
   literature_review: "card",

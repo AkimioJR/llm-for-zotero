@@ -11,6 +11,7 @@
     "library_search",
     "library_settings",
     "library_update",
+    "literature_read",
     "literature_review",
     "literature_search",
     "load_skill",
@@ -29,5 +30,5 @@
     "zotero_script"
   ],
   "internal": [],
-  "specBytes": 27840
+  "specBytes": 28690
 }

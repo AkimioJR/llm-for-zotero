@@ -517,6 +517,23 @@ describe("ranked literature discovery workflow", function () {
       assert.isTrue(
         shares(arxivCandidate, { doi: "10.48550/arXiv.2301.00001" }),
       );
+      // A result with an arxivId and the same paper's abs-URL-only form.
+      assert.isTrue(
+        shares(
+          {
+            title: "Arxiv Paper",
+            arxivId: "2301.00001",
+            sourceUrl: "http://arxiv.org/abs/2301.00001v1",
+          },
+          { sourceUrl: "https://arxiv.org/abs/2301.00001v3" },
+        ),
+      );
+      assert.isTrue(
+        shares(
+          { arxivId: "2301.00001" },
+          { sourceUrl: "https://arxiv.org/abs/2301.00001v3" },
+        ),
+      );
       assert.isFalse(
         shares(arxivCandidate, {
           sourceUrl: "http://arxiv.org/abs/2301.00002v1",

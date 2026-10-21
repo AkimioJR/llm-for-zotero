@@ -708,7 +708,7 @@ function buildAgentPermissionMetadata(): {
  * query-language rule, so the line states it.
  */
 export const CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES =
-  "Search tools: the Zotero MCP tools, when listed, read the turn's papers (paper_read), search the library (library_retrieve, library_search) and search scholarly sources (literature_search); Claude Code's WebSearch and WebFetch search and read the web when available. Write web search queries in the user's language by default.";
+  "Search tools: the Zotero MCP tools, when listed, read the turn's papers (paper_read), search the library (library_retrieve, library_search) search scholarly sources (literature_search) and read a found paper's abstract and open-access text (literature_read); Claude Code's WebSearch and WebFetch search and read the web when available. Write web search queries in the user's language by default.";
 
 function buildOriginalAgentModeInstructionBlock(): string {
   return [
