@@ -74,12 +74,13 @@ const NO_SHELL_RULE =
  * search outside; none sends the request to scholarly sources unasked
  * (user decisions 1b and 2a, 2026-10-20). Live evals had the library call
  * and the first literature_search in the same round. The answer clause is
- * one sentence with the nothing-attached condition and excludes a request
- * for papers themselves: as a sentence of its own, live evals applied it
- * to a paper chat's find request (2026-10-20).
+ * one sentence with the nothing-attached condition: as a sentence of its
+ * own, live evals applied it to a paper chat's find request. It covers a
+ * request for papers too: library papers on the topic are the answer, with
+ * an offer to search outside (user decision 2a; 2026-10-20).
  */
 const NOTHING_ATTACHED_RULE =
-  "With nothing attached, search the library first, in a step of its own, for any need it could hold, unless the user named an outside source or papers not in it; then, unless they asked for papers themselves, answer from its relevant papers and offer to search outside, or, if it holds none, search outside without asking.";
+  "With nothing attached, search the library first, in a step of its own, for any need it could hold, unless the user named an outside source or papers not in it; then answer from its relevant papers and offer to search outside, or, if it holds none, search outside without asking.";
 
 /**
  * Claude and Codex native web search have no tool description of their own

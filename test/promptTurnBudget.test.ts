@@ -77,12 +77,15 @@ import {
  * answer and kept workflow:'review' for a request for papers themselves
  * (2026-10-20), to 38,832, 37,565 and 38,930. Raised by 28 each (18 fixed
  * prompt for "for any need it could hold" in the nothing-attached rule, 10 net
- * tool characters) on 2026-10-20, to 38,860, 37,593 and 38,958.
+ * tool characters) on 2026-10-20, to 38,860, 37,593 and 38,958. Lowered by
+ * 42 each when the nothing-attached rule dropped its exception for a request
+ * for papers themselves, so library papers answer it (user decision 2a,
+ * 2026-10-20), to 38,818, 37,551 and 38,916.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 38_860,
-  paper: 37_593,
-  collection: 38_958,
+  global: 38_818,
+  paper: 37_551,
+  collection: 38_916,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {
