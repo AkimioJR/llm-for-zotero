@@ -118,7 +118,7 @@ describe("web source attribution", function () {
     );
   });
 
-  it("rejects residual partial markers and multiple markers on one paragraph", function () {
+  it("rejects residual partial markers and merges adjacent markers on one line", function () {
     assert.equal(
       assessWebAttribution(
         "First.<!--llm-web-source:web_abc1234-->\n\nSecond.<!--llm-web-source:web_",
@@ -126,13 +126,131 @@ describe("web source attribution", function () {
       ).status,
       "invalid",
     );
-    assert.equal(
-      assessWebAttribution(
-        "Claim.<!--llm-web-source:web_abc1234--><!--llm-web-source:web_abc1234-->",
-        records,
-      ).status,
-      "invalid",
+    const merged = assessWebAttribution(
+      "Claim.<!--llm-web-source:web_abc1234--><!--llm-web-source:web_abc1234-->",
+      records,
     );
+    assert.equal(merged.status, "valid");
+    if (merged.status !== "valid") return;
+    assert.lengthOf(merged.anchors, 1);
+    assert.lengthOf(merged.anchors[0].sources, 1);
+  });
+
+  describe("mid-line markers", function () {
+    const sourceB = {
+      ...source,
+      sourceId: "web_def5678",
+      url: "https://example.org/releases",
+      hostname: "example.org",
+      organization: "Example Org",
+      title: "Release list",
+    };
+    const two: WebToolExecutionRecord[] = [
+      { name: "web_search", ok: true, content: { results: [source, sourceB] } },
+    ];
+    const M = (ids: string) => `<!--llm-web-source:${ids}-->`;
+
+    it("merges mid-line markers into one end-of-line anchor", function () {
+      const text = `Intro defaults.${M("web_abc1234")} The release list...${M("web_def5678")} So: done.`;
+      const clean = "Intro defaults. The release list... So: done.";
+      const a = assessWebAttribution(text, two);
+      assert.equal(a.status, "valid");
+      if (a.status !== "valid") return;
+      assert.equal(a.cleanText, clean);
+      assert.lengthOf(a.anchors, 1);
+      assert.equal(a.anchors[0].offset, clean.length);
+      assert.deepEqual(
+        a.anchors[0].sources.map((s) => s.sourceId),
+        ["web_abc1234", "web_def5678"],
+      );
+    });
+
+    it("drops the space a marker left before punctuation", function () {
+      const a = assessWebAttribution(
+        `On the page ${M("web_abc1234")}, while the list ${M("web_def5678")}. Done 完成 ${M("web_abc1234")}。`,
+        two,
+      );
+      assert.equal(a.status, "valid");
+      if (a.status !== "valid") return;
+      assert.equal(a.cleanText, "On the page, while the list. Done 完成。");
+    });
+
+    it("de-duplicates repeated IDs across markers on one line", function () {
+      const a = assessWebAttribution(
+        `A.${M("web_abc1234")} B.${M("web_def5678,web_abc1234")} C.`,
+        two,
+      );
+      assert.equal(a.status, "valid");
+      if (a.status !== "valid") return;
+      assert.deepEqual(
+        a.anchors[0].sources.map((s) => s.sourceId),
+        ["web_abc1234", "web_def5678"],
+      );
+    });
+
+    it("anchors each paragraph at its own end", function () {
+      const p1 = "First paragraph.";
+      const p2 = "Second one. More text.";
+      const a = assessWebAttribution(
+        `${p1}${M("web_abc1234")}\n\nSecond one.${M("web_def5678")} More text.`,
+        two,
+      );
+      assert.equal(a.status, "valid");
+      if (a.status !== "valid") return;
+      assert.equal(a.cleanText, `${p1}\n\n${p2}`);
+      assert.lengthOf(a.anchors, 2);
+      assert.equal(a.anchors[0].offset, p1.length);
+      assert.equal(a.anchors[1].offset, `${p1}\n\n${p2}`.length);
+    });
+
+    it("accepts a marker at the start of a line", function () {
+      const a = assessWebAttribution(`${M("web_abc1234")} Claim text.`, two);
+      assert.equal(a.status, "valid");
+      if (a.status !== "valid") return;
+      assert.equal(a.cleanText, " Claim text.");
+      assert.equal(a.anchors[0].offset, a.cleanText.length);
+    });
+
+    it("still rejects unrepairable lines and quotes the offending text", function () {
+      const unknown = assessWebAttribution(
+        `Text ${M("web_unknown")} more text here.`,
+        two,
+      );
+      assert.equal(unknown.status, "invalid");
+      if (unknown.status === "invalid") {
+        assert.include(
+          unknown.correctionPrompt,
+          `Offending text: "${M("web_unknown")}"`,
+        );
+      }
+      const none = assessWebAttribution(`Text ${M("none")} more text.`, two);
+      assert.equal(none.status, "invalid");
+      if (none.status === "invalid") {
+        assert.include(
+          none.correctionPrompt,
+          `Offending text: "${M("none")} more text."`,
+        );
+      }
+      assert.equal(
+        assessWebAttribution(
+          `Text ${M("none")} more ${M("web_abc1234")} text.`,
+          two,
+        ).status,
+        "invalid",
+      );
+    });
+
+    it("leaves fenced marker-like text untouched", function () {
+      const fenced = `\`\`\`html\nx ${M("web_abc1234")} y\n\`\`\``;
+      const a = assessWebAttribution(
+        `${fenced}\n\nProse.${M("web_abc1234")} More.`,
+        two,
+      );
+      assert.equal(a.status, "valid");
+      if (a.status !== "valid") return;
+      assert.include(a.cleanText, fenced);
+      assert.lengthOf(a.anchors, 1);
+    });
   });
 
   it("ignores marker-like text inside fenced code", function () {

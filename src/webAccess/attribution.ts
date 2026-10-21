@@ -9,6 +9,8 @@ import type {
 const MARKER_PREFIX = "<!--llm-web-source:";
 const COMPLETE_MARKER_PATTERN = /<!--llm-web-source:([^<>]*?)-->/g;
 const SOURCE_ID_PATTERN = /^web_[a-z0-9]+$/;
+const MARKER_BEFORE_PUNCTUATION_PATTERN =
+  /[ \t]*<!--llm-web-source:[^<>]*?-->(?=[,.;:!?)\]，。；：！？）])/g;
 
 function findStreamingMarkerStart(line: string): number {
   const completePrefixStart = line.indexOf(MARKER_PREFIX);
@@ -270,11 +272,13 @@ function cleanOffsetForMarker(
 function buildCorrectionPrompt(
   reason: string,
   sourceIds: readonly string[],
+  offending?: string,
 ): string {
   const available = sourceIds.length ? sourceIds.join(", ") : "none";
   return [
     "Correct the web attribution in your final answer.",
     reason,
+    ...(offending ? [`Offending text: "${offending}"`] : []),
     `Available successful source IDs: ${available}.`,
     "At the exact end of each prose paragraph that uses web information, append <!--llm-web-source:SOURCE_ID[,SOURCE_ID...]-->.",
     "Use only the listed IDs, do not place markers inside code fences, and do not add a sources footer.",
@@ -287,14 +291,81 @@ function invalidAssessment(
   markers: readonly MarkerOccurrence[],
   reason: string,
   sourceIds: readonly string[],
+  offendingMarker?: MarkerOccurrence,
 ): WebAttributionAssessment {
+  let offending: string | undefined;
+  if (offendingMarker) {
+    const lineEndRaw = text.indexOf("\n", offendingMarker.start);
+    const excerpt = text
+      .slice(offendingMarker.start, lineEndRaw < 0 ? text.length : lineEndRaw)
+      .replace(/\s+/g, " ")
+      .trim();
+    offending = excerpt.length > 120 ? `${excerpt.slice(0, 119)}…` : excerpt;
+  }
   return {
     status: "invalid",
     cleanText: stripOccurrences(text, markers),
     anchors: [],
     reason,
-    correctionPrompt: buildCorrectionPrompt(reason, sourceIds),
+    correctionPrompt: buildCorrectionPrompt(reason, sourceIds, offending),
   };
+}
+
+/**
+ * Merge several or non-final markers on one line into a single final marker.
+ * Lines the contract cannot express (none, empty value) stay unchanged.
+ */
+function repairMidLineMarkers(text: string): string {
+  let output = "";
+  let fence: { character: "`" | "~"; length: number } | null = null;
+  for (const lineWithBreak of text.match(/[^\n]*(?:\n|$)/g) || []) {
+    if (!lineWithBreak) continue;
+    const hasBreak = lineWithBreak.endsWith("\n");
+    const line = hasBreak ? lineWithBreak.slice(0, -1) : lineWithBreak;
+    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const token = fenceMatch[1];
+      const character = token[0] as "`" | "~";
+      if (!fence) fence = { character, length: token.length };
+      else if (fence.character === character && token.length >= fence.length) {
+        fence = null;
+      }
+      output += lineWithBreak;
+      continue;
+    }
+    output += fence ? lineWithBreak : repairLine(line) + (hasBreak ? "\n" : "");
+  }
+  return output;
+}
+
+function repairLine(line: string): string {
+  const matches = Array.from(line.matchAll(COMPLETE_MARKER_PATTERN));
+  if (!matches.length) return line;
+  const last = matches[matches.length - 1];
+  if (
+    matches.length === 1 &&
+    !line.slice(last.index! + last[0].length).trim()
+  ) {
+    return line;
+  }
+  if (matches.some((match) => !match[1].trim() || match[1].trim() === "none")) {
+    return line;
+  }
+  // A space the model put before a marker would otherwise end up before the
+  // punctuation that followed it ("page , while").
+  const prose = line
+    .replace(MARKER_BEFORE_PUNCTUATION_PATTERN, "")
+    .replace(COMPLETE_MARKER_PATTERN, "");
+  if (!prose.trim()) return line;
+  const ids = Array.from(
+    new Set(
+      matches
+        .flatMap((match) => match[1].split(","))
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  );
+  return `${prose.trimEnd()}${MARKER_PREFIX}${ids.join(",")}-->`;
 }
 
 export function assessWebAttribution(
@@ -302,10 +373,13 @@ export function assessWebAttribution(
   records: readonly WebToolExecutionRecord[],
 ): WebAttributionAssessment {
   const collected = collectSuccessfulWebSources(records);
-  const initialMarkers = collectMarkersOutsideFences(text);
-  const normalizedText = collected.webToolsRan
-    ? preserveDeclaredParagraphBoundaries(text, initialMarkers)
+  const repairedText = collected.webToolsRan
+    ? repairMidLineMarkers(text)
     : text;
+  const initialMarkers = collectMarkersOutsideFences(repairedText);
+  const normalizedText = collected.webToolsRan
+    ? preserveDeclaredParagraphBoundaries(repairedText, initialMarkers)
+    : repairedText;
   const markers = collectMarkersOutsideFences(normalizedText);
   if (!collected.webToolsRan) {
     return {
@@ -345,6 +419,7 @@ export function assessWebAttribution(
         markers,
         "Each marker must be the final content on its paragraph line.",
         sourceIds,
+        marker,
       );
     }
     if (markerLines.has(lineStart)) {
@@ -353,6 +428,7 @@ export function assessWebAttribution(
         markers,
         "Each paragraph may contain only one web source marker.",
         sourceIds,
+        marker,
       );
     }
     markerLines.add(lineStart);
@@ -374,6 +450,7 @@ export function assessWebAttribution(
         markers,
         "Each marker must follow paragraph text on the same line.",
         sourceIds,
+        marker,
       );
     }
     if (sawNone) {
@@ -382,6 +459,7 @@ export function assessWebAttribution(
         markers,
         "The none marker cannot be combined with source citations.",
         sourceIds,
+        marker,
       );
     }
     const ids = Array.from(
@@ -393,6 +471,7 @@ export function assessWebAttribution(
         markers,
         "A web source marker contains an invalid source ID.",
         sourceIds,
+        marker,
       );
     }
     if (
@@ -406,6 +485,7 @@ export function assessWebAttribution(
         markers,
         "A web source marker cites an unknown, unsafe, or failed result.",
         sourceIds,
+        marker,
       );
     }
     anchors.push({
