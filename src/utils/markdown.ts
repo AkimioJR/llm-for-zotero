@@ -1834,7 +1834,7 @@ function renderBlock(block: TextBlock): string {
 /** Render fenced code block */
 function renderCodeBlock(code: string, raw: string): string {
   // Extract language from raw if present
-  const langMatch = raw.match(/^```[ \t]*([^\s`]*)/);
+  const langMatch = raw.match(/^[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*([^\s`~]*)/);
   const lang = normalizeFenceLanguage(langMatch?.[1]);
   const label = lang || "text";
   if (zoteroNoteMode) {

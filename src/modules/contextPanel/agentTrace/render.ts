@@ -114,6 +114,10 @@ import { getAgentRuntime } from "../../../agent";
 import { projectStageEvents } from "./stageProjection";
 import { resolveAgentToolPresentation } from "./toolPresentation";
 import {
+  SIDE_ITEM_KIND_ATTRIBUTE,
+  appendMoveToSidePanelButton,
+} from "../sidePanelItems";
+import {
   compactAgentTraceEvents,
   createAgentTraceCompactor,
   getReasoningTraceKey,
@@ -6064,6 +6068,7 @@ function renderAgentTraceDetailsBody(
         value,
         `${fence}${detail.kind === "json" ? "json" : "text"}\n${detail.value}\n${fence}`,
         doc,
+        { sideItems: false },
       );
       item.append(label, value);
     } else {
@@ -6648,6 +6653,30 @@ function renderPlanDocumentCard(params: {
       }
     });
     actions.append(copy, note, exportButton, expand);
+    root.setAttribute(SIDE_ITEM_KIND_ATTRIBUTE, "plan");
+    appendMoveToSidePanelButton({
+      doc: params.doc,
+      parent: actions,
+      className: "llm-plan-document-action llm-plan-document-action-move-side",
+      buildRequest: () => ({
+        kind: "plan",
+        title: document.title,
+        source: document.visibleMarkdown,
+        documentId: document.documentId,
+        element: root,
+        renderBody: (targetDoc, target) =>
+          renderPlanDocumentContent({
+            doc: targetDoc,
+            root: target,
+            document,
+            citationContext: params.citationContext,
+          }),
+        saveAsNote: async () => {
+          const saved = await savePlanDocumentAsNote(document.documentId);
+          return saved.created ? "Saved as note" : "Note already saved";
+        },
+      }),
+    });
     renderPlanDocumentContent({
       doc: params.doc,
       root: content,
@@ -7027,7 +7056,9 @@ export function renderAgentTrace({
             message,
           );
           try {
-            renderRenderedMarkdownInto(messageEl, markdownText, doc);
+            renderRenderedMarkdownInto(messageEl, markdownText, doc, {
+              sideItems: false,
+            });
           } catch {
             messageEl.textContent = markdownText;
           }

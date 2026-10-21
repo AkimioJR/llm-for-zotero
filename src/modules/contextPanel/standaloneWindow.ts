@@ -205,6 +205,7 @@ import { pluginStylesheetHref } from "../../utils/pluginReload";
 import { createPluginUpdateController } from "../pluginUpdate";
 import { getPluginUpdateDeps } from "../pluginUpdateAdapters";
 import { createStandaloneUpdateControl } from "./standaloneUpdateControl";
+import { registerSidePanelItemHost } from "./sidePanelItems";
 import {
   createStandaloneSidePanel,
   type StandaloneSidePanelController,
@@ -629,6 +630,13 @@ export function openStandaloneChat(options?: {
 
     try {
       const doc = newWin.document;
+      // The →| ("Move to side panel") buttons exist only where this host is
+      // registered. Register it now, before any message renders, whether or
+      // not the side panel has been opened or even created yet; the call
+      // goes to the panel once it exists (it opens the panel if needed).
+      registerSidePanelItemHost(doc, {
+        open: (request) => standaloneSidePanel?.openItem(request),
+      });
       doc.documentElement?.setAttribute(
         "minwidth",
         `${STANDALONE_MIN_WIDTH_PX}`,

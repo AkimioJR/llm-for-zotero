@@ -9,6 +9,10 @@
  * - Side chat tabs: each a full second chat panel on its own temporary
  *   (ephemeral) key that follows the main chat's paper or library, reads the
  *   main chat as background, and is never saved.
+ * - Item tabs: one thing moved out of the main chat with the "Move to side
+ *   panel" button (a Mermaid diagram, an SVG figure, an HTML page, a code
+ *   block, or a plan document). Temporary: they are not saved,
+ *   and the panel drops them when it closes.
  * - The History tab: the Search history field and list; a picked chat
  *   replaces it with that chat's read-only tab.
  * The "+" button shows the new-tab page: a "Side chat" row and a "History"
@@ -86,6 +90,8 @@ import {
   isSameSideChatContext,
   openHistorySidePanelTab,
   moveSidePanelTab,
+  openItemSidePanelTab,
+  openMiscSidePanelTab,
   openReadOnlySidePanelTab,
   openSideChatSidePanelTab,
   openSidePanel,
@@ -127,6 +133,24 @@ import {
   startSideSurfaceChoicesFromStandalone,
 } from "./surfaceChoices";
 import { setNeutralStatus, setStatus } from "./textUtils";
+import { copyTextToClipboard } from "./clipboard";
+import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
+import { renderRenderedMarkdownInto } from "./renderedMarkdown";
+import {
+  buildItemFenceMarkdown,
+  canRunItemAgain,
+  canSaveItemAsNote,
+  collectMadeItems,
+  flashSourceMessage,
+  resolveSidePanelItemIdentity,
+  type MadeItem,
+  registerSidePanelItemHost,
+  resolveItemTabTitle,
+  unregisterSidePanelItemHost,
+  type SidePanelItemHost,
+  type SidePanelItemKind,
+  type SidePanelItemRequest,
+} from "./sidePanelItems";
 
 export const SIDE_PANEL_WIDTH_VARIABLE = "--llm-standalone-side-panel-width";
 
@@ -205,6 +229,8 @@ export type StandaloneSidePanelController = {
   relayout: () => void;
   /** Called after every main-chat mount (mode, paper, or chat changed). */
   onMainMounted: () => void;
+  /** Opens the panel if closed, then the item's tab (the →| buttons). */
+  openItem: (request: SidePanelItemRequest) => void;
   /** Window close: drop everything without asking. */
   dispose: () => void;
 };
@@ -252,7 +278,29 @@ type HistoryTabView = TabViewBase & {
   list: EmbeddedHistorySearchListView;
 };
 
-type TabView = ReadOnlyTabView | SideChatTabView | HistoryTabView;
+type ItemTabView = TabViewBase & {
+  kind: "item";
+  itemKind: SidePanelItemKind;
+  itemKey: string;
+  /** The main chat and message the item came from (messageIndex -1: unknown). */
+  conversationKey: number;
+  messageIndex: number;
+};
+
+type MiscTabView = TabViewBase & {
+  kind: "misc";
+  /** Redraws the list from the main chat's rendered messages. */
+  refresh: () => void;
+  /** Stops watching the main chat. */
+  stopWatching: () => void;
+};
+
+type TabView =
+  | ReadOnlyTabView
+  | SideChatTabView
+  | HistoryTabView
+  | ItemTabView
+  | MiscTabView;
 
 function setButtonLabel(button: HTMLElement, label: string): void {
   button.title = label;
@@ -313,12 +361,14 @@ export function createStandaloneSidePanel(
     root: HTMLElement;
     sideChatRow: HTMLButtonElement;
     historyRow: HTMLButtonElement;
+    miscRow: HTMLButtonElement;
   } | null = null;
   let panelConfirm: HTMLElement | null = null;
   let disposed = false;
 
-  const nextTabId = (kind: "readonly" | "sidechat" | "history") =>
-    `${kind}-${++tabSequence}`;
+  const nextTabId = (
+    kind: "readonly" | "sidechat" | "history" | "item" | "misc",
+  ) => `${kind}-${++tabSequence}`;
 
   // -- Toggle (tab row, trailing slot) --------------------------------------
   const toggleButton = createElement(
@@ -680,7 +730,10 @@ export function createStandaloneSidePanel(
     return { row, text, actions };
   };
 
-  const createPill = (label: string, variant: "read-only" | "temporary") => {
+  const createPill = (
+    label: string,
+    variant: "read-only" | "temporary" | "kind",
+  ) => {
     const pill = createElement(doc, "span", "llm-standalone-side-panel-pill", {
       textContent: label,
     });
@@ -691,8 +744,9 @@ export function createStandaloneSidePanel(
   // -- Tabs in the strip ------------------------------------------------------
   const createTab = (
     id: string,
-    kind: "readonly" | "sidechat" | "history",
+    kind: "readonly" | "sidechat" | "history" | "item" | "misc",
     title: string,
+    iconClass?: string,
   ) => {
     const tab = createElement(doc, "div", "llm-standalone-side-panel-tab");
     tab.dataset.sideTabId = id;
@@ -703,9 +757,10 @@ export function createStandaloneSidePanel(
       doc,
       "span",
       `llm-standalone-side-panel-tab-icon ${
-        kind === "sidechat"
+        iconClass ||
+        (kind === "sidechat"
           ? "llm-standalone-side-panel-icon-side-chat"
-          : "llm-standalone-side-panel-icon-history"
+          : "llm-standalone-side-panel-icon-history")
       }`,
     );
     icon.setAttribute("aria-hidden", "true");
@@ -824,7 +879,7 @@ export function createStandaloneSidePanel(
   // Two nav rows, in the window's nav-row style: "Side chat" opens a new
   // side chat tab; "History" turns this tab into the History tab.
   const createLaunchRow = (
-    kind: "sidechat" | "history",
+    kind: "sidechat" | "history" | "misc",
     iconClass: string,
     label: string,
     hint: string,
@@ -887,11 +942,18 @@ export function createStandaloneSidePanel(
       t("Read another past chat, read-only"),
     );
     historyRow.addEventListener("click", () => openHistoryTab());
-    nav.append(sideChatRow, historyRow);
+    const miscRow = createLaunchRow(
+      "misc",
+      "llm-standalone-side-panel-icon-misc",
+      t("Miscellaneous"),
+      t("View what the model made in this chat"),
+    );
+    miscRow.addEventListener("click", () => openMiscTab());
+    nav.append(sideChatRow, historyRow, miscRow);
     startPage.appendChild(nav);
     root.appendChild(startPage);
     viewHost.appendChild(root);
-    newTabPage = { root, sideChatRow, historyRow };
+    newTabPage = { root, sideChatRow, historyRow, miscRow };
     return newTabPage;
   };
   const destroyNewTabPage = () => {
@@ -1628,6 +1690,386 @@ export function createStandaloneSidePanel(
     });
   };
 
+  // -- Item tabs -----------------------------------------------------------
+  const ITEM_KIND_LABELS: Record<SidePanelItemKind, string> = {
+    mermaid: "Diagram",
+    svg: "Figure",
+    html: "HTML",
+    code: "Code",
+    plan: "Plan",
+  };
+  const HTML_SAFE_BOX_NOTE =
+    "Runs in a safe box: no internet, no access to Zotero";
+
+  const buildItemView = (
+    id: string,
+    request: SidePanelItemRequest,
+    itemKey: string,
+    messageIndex: number,
+    conversationKey: number,
+  ): ItemTabView => {
+    const kind = request.kind;
+    const title = resolveItemTabTitle(request, t);
+    const root = createElement(doc, "div", "llm-standalone-side-panel-item");
+    root.dataset.sideView = "item";
+    root.dataset.sideItemKind = kind;
+    root.dataset.sideTabId = id;
+    const { row, actions } = createTitleRow(title);
+    row
+      .querySelector(".llm-standalone-content-title-text")
+      ?.after(createPill(t(ITEM_KIND_LABELS[kind]), "kind"));
+    const status = createElement(
+      doc,
+      "div",
+      "llm-standalone-side-panel-item-status",
+    );
+    status.setAttribute("role", "status");
+    const defaultStatus = kind === "html" ? t(HTML_SAFE_BOX_NOTE) : "";
+    status.textContent = defaultStatus;
+    status.hidden = !defaultStatus;
+    let feedbackTimer: number | null = null;
+    const showFeedback = (text: string) => {
+      status.textContent = text;
+      status.hidden = false;
+      if (feedbackTimer !== null) win.clearTimeout(feedbackTimer);
+      feedbackTimer = win.setTimeout(() => {
+        feedbackTimer = null;
+        status.textContent = defaultStatus;
+        status.hidden = !defaultStatus;
+      }, 2000);
+    };
+
+    const body = createElement(
+      doc,
+      "div",
+      "llm-standalone-side-panel-item-body",
+    );
+    body.dataset.itemKind = kind;
+    const mountBody = () => {
+      body.replaceChildren();
+      if (kind === "html") {
+        body.appendChild(
+          createSandboxedHtmlFrame(
+            doc,
+            request.source,
+            "llm-side-panel-item-frame",
+          ),
+        );
+        return;
+      }
+      const box = createElement(
+        doc,
+        "div",
+        "llm-standalone-side-panel-item-rendered",
+      );
+      body.appendChild(box);
+      if (request.renderBody) {
+        request.renderBody(doc, box);
+      } else if (kind === "mermaid" || kind === "svg" || kind === "code") {
+        renderRenderedMarkdownInto(box, buildItemFenceMarkdown(request), doc);
+      } else {
+        renderRenderedMarkdownInto(box, request.source, doc);
+      }
+    };
+
+    // Icon-only, like the other side panel title actions; the label lives in
+    // title and aria-label.
+    const makeAction = (name: string, label: string, run: () => void) => {
+      const button = createIconButton(
+        doc,
+        `llm-standalone-side-panel-item-action llm-standalone-side-panel-icon-${name}`,
+        label,
+      );
+      button.dataset.itemAction = name;
+      button.addEventListener("click", run);
+      return button;
+    };
+    actions.appendChild(
+      makeAction("copy", t("Copy"), () => {
+        void copyTextToClipboard(mainBody, request.source)
+          .then(() => showFeedback(t("Copied")))
+          .catch((err) => appLogger.warn("LLM: side panel copy failed", err));
+      }),
+    );
+    if (canSaveItemAsNote(kind) && request.saveAsNote) {
+      const save = request.saveAsNote;
+      const button = makeAction("note", t("Save as note"), () => {
+        button.disabled = true;
+        void save()
+          .then((text) => showFeedback(t(text)))
+          .catch((err) => {
+            appLogger.warn("LLM: side panel save as note failed", err);
+            showFeedback(t("Could not save the note"));
+          })
+          .finally(() => {
+            button.disabled = false;
+          });
+      });
+      actions.appendChild(button);
+    }
+    if (canRunItemAgain(kind)) {
+      actions.appendChild(
+        makeAction("rerun", t("Run again"), () => {
+          mountBody();
+          showFeedback(t("Ran again"));
+        }),
+      );
+    }
+    if (messageIndex >= 0) {
+      actions.appendChild(
+        makeAction("show-in-chat", t("Show in chat"), () => showInChat(view)),
+      );
+    }
+    root.append(row, status, body);
+    viewHost.appendChild(root);
+    mountBody();
+    const { tab, tabTitle } = createTab(
+      id,
+      "item",
+      title,
+      `llm-standalone-side-panel-icon-item-${kind}`,
+    );
+    const view: ItemTabView = {
+      kind: "item",
+      itemKind: kind,
+      itemKey,
+      id,
+      root,
+      body,
+      tab,
+      tabTitle,
+      confirm: null,
+      disposed: false,
+      conversationKey,
+      messageIndex,
+    };
+    return view;
+  };
+
+  /** Scrolls the main chat to the item's message and flashes it. */
+  const showInChat = (view: ItemTabView): boolean => {
+    const mainStatus = mainBody.querySelector(
+      "#llm-status",
+    ) as HTMLElement | null;
+    const wrapper =
+      view.conversationKey === deps.getMainContext().conversationKey
+        ? flashSourceMessage({
+            container: mainBody,
+            messageIndex: view.messageIndex,
+            setTimeout: (callback, ms) => win.setTimeout(callback, ms),
+          })
+        : null;
+    if (!wrapper && mainStatus) {
+      setStatus(
+        mainStatus,
+        t("The source message is not in the main chat now."),
+        "warning",
+      );
+    }
+    return Boolean(wrapper);
+  };
+
+  const disposeItemView = (view: ItemTabView) => {
+    if (view.disposed) return;
+    view.disposed = true;
+    view.root.remove();
+    view.tab.remove();
+  };
+
+  /**
+   * Opens the panel if it is closed, then opens the item's tab, or switches
+   * to it when the same item (same source message, kind, and position) is
+   * already open.
+   */
+  const openItem = (
+    request: SidePanelItemRequest,
+    replaceId?: string,
+  ): boolean => {
+    if (disposed) return false;
+    const conversationKey = deps.getMainContext().conversationKey;
+    const { messageIndex, itemKey } = resolveSidePanelItemIdentity(
+      request,
+      conversationKey,
+    );
+    const result = openItemSidePanelTab(openSidePanel(tabsState), {
+      id: nextTabId("item"),
+      itemKey,
+      replaceId,
+    });
+    if (result.refused) {
+      reportTabLimit();
+      return false;
+    }
+    if (result.opened && result.tabId) {
+      views.set(
+        result.tabId,
+        buildItemView(
+          result.tabId,
+          request,
+          itemKey,
+          messageIndex,
+          conversationKey,
+        ),
+      );
+    }
+    const replaced = replaceId ? views.get(replaceId) : undefined;
+    if (
+      replaced &&
+      replaced.kind === "misc" &&
+      !result.state.tabs.some((tab) => tab.id === replaced.id)
+    ) {
+      views.delete(replaced.id);
+      disposeMiscView(replaced);
+    }
+    setTabsState(result.state);
+    return true;
+  };
+
+  // -- Miscellaneous tab -------------------------------------------------------
+  // What the model made in the main chat (diagrams, figures, pages, code,
+  // plan documents), newest first, in the History list's row styles. A picked
+  // row turns this tab into that item's tab.
+  const buildMiscView = (id: string): MiscTabView => {
+    const root = createElement(doc, "div", "llm-standalone-side-panel-misc");
+    root.dataset.sideView = "misc";
+    root.dataset.sideTabId = id;
+    const { row, text } = createTitleRow(t("Made in this chat"));
+    const count = createPill("", "kind");
+    text.after(count);
+    const list = createElement(
+      doc,
+      "div",
+      "llm-standalone-search-results llm-standalone-side-panel-misc-list",
+    );
+    root.append(row, list);
+    viewHost.appendChild(root);
+
+    const renderList = () => {
+      const items: MadeItem[] = collectMadeItems(mainBody);
+      list.replaceChildren();
+      count.textContent = String(items.length);
+      count.hidden = !items.length;
+      if (!items.length) {
+        list.appendChild(
+          createElement(doc, "div", "llm-standalone-search-empty", {
+            textContent: t("Nothing made in this chat yet"),
+          }),
+        );
+        return;
+      }
+      for (const made of items) {
+        const item = createElement(
+          doc,
+          "div",
+          "llm-standalone-search-item",
+        ) as HTMLDivElement;
+        item.setAttribute("role", "button");
+        item.setAttribute("tabindex", "0");
+        item.dataset.madeKind = made.kind;
+        const textWrap = createElement(
+          doc,
+          "div",
+          "llm-standalone-search-text",
+        );
+        const label = createElement(
+          doc,
+          "span",
+          "llm-standalone-search-label",
+          {
+            textContent: t(ITEM_KIND_LABELS[made.kind]),
+          },
+        );
+        label.dataset.labelType = "item";
+        label.dataset.itemKind = made.kind;
+        const title = resolveItemTabTitle(made.request, t);
+        textWrap.append(
+          label,
+          createElement(doc, "span", "llm-standalone-search-title", {
+            textContent: title,
+          }),
+        );
+        item.appendChild(textWrap);
+        item.title = `${t(ITEM_KIND_LABELS[made.kind])}: ${title}`;
+        const pick = () => void openItem(made.request, id);
+        item.addEventListener("click", pick);
+        item.addEventListener("keydown", (event: KeyboardEvent) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            pick();
+          }
+        });
+        list.appendChild(item);
+      }
+    };
+
+    // The list follows the main chat: a debounced watch on its messages.
+    let timer: number | null = null;
+    const schedule = () => {
+      if (timer !== null) win.clearTimeout(timer);
+      timer = win.setTimeout(() => {
+        timer = null;
+        if (!view.disposed) renderList();
+      }, 150);
+    };
+    const MutationObserverCtor = (
+      win as unknown as { MutationObserver?: typeof MutationObserver }
+    ).MutationObserver;
+    const observer = MutationObserverCtor
+      ? new MutationObserverCtor(schedule)
+      : null;
+    observer?.observe(mainBody, { childList: true, subtree: true });
+
+    const { tab, tabTitle } = createTab(
+      id,
+      "misc",
+      t("Miscellaneous"),
+      "llm-standalone-side-panel-icon-misc",
+    );
+    const view: MiscTabView = {
+      kind: "misc",
+      id,
+      root,
+      body: root,
+      tab,
+      tabTitle,
+      confirm: null,
+      disposed: false,
+      refresh: renderList,
+      stopWatching: () => {
+        observer?.disconnect();
+        if (timer !== null) win.clearTimeout(timer);
+        timer = null;
+      },
+    };
+    renderList();
+    return view;
+  };
+  const disposeMiscView = (view: MiscTabView) => {
+    if (view.disposed) return;
+    view.disposed = true;
+    view.stopWatching();
+    view.root.remove();
+    view.tab.remove();
+  };
+  const openMiscTab = () => {
+    const result = openMiscSidePanelTab(tabsState, nextTabId("misc"));
+    if (result.refused) {
+      reportTabLimit();
+      return;
+    }
+    if (result.opened && result.tabId) {
+      views.set(result.tabId, buildMiscView(result.tabId));
+    } else if (result.tabId) {
+      const view = views.get(result.tabId);
+      if (view?.kind === "misc") view.refresh();
+    }
+    setTabsState(result.state);
+  };
+  const itemHost: SidePanelItemHost = {
+    open: (request) => void openItem(request),
+  };
+  registerSidePanelItemHost(doc, itemHost);
+
   // -- Closing a tab --------------------------------------------------------
   const createConfirmCard = (params: {
     className: string;
@@ -1733,6 +2175,8 @@ export function createStandaloneSidePanel(
   const disposeView = (view: TabView) => {
     if (view.kind === "sidechat") disposeSideChatView(view);
     else if (view.kind === "history") disposeHistoryView(view);
+    else if (view.kind === "item") disposeItemView(view);
+    else if (view.kind === "misc") disposeMiscView(view);
     else disposeReadOnlyView(view);
   };
 
@@ -1874,6 +2318,8 @@ export function createStandaloneSidePanel(
       page.sideChatRow.disabled = full;
       page.historyRow.disabled =
         full && !tabsState.tabs.some((tab) => tab.kind === "history");
+      page.miscRow.disabled =
+        full && !tabsState.tabs.some((tab) => tab.kind === "misc");
     } else if (newTabPage) {
       newTabPage.root.hidden = true;
     }
@@ -2042,7 +2488,11 @@ export function createStandaloneSidePanel(
       applyMainExtensions();
       for (const view of sideChatViews()) followMainContext(view);
       if (isOpen()) historyView(tabsState.activeId)?.list.refresh();
+      for (const view of views.values()) {
+        if (view.kind === "misc") view.refresh();
+      }
     },
+    openItem: (request) => void openItem(request),
     dispose: () => {
       if (disposed) return;
       if (slide?.frameId != null) win.cancelAnimationFrame?.(slide.frameId);
@@ -2050,6 +2500,7 @@ export function createStandaloneSidePanel(
       closing = false;
       disposeAllViews();
       disposed = true;
+      unregisterSidePanelItemHost(doc, itemHost);
       resize.dispose();
       themeObserver?.disconnect();
       win.removeEventListener("resize", onWindowResize);

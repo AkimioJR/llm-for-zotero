@@ -23,6 +23,15 @@ import {
 } from "./standaloneMermaidWindow";
 import { sanitizeText } from "../../utils/textSanitization";
 import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
+import { t } from "../../utils/i18n";
+import {
+  NO_SIDE_ITEMS_ATTRIBUTE,
+  SIDE_ITEM_KIND_ATTRIBUTE,
+  appendMoveToSidePanelButton,
+  getSidePanelItemHost,
+  isOutsideAnswerContent,
+  splitCodeFence,
+} from "./sidePanelItems";
 import {
   copySvgFigureAsPngToClipboard,
   isMermaidFigureFenceLanguage,
@@ -32,6 +41,11 @@ export type RenderedMarkdownOptions = {
   deferEnrichment?: boolean;
   resolveImage?: (src: string) => string | null;
   onAsyncContentRendered?: () => void;
+  /**
+   * False for content that is not part of the answer (the agent trace): its
+   * blocks get no "Move to side panel" button and no Miscellaneous row.
+   */
+  sideItems?: boolean;
 };
 
 type MermaidRenderOptions = {
@@ -1550,6 +1564,7 @@ function renderMermaidImagePreview(
   delete preview.dataset.mermaidZoom;
   preview.dataset.llmRenderedSvg = svgMarkup;
   preview.replaceChildren(viewport, openButton);
+  attachSideItemMoveButton(doc, preview, "mermaid", source);
   syncFigureCopyButtonStateForShell(
     preview.closest(".llm-codeblock-shell") as HTMLElement | null,
   );
@@ -1593,6 +1608,7 @@ function attachRenderedSvgPreviewButtons(
       }
     });
     preview.appendChild(openButton);
+    attachSideItemMoveButton(doc, preview, "svg", svgMarkup);
   }
 }
 
@@ -1610,7 +1626,7 @@ function attachRenderedHtmlPreviews(root: ParentNode, doc: Document): void {
     const openButton = createMermaidZoomButton(
       doc,
       MERMAID_PREVIEW_OPEN_ICON,
-      "Open HTML preview viewer",
+      t("Open HTML preview viewer"),
     );
     openButton.classList.add("llm-mermaid-open-btn", "llm-html-open-btn");
     openButton.addEventListener("click", () => {
@@ -1625,15 +1641,75 @@ function attachRenderedHtmlPreviews(root: ParentNode, doc: Document): void {
         preview,
         getMermaidThemeKey(doc, preview),
         {
-          ariaLabel: "HTML preview",
-          toolbarLabel: "HTML preview viewer controls",
-          zoomTargetLabel: "HTML preview",
-          closeTitle: "Close HTML preview viewer",
+          ariaLabel: t("HTML preview"),
+          toolbarLabel: t("HTML preview viewer controls"),
+          zoomTargetLabel: t("HTML preview"),
+          closeTitle: t("Close HTML preview viewer"),
         },
         false,
       );
     });
     preview.replaceChildren(frame, openButton);
+    attachSideItemMoveButton(doc, preview, "html", source);
+  }
+}
+
+/**
+ * "Move to side panel" next to the open button, in the same corner. It exists
+ * only where the document has a side panel (the standalone window).
+ */
+function attachSideItemMoveButton(
+  doc: Document,
+  preview: HTMLElement,
+  kind: "mermaid" | "svg" | "html",
+  source: string,
+): void {
+  if (isOutsideAnswerContent(preview)) return;
+  preview.setAttribute(SIDE_ITEM_KIND_ATTRIBUTE, kind);
+  appendMoveToSidePanelButton({
+    doc,
+    parent: preview,
+    className: "llm-mermaid-open-btn llm-side-move-glyph",
+    buildRequest: () => ({ kind, source, element: preview }),
+  });
+}
+
+/** "Move to side panel" in the header of a plain code block. */
+function attachRenderedCodeBlockMoveButtons(
+  root: ParentNode,
+  doc: Document,
+): void {
+  if (!getSidePanelItemHost(doc)) return;
+  const shells = Array.from(
+    root.querySelectorAll(".llm-codeblock-shell"),
+  ) as HTMLElement[];
+  for (const shell of shells) {
+    // Preview blocks carry their own →| beside ⛶ and are listed by kind.
+    if (
+      getVisualCodeBlockPreview(shell) ||
+      getDirectChildWithClass(shell, "llm-html-preview")
+    ) {
+      continue;
+    }
+    const header = getDirectChildWithClass(shell, "llm-codeblock-header");
+    const body = getDirectChildWithClass(shell, "llm-codeblock-body");
+    if (!header || !body || isOutsideAnswerContent(shell)) continue;
+    shell.setAttribute(SIDE_ITEM_KIND_ATTRIBUTE, "code");
+    appendMoveToSidePanelButton({
+      doc,
+      parent: header,
+      className: "llm-render-code-move-btn llm-side-move-glyph",
+      buildRequest: () => {
+        // The copy source is the whole fence; the tab wants the inner code.
+        const copySource = (
+          shell.closest(".llm-copyable") as HTMLElement | null
+        )?.dataset.llmCopySource;
+        const { code, lang } = copySource
+          ? splitCodeFence(copySource)
+          : { code: body.textContent || "", lang: "" };
+        return { kind: "code", source: code, lang, element: shell };
+      },
+    });
   }
 }
 
@@ -2447,6 +2523,9 @@ export function renderRenderedMarkdownInto(
   options?: RenderedMarkdownOptions,
 ): void {
   target.classList.add("llm-rendered-markdown");
+  if (options?.sideItems === false) {
+    target.setAttribute(NO_SIDE_ITEMS_ATTRIBUTE, "true");
+  }
   const html = renderAssistantMarkdownHtmlForChat(text, options);
   if (!setRenderedMarkdownHtml(target, html, doc)) {
     const legacyHtml = renderMarkdownWithLegacyParser(
@@ -2460,6 +2539,7 @@ export function renderRenderedMarkdownInto(
   if (options?.deferEnrichment) return;
   attachRenderedCodeBlockControls(target, doc);
   attachRenderedCopyButtons(target, doc);
+  attachRenderedCodeBlockMoveButtons(target, doc);
   attachRenderedSvgPreviewButtons(target, doc);
   attachRenderedHtmlPreviews(target, doc);
   void renderMermaidBlocks(

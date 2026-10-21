@@ -7,6 +7,8 @@
  * the sandbox and the content security policy cannot drift between callers.
  */
 
+import { t } from "../../utils/i18n";
+
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
 /** The only sandbox token the preview frame gets. */
@@ -53,7 +55,7 @@ export function guardHtmlPreviewNavigation(
     frame.removeAttribute("srcdoc");
     const note = doc.createElementNS(XHTML_NS, "div") as HTMLElement;
     note.setAttribute("class", "llm-html-preview-stopped");
-    note.textContent = HTML_PREVIEW_STOPPED_TEXT;
+    note.textContent = t(HTML_PREVIEW_STOPPED_TEXT);
     const parent = frame.parentNode;
     if (parent) {
       parent.replaceChild(note, frame);
@@ -77,7 +79,7 @@ export function createSandboxedHtmlFrame(
   // is inserted, so the document never loads without it.
   frame.setAttribute("sandbox", HTML_PREVIEW_SANDBOX);
   frame.setAttribute("referrerpolicy", "no-referrer");
-  frame.setAttribute("title", "HTML preview");
+  frame.setAttribute("title", t("HTML preview"));
   frame.setAttribute("class", className);
   guardHtmlPreviewNavigation(doc, frame);
   frame.setAttribute("srcdoc", buildHtmlPreviewSrcdoc(source));

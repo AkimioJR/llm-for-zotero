@@ -9,7 +9,12 @@
 /** The panel holds at most this many tabs. */
 export const SIDE_PANEL_MAX_TABS = 8;
 
-export type SidePanelTabKind = "readonly" | "sidechat" | "history";
+export type SidePanelTabKind =
+  | "readonly"
+  | "sidechat"
+  | "history"
+  | "item"
+  | "misc";
 
 export type SidePanelTab = {
   id: string;
@@ -19,6 +24,8 @@ export type SidePanelTab = {
    * for the History tab.
    */
   conversationKey: number;
+  /** An item tab's identity (see buildSidePanelItemKey); unset otherwise. */
+  itemKey?: string;
 };
 
 export type SidePanelTabsState = {
@@ -215,6 +222,94 @@ export function openReadOnlySidePanelTab(
     id: params.id,
     kind: "readonly",
     conversationKey: params.conversationKey,
+  });
+}
+
+/**
+ * The New tab page's "Miscellaneous" row: the New tab tab becomes the
+ * Miscellaneous tab (the list of what the model made in the main chat).
+ * There is one; with one open, it is focused and the New tab tab goes.
+ */
+export function openMiscSidePanelTab(
+  state: SidePanelTabsState,
+  id: string,
+): SidePanelTabOpenResult {
+  const existing = state.tabs.find((tab) => tab.kind === "misc");
+  if (existing) {
+    const replacesNewTab = state.open && state.activeId === null;
+    return {
+      state: focusSidePanelTab(
+        replacesNewTab ? { ...state, newTabOpen: false } : state,
+        existing.id,
+      ),
+      tabId: existing.id,
+      opened: false,
+      refused: false,
+    };
+  }
+  return addTab(state, { id, kind: "misc", conversationKey: 0 });
+}
+
+/**
+ * An item moved from the main chat (diagram, figure, page, code, plan)
+ * opens once; moving the same item again focuses its tab. A tab
+ * opened from the New tab tab replaces it, as for other tabs. Picked in the
+ * Miscellaneous tab (`replaceId`), it takes that tab's place, or, when
+ * already open, the Miscellaneous tab closes and the open tab is focused.
+ */
+export function openItemSidePanelTab(
+  state: SidePanelTabsState,
+  params: { id: string; itemKey: string; replaceId?: string },
+): SidePanelTabOpenResult {
+  const existing = state.tabs.find(
+    (tab) => tab.kind === "item" && tab.itemKey === params.itemKey,
+  );
+  const replaceIndex = params.replaceId
+    ? state.tabs.findIndex((tab) => tab.id === params.replaceId)
+    : -1;
+  if (replaceIndex >= 0) {
+    if (existing) {
+      return {
+        state: focusSidePanelTab(
+          closeSidePanelTab(state, params.replaceId!),
+          existing.id,
+        ),
+        tabId: existing.id,
+        opened: false,
+        refused: false,
+      };
+    }
+    const tabs = [...state.tabs];
+    tabs[replaceIndex] = {
+      id: params.id,
+      kind: "item",
+      conversationKey: 0,
+      itemKey: params.itemKey,
+    };
+    return {
+      state: focusSidePanelTab({ ...state, tabs }, params.id),
+      tabId: params.id,
+      opened: true,
+      refused: false,
+    };
+  }
+  if (existing) {
+    const replacesNewTab = state.open && state.activeId === null;
+    return {
+      state: focusSidePanelTab(
+        replacesNewTab ? { ...state, newTabOpen: false } : state,
+        existing.id,
+      ),
+      tabId: existing.id,
+      opened: false,
+      refused: false,
+    };
+  }
+  return addTab(state, {
+    id: params.id,
+    kind: "item",
+    conversationKey: 0,
+    itemKey: params.itemKey,
   });
 }
 

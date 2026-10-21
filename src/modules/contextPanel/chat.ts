@@ -251,6 +251,7 @@ import {
   isChatPanelReadOnly,
   isChatPanelTurnRewriteDisabled,
   type ChatPanelAssistantAction,
+  type ChatPanelAssistantActionInfo,
 } from "./chatPanelExtensions";
 import { withConversationWriteLock } from "../../shared/conversationWriteFence";
 import {
@@ -1755,7 +1756,7 @@ function appendExtraAssistantActionButtons(params: {
   doc: Document;
   actions: HTMLElement;
   extraActions: readonly ChatPanelAssistantAction[];
-  info: { contentText: string; conversationKey: number; timestamp?: number };
+  info: ChatPanelAssistantActionInfo;
 }): void {
   for (const action of params.extraActions) {
     const id = action.id.replace(/[^A-Za-z0-9_-]/g, "");
@@ -12393,18 +12394,24 @@ function renderChatForPanel(
           assistantTimestamp: actionAssistantTimestamp,
         });
       }
-      if (extraAssistantActions.length && actionContent?.contentText) {
+      const extraActionInfo: ChatPanelAssistantActionInfo | null =
+        actionContent?.contentText
+          ? {
+              contentText: actionContent.contentText,
+              conversationKey: actionConversationKey,
+              timestamp: actionAssistantTimestamp,
+            }
+          : null;
+      // Extra actions go before the expand button.
+      if (extraAssistantActions.length && extraActionInfo) {
         appendExtraAssistantActionButtons({
           doc,
           actions,
           extraActions: extraAssistantActions,
-          info: {
-            contentText: actionContent.contentText,
-            conversationKey: actionConversationKey,
-            timestamp: actionAssistantTimestamp,
-          },
+          info: extraActionInfo,
         });
       }
+
       if (actionResponseTarget) {
         appendAssistantResponseExpandAction({
           body,

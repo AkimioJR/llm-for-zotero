@@ -89,6 +89,23 @@ describe("workflow: standalone side panel", function () {
     return state;
   }
 
+  /**
+   * The panel state once no inactive tab still fades out of its fill. Tab
+   * backgrounds have a 0.15s transition, so a tab read just after it stops
+   * being active shows a colour part-way to transparent.
+   */
+  function waitForSettledTabs(
+    label: string,
+  ): Promise<WorkflowTestStandaloneSidePanelDiagnostics> {
+    return waitForSide(
+      (state) =>
+        (state.design.browserTabs?.tabs || []).every(
+          (tab) => tab.active || tab.background === "rgba(0, 0, 0, 0)",
+        ),
+      `${label}: inactive tabs settle to no fill`,
+    );
+  }
+
   const standaloneWin = (): Window | null => {
     const win = (Zotero as any).LLMForZotero?.data?.standaloneWindow as
       | Window
@@ -535,9 +552,9 @@ describe("workflow: standalone side panel", function () {
       { present: true, active: true, title: "New tab", closeVisible: true },
       "the new-tab page is itself the active tab",
     );
-    assert.deepEqual(side.launchRows, ["sidechat", "history"]);
+    assert.deepEqual(side.launchRows, ["sidechat", "history", "misc"]);
     // The New tab page is the chat start page: its title and tagline, and
-    // the two rows (left-aligned together), centred in the panel.
+    // the three rows (left-aligned together), centred in the panel.
     const newTabStart = side.design.newTabPage;
     assert.isOk(newTabStart, JSON.stringify(side.design));
     assert.equal(newTabStart!.title, "LLM-for-Zotero");
@@ -545,8 +562,9 @@ describe("workflow: standalone side panel", function () {
     assert.equal(newTabStart!.subtitleFontStyle, "italic");
     assert.closeTo(newTabStart!.centreDxPx, 0, 1, "centred across");
     assert.closeTo(newTabStart!.centreDyPx, 0, 12, "centred down");
-    assert.lengthOf(newTabStart!.rowLefts, 2);
+    assert.lengthOf(newTabStart!.rowLefts, 3);
     assert.closeTo(newTabStart!.rowLefts[0], newTabStart!.rowLefts[1], 0.5);
+    assert.closeTo(newTabStart!.rowLefts[0], newTabStart!.rowLefts[2], 0.5);
     const newTabTitle = side.design.startTitle!;
     assert.isNull(side.design.searchField, "no search field on New tab");
     assert.deepEqual(side.historyKeys, [], "no history list on New tab");
@@ -774,7 +792,7 @@ describe("workflow: standalone side panel", function () {
       "the read-only tab renders the past answer",
     );
     assertSameDesign(side);
-    assertBrowserTabs(side);
+    assertBrowserTabs(await waitForSettledTabs("browser tabs"));
     const readOnly = side.readOnly!;
     assert.equal(readOnly.conversationKey, pastKey);
     assert.equal(readOnly.title, PAST_TITLE);
@@ -858,7 +876,7 @@ describe("workflow: standalone side panel", function () {
     assert.lengthOf(side.tabs, 1, "the open tab is focused, not doubled");
     assert.equal(side.view, "readonly");
     await pickPastChat(secondKey);
-    side = await api.getStandaloneSidePanelDiagnostics();
+    side = await waitForSettledTabs("second past chat");
     assert.deepEqual(
       side.tabs.map((tab) => [tab.title, tab.active]),
       [
@@ -926,7 +944,7 @@ describe("workflow: standalone side panel", function () {
     );
     assert.equal(side.titleText, "Side chat");
     assertSameDesign(side);
-    assertBrowserTabs(side);
+    assertBrowserTabs(await waitForSettledTabs("browser tabs"));
     // The font-size shortcut scales every panel chat with the main chat.
     pressFontScaleShortcut("=");
     side = await waitForSide(

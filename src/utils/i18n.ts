@@ -1565,6 +1565,35 @@ const zhCN: Record<string, string> = {
   "Quote selected text in a side chat": "在侧边对话中引用选中文字",
   "Show all of the selected text": "显示全部选中文字",
   "Show less of the selected text": "收起选中文字",
+  // Side panel items, Miscellaneous tab, HTML preview.
+  "Move to side panel": "移到侧边面板",
+  "Mermaid diagram": "Mermaid 图表",
+  "HTML page": "HTML 页面",
+  Code: "代码",
+  Plan: "计划",
+  Diagram: "图表",
+  HTML: "HTML",
+  "Runs in a safe box: no internet, no access to Zotero":
+    "在安全沙箱中运行：无法联网，也无法访问 Zotero",
+  Copied: "已复制",
+  "Could not save the note": "无法保存笔记",
+  "Run again": "重新运行",
+  "Ran again": "已重新运行",
+  "Show in chat": "在对话中显示",
+  "The source message is not in the main chat now.":
+    "来源消息当前不在主对话中。",
+  "Saved as note": "已保存为笔记",
+  "Note already saved": "笔记已保存过",
+  Miscellaneous: "杂项",
+  "View what the model made in this chat": "查看模型在此对话中生成的内容",
+  "Made in this chat": "此对话中生成的内容",
+  "Nothing made in this chat yet": "此对话中还没有生成内容",
+  "Open HTML preview viewer": "打开 HTML 预览查看器",
+  "HTML preview": "HTML 预览",
+  "HTML preview viewer controls": "HTML 预览查看器控件",
+  "Close HTML preview viewer": "关闭 HTML 预览查看器",
+  "Preview stopped: the page tried to leave.":
+    "预览已停止：该页面试图跳转离开。",
 };
 
 // ── Runtime state ────────────────────────────────────────────────────────────

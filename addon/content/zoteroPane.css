@@ -161,6 +161,47 @@
   --llm-action-title-weight: 600;
   --llm-action-label-size: var(--llm-fs-10);
   --llm-action-label-letter-spacing: 0.04em;
+  --llm-popup-surface-bg: color-mix(
+    in srgb,
+    var(--material-sidepane, var(--material-background, #ffffff)) 94%,
+    black 6%
+  );
+  --llm-popup-surface-border: var(
+    --stroke-secondary,
+    rgba(120, 120, 120, 0.26)
+  );
+  /* Task progress card: the border sets it apart in light themes. */
+  --llm-task-progress-shadow: none;
+  --llm-popup-overlay-bg: rgba(0, 0, 0, 0.22);
+  --llm-history-paper-chip-text: #1d4ed8;
+  --llm-history-paper-chip-bg: rgba(59, 130, 246, 0.12);
+  --llm-history-library-chip-text: #b45309;
+  --llm-history-library-chip-bg: rgba(249, 115, 22, 0.12);
+  --llm-history-orphan-chip-text: #b91c1c;
+  --llm-history-orphan-chip-bg: rgba(239, 68, 68, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: var(--llm-fs-12);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  contain: inline-size;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  overflow-anchor: none;
+  position: relative;
+  padding: 2px;
+  box-sizing: border-box;
+  color: var(--fill-primary);
+  background: var(--material-sidepane);
+}
+
+/* Code block and Mermaid colours, shared by the chat panel and the
+ * standalone side panel's item tabs (which sit outside .llm-panel). */
+.llm-panel,
+.llm-standalone-side-panel-item-rendered {
   --llm-codeblock-bg: color-mix(
     in srgb,
     var(--material-background, #ffffff) 92%,
@@ -225,41 +266,6 @@
   --llm-mermaid-viewer-toolbar-bg: transparent;
   --llm-mermaid-viewer-toolbar-border: transparent;
   --llm-mermaid-viewer-zoom-text: var(--fill-secondary, #4b5563);
-  --llm-popup-surface-bg: color-mix(
-    in srgb,
-    var(--material-sidepane, var(--material-background, #ffffff)) 94%,
-    black 6%
-  );
-  --llm-popup-surface-border: var(
-    --stroke-secondary,
-    rgba(120, 120, 120, 0.26)
-  );
-  /* Task progress card: the border sets it apart in light themes. */
-  --llm-task-progress-shadow: none;
-  --llm-popup-overlay-bg: rgba(0, 0, 0, 0.22);
-  --llm-history-paper-chip-text: #1d4ed8;
-  --llm-history-paper-chip-bg: rgba(59, 130, 246, 0.12);
-  --llm-history-library-chip-text: #b45309;
-  --llm-history-library-chip-bg: rgba(249, 115, 22, 0.12);
-  --llm-history-orphan-chip-text: #b91c1c;
-  --llm-history-orphan-chip-bg: rgba(239, 68, 68, 0.12);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: var(--llm-fs-12);
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  contain: inline-size;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  overflow-anchor: none;
-  position: relative;
-  padding: 2px;
-  box-sizing: border-box;
-  color: var(--fill-primary);
-  background: var(--material-sidepane);
 }
 
 .llm-panel:focus,
@@ -271,7 +277,10 @@
 
 .window-is-dark .llm-panel,
 :root[lwtheme-brighttext] .llm-panel,
-:root[sizemode][lwtheme-brighttext] .llm-panel {
+:root[sizemode][lwtheme-brighttext] .llm-panel,
+.window-is-dark .llm-standalone-side-panel-item-rendered,
+:root[lwtheme-brighttext] .llm-standalone-side-panel-item-rendered,
+:root[sizemode][lwtheme-brighttext] .llm-standalone-side-panel-item-rendered {
   --llm-codeblock-bg: #202020;
   --llm-codeblock-border: color-mix(in srgb, #fff 8%, transparent);
   --llm-codeblock-header-text: #d4d4d8;
@@ -17360,4 +17369,229 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 
 .llm-task-progress-papers-title {
   padding: 2px 14px 4px;
+}
+
+/* Item tabs (side panel): one icon per kind, from the design prototype. */
+.llm-standalone-side-panel-icon-item-mermaid::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='7' height='5' rx='1'/%3E%3Crect x='14' y='16' width='7' height='5' rx='1'/%3E%3Crect x='3' y='16' width='7' height='5' rx='1'/%3E%3Cpath d='M6.5 8v8M6.5 12h11v4'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='7' height='5' rx='1'/%3E%3Crect x='14' y='16' width='7' height='5' rx='1'/%3E%3Crect x='3' y='16' width='7' height='5' rx='1'/%3E%3Cpath d='M6.5 8v8M6.5 12h11v4'/%3E%3C/svg%3E");
+}
+
+.llm-standalone-side-panel-icon-item-svg::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3v18h18'/%3E%3Cpath d='M7 16v-4M12 16V8M17 16v-6'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3v18h18'/%3E%3Cpath d='M7 16v-4M12 16V8M17 16v-6'/%3E%3C/svg%3E");
+}
+
+.llm-standalone-side-panel-icon-item-code::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m8.5 7-5 5 5 5M15.5 7l5 5-5 5'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m8.5 7-5 5 5 5M15.5 7l5 5-5 5'/%3E%3C/svg%3E");
+}
+
+.llm-standalone-side-panel-icon-item-html::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2'/%3E%3Cpath d='M3 9h18M7 6.5h.01M10 6.5h.01'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2'/%3E%3Cpath d='M3 9h18M7 6.5h.01M10 6.5h.01'/%3E%3C/svg%3E");
+}
+
+.llm-standalone-side-panel-icon-item-plan::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 5h11M9 12h11M9 19h11M4 5h.01M4 12h.01M4 19h.01'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 5h11M9 12h11M9 19h11M4 5h.01M4 12h.01M4 19h.01'/%3E%3C/svg%3E");
+}
+
+/* "Move to side panel" (standalone window only; the renderers add the
+ * button only where the document has a side panel). */
+.llm-side-move-glyph::before {
+  content: "";
+  display: block;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h13M11 6l6 6-6 6M21 5v14'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h13M11 6l6 6-6 6M21 5v14'/%3E%3C/svg%3E");
+}
+
+.llm-plan-document-action-move-side::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h13M11 6l6 6-6 6M21 5v14'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h13M11 6l6 6-6 6M21 5v14'/%3E%3C/svg%3E");
+}
+
+/* Next to the open button, in the same corner. */
+.llm-rendered-markdown .llm-mermaid-open-btn.llm-side-move-btn {
+  right: 46px;
+}
+
+.llm-rendered-markdown .llm-codeblock-header > .llm-render-code-move-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--llm-codeblock-copy);
+  cursor: pointer;
+}
+
+.llm-rendered-markdown .llm-codeblock-header > .llm-render-code-move-btn:hover {
+  background: color-mix(in srgb, var(--fill-quinary) 75%, transparent);
+  color: var(--llm-codeblock-copy-hover);
+}
+
+.llm-rendered-markdown
+  .llm-codeblock-header
+  > .llm-render-code-move-btn::before {
+  width: 15px;
+  height: 15px;
+}
+
+/* Side panel bodies and item tabs hold copies: nothing to move from there. */
+.llm-standalone-side-body .llm-side-move-btn,
+.llm-standalone-side-panel-item-body .llm-side-move-btn {
+  display: none !important;
+}
+
+/* "Show in chat": the source message flashes once. */
+@keyframes llm-side-item-flash {
+  0% {
+    background-color: color-mix(
+      in srgb,
+      var(--accent-blue, #4072e5) 22%,
+      transparent
+    );
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.llm-message-wrapper.llm-side-item-flash {
+  border-radius: 8px;
+  animation: llm-side-item-flash 1.2s ease-out;
+}
+
+/* Item tab view: title row, one status line, then the item filling the rest. */
+/* Item tab title actions are icon-only title actions. */
+.llm-standalone-side-panel-icon-copy::before {
+  mask-image: url("icons/action-copy.svg");
+  -webkit-mask-image: url("icons/action-copy.svg");
+}
+
+.llm-standalone-side-panel-icon-note::before {
+  mask-image: url("icons/action-note.svg");
+  -webkit-mask-image: url("icons/action-note.svg");
+}
+
+.llm-standalone-side-panel-icon-rerun::before {
+  mask-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%20%3Cpath%20d%3D%22M20%2011a8%208%200%201%200-2.35%205.65%22%20%2F%3E%20%3Cpath%20d%3D%22M20%204v7h-7%22%20%2F%3E%20%3C%2Fsvg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%20%3Cpath%20d%3D%22M20%2011a8%208%200%201%200-2.35%205.65%22%20%2F%3E%20%3Cpath%20d%3D%22M20%204v7h-7%22%20%2F%3E%20%3C%2Fsvg%3E");
+}
+
+.llm-standalone-side-panel-icon-show-in-chat::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M19 12H5'/%3E%3Cpath d='M12 19l-7-7 7-7'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M19 12H5'/%3E%3Cpath d='M12 19l-7-7 7-7'/%3E%3C/svg%3E");
+}
+
+.llm-standalone-side-panel-item-status {
+  flex: 0 0 auto;
+  padding: 2px 12px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-10);
+}
+
+.llm-standalone-side-panel-item-status[hidden] {
+  display: none;
+}
+
+.llm-standalone-side-panel-item-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: 8px 12px 12px;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"] {
+  padding: 0;
+  overflow: hidden;
+}
+
+.llm-side-panel-item-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+
+.llm-standalone-side-panel-item-rendered {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-mermaid-preview,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"] .llm-svg-preview {
+  min-height: 60%;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="code"]
+  .llm-codeblock-body {
+  max-height: none;
+}
+
+/* Miscellaneous tab (side panel): shapes icon (triangle, square, circle),
+ * as the New tab row's icon and the tab's icon. */
+.llm-standalone-side-panel-icon-misc::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z'/%3E%3Crect x='3' y='14' width='7' height='7' rx='1'/%3E%3Ccircle cx='17.5' cy='17.5' r='3.5'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z'/%3E%3Crect x='3' y='14' width='7' height='7' rx='1'/%3E%3Ccircle cx='17.5' cy='17.5' r='3.5'/%3E%3C/svg%3E");
+}
+
+.llm-standalone-side-panel-misc {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The list reuses the History rows (.llm-standalone-search-*); the page
+ * background and scrolling come from the tab instead of a popup. */
+.llm-standalone-side-panel-misc-list.llm-standalone-search-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: transparent;
+  padding: 4px 8px 12px;
+}
+
+/* The kind chip: History's chip metrics, one hue per kind (as the design
+ * prototype's .klabel). */
+.llm-standalone-search-label[data-label-type="item"] {
+  color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.15);
+}
+
+.llm-standalone-search-label[data-label-type="item"][data-item-kind="code"] {
+  color: var(--llm-history-paper-chip-text);
+  background: var(--llm-history-paper-chip-bg);
+}
+
+.llm-standalone-search-label[data-label-type="item"][data-item-kind="html"] {
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.15);
+}
+
+.llm-standalone-search-label[data-label-type="item"][data-item-kind="plan"] {
+  color: var(--llm-history-library-chip-text);
+  background: var(--llm-history-library-chip-bg);
 }
