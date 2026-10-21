@@ -1,5 +1,8 @@
 import { appLogger } from "../../core/logging";
-import type { GeneratedChatImage } from "../../shared/types";
+import type {
+  GeneratedChatImage,
+  GeneratedChatImageFigure,
+} from "../../shared/types";
 import {
   isRenderableGeneratedImageSrc,
   normalizeGeneratedChatImages,
@@ -8,6 +11,8 @@ import { HTML_NS } from "../../utils/domHelpers";
 import { toFileUrl } from "../../utils/localPath";
 import { revealLocalPath } from "../../utils/revealLocalPath";
 import { copyTextToClipboard } from "./clipboard";
+import { openFigureViewer } from "./figureViewer";
+import { openReaderForItem } from "./quoteNavigator";
 import {
   isEmbeddableGeneratedImage,
   resolveGeneratedImageAsset,
@@ -295,25 +300,281 @@ async function pickGeneratedImageSavePath(
   }
 }
 
+export type GeneratedImageRenderOptions = {
+  onImageLoaded?: () => void;
+  onImageActionStatus?: (
+    message: string,
+    level: "ready" | "warning" | "error",
+  ) => void;
+  wrapClassName?: string;
+  frameClassName?: string;
+  /** Opens a figure's source page; defaults to the Zotero reader. */
+  openFigurePage?: (figure: GeneratedChatImageFigure) => Promise<void>;
+  /** A click on the picture opens the large view unless this is false. */
+  zoomOnClick?: boolean;
+};
+
+/** A figure box can reopen its page only when it knows the paper and a page. */
+export function canJumpToFigurePage(
+  figure: GeneratedChatImageFigure | undefined,
+): boolean {
+  return Boolean(
+    figure?.paper &&
+    figure.paper.contextItemId > 0 &&
+    Number.isFinite(figure.pageIndex) &&
+    (figure.pageIndex as number) >= 0,
+  );
+}
+
+/** "p. N" for a figure's page label, or "" when the label is unknown. */
+export function formatFigurePageLabel(
+  figure: GeneratedChatImageFigure | undefined,
+): string {
+  const label = figure?.pageLabel?.trim();
+  return label ? `p. ${label}` : "";
+}
+
+function buildGeneratedImageCaption(image: GeneratedChatImage): string {
+  const label = image.label || "";
+  const page = formatFigurePageLabel(image.figure);
+  if (!page) return label;
+  // A rendered-page title such as "Paper - page 3" already names its page.
+  const pageLabel = image.figure?.pageLabel?.trim() || "";
+  const escaped = pageLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (label && new RegExp(`\\bpage\\s*${escaped}\\b`, "i").test(label))
+    return label;
+  return label ? `${label} \u00b7 ${page}` : page;
+}
+
+async function openFigurePageInReader(
+  figure: GeneratedChatImageFigure,
+): Promise<void> {
+  const contextItemId = figure.paper?.contextItemId;
+  if (!contextItemId || !Number.isFinite(figure.pageIndex)) {
+    throw new Error("This figure has no page to open");
+  }
+  // A crop's pageLabel is its physical page number, not the PDF's own label,
+  // so the reader is sent by index only.
+  const reader = await openReaderForItem(contextItemId, {
+    pageIndex: figure.pageIndex as number,
+  });
+  if (!reader) throw new Error("Could not open the paper");
+  Zotero.getMainWindow?.()?.focus?.();
+}
+
+/**
+ * The figure box's buttons: jump to page, copy, save, show in folder and →|.
+ * The box and its large view both carry them. Returns false when the image
+ * gets none.
+ */
+function appendGeneratedImageActions(
+  parent: HTMLElement,
+  container: HTMLElement,
+  image: GeneratedChatImage,
+  figure: HTMLElement,
+  doc: Document,
+  options: GeneratedImageRenderOptions,
+): boolean {
+  const report = (
+    message: string,
+    level: "ready" | "warning" | "error" = "ready",
+  ) => {
+    options.onImageActionStatus?.(message, level);
+  };
+  const createActionButton = (
+    className: string,
+    title: string,
+    onClick: () => Promise<void> | void,
+  ): HTMLButtonElement => {
+    const button = doc.createElementNS(HTML_NS, "button") as HTMLButtonElement;
+    button.className = `llm-generated-image-action ${className}`;
+    button.type = "button";
+    // The label shows on hover from CSS (zoteroPane.css reads aria-label): the
+    // standalone window has no native tooltip, and a title would show twice
+    // in the main window.
+    button.setAttribute("aria-label", title);
+    button.addEventListener("click", (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+      return Promise.resolve(onClick()).catch((error) => {
+        appLogger.warn("LLM: Generated image action failed:", error);
+        report(
+          error instanceof Error
+            ? error.message
+            : "Generated image action failed",
+          "error",
+        );
+      });
+    });
+    return button;
+  };
+
+  const embeddable = isEmbeddableGeneratedImage(image);
+  const jumpFigure = canJumpToFigurePage(image.figure)
+    ? image.figure
+    : undefined;
+  if (!embeddable && !jumpFigure) return false;
+  if (jumpFigure) {
+    const title = jumpFigure.pageLabel
+      ? `Jump to page ${jumpFigure.pageLabel}`
+      : "Jump to page";
+    parent.appendChild(
+      createActionButton("llm-generated-image-action-jump", title, async () => {
+        await (options.openFigurePage || openFigurePageInReader)(jumpFigure);
+        report("Opened the paper page", "ready");
+      }),
+    );
+  }
+  if (embeddable) {
+    parent.appendChild(
+      createActionButton(
+        "llm-generated-image-action-copy",
+        "Copy image",
+        async () => {
+          const result = await copyGeneratedImageToClipboard(container, image);
+          report(result === "image" ? "Copied image" : "Copied image source");
+        },
+      ),
+    );
+    parent.appendChild(
+      createActionButton(
+        "llm-generated-image-action-save",
+        "Save image as...",
+        async () => {
+          const asset = await resolveGeneratedImageAsset(image);
+          if (!asset) {
+            report("Generated image file is unavailable", "error");
+            return;
+          }
+          const saveTarget = await pickGeneratedImageSavePath(
+            doc,
+            asset.fileName,
+          );
+          if (saveTarget.status === "cancelled") {
+            report("Image save cancelled", "ready");
+            return;
+          }
+          if (saveTarget.status === "unavailable") {
+            report("Save dialog unavailable", "warning");
+            return;
+          }
+          await saveGeneratedImageAssetToPath(asset, saveTarget.path);
+          report("Saved image", "ready");
+        },
+      ),
+    );
+    const localPath = resolveGeneratedImageLocalPath(image);
+    const fileUrl = toFileUrl(localPath);
+    const openButton = createActionButton(
+      "llm-generated-image-action-open",
+      "Show image in folder",
+      () => {
+        if (localPath && revealLocalPath(localPath)) {
+          report("Showed image in folder", "ready");
+        } else if (fileUrl && openGeneratedImageFileUrl(fileUrl)) {
+          report("Opened image", "ready");
+        } else {
+          report("Generated image file is unavailable", "error");
+        }
+      },
+    );
+    if (!localPath && !fileUrl) {
+      openButton.disabled = true;
+      openButton.setAttribute("aria-label", "Show image in folder unavailable");
+    }
+    parent.appendChild(openButton);
+  }
+  return true;
+}
+
+/**
+ * One image box: the image, its caption (with the page of a paper figure),
+ * and the copy / save / show-in-folder / jump-to-page actions. The chat's
+ * generated images, the figure strip and inline figures all use it.
+ */
+export function createGeneratedImageFrame(
+  container: HTMLElement,
+  image: GeneratedChatImage,
+  doc: Document,
+  options: GeneratedImageRenderOptions = {},
+): HTMLElement | null {
+  const src = resolveGeneratedChatImageSrc(image);
+  if (!src) return null;
+  const figure = doc.createElement("figure") as HTMLElement;
+  figure.className = [
+    "llm-assistant-generated-image-frame",
+    options.frameClassName || "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const img = doc.createElement("img") as HTMLImageElement;
+  img.className = "llm-assistant-generated-image";
+  img.src = src;
+  img.alt = image.label || "Generated image";
+  img.title = image.revisedPrompt || image.label || "";
+  img.loading = "lazy";
+  if (options.onImageLoaded) {
+    img.addEventListener("load", options.onImageLoaded);
+    img.addEventListener("error", options.onImageLoaded);
+  }
+  figure.appendChild(img);
+
+  const actions = doc.createElement("div") as HTMLDivElement;
+  actions.className = "llm-assistant-generated-image-actions";
+  if (
+    appendGeneratedImageActions(actions, container, image, figure, doc, options)
+  ) {
+    figure.appendChild(actions);
+  }
+  if (options.zoomOnClick !== false) {
+    img.className += " llm-assistant-generated-image-zoomable";
+    img.addEventListener("click", (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openFigureViewer(figure, {
+        src,
+        alt: img.alt,
+        caption: buildGeneratedImageCaption(image),
+        appendActions: (parent) => {
+          appendGeneratedImageActions(
+            parent,
+            container,
+            image,
+            figure,
+            doc,
+            options,
+          );
+        },
+      });
+    });
+  }
+
+  const captionText = buildGeneratedImageCaption(image);
+  if (captionText) {
+    const caption = doc.createElement("figcaption") as HTMLElement;
+    caption.className = "llm-assistant-generated-image-caption";
+    caption.textContent = captionText;
+    caption.title = captionText;
+    figure.appendChild(caption);
+  }
+  return figure;
+}
+
 export function renderAssistantGeneratedImagesInto(
   container: HTMLElement,
   images: GeneratedChatImage[] | undefined,
   doc: Document,
-  options: {
-    onImageLoaded?: () => void;
-    onImageActionStatus?: (
-      message: string,
-      level: "ready" | "warning" | "error",
-    ) => void;
-    wrapClassName?: string;
-    frameClassName?: string;
-  } = {},
+  options: GeneratedImageRenderOptions = {},
 ): boolean {
   const normalized = normalizeGeneratedChatImages(images);
-  const renderable = normalized
-    .map((image) => ({ image, src: resolveGeneratedChatImageSrc(image) }))
-    .filter((entry) => Boolean(entry.src));
-  if (!renderable.length) return false;
+  const frames = normalized
+    .map((image) => createGeneratedImageFrame(container, image, doc, options))
+    .filter((frame): frame is HTMLElement => Boolean(frame));
+  if (!frames.length) return false;
 
   const wrap = doc.createElement("div") as HTMLDivElement;
   wrap.className = [
@@ -322,145 +583,7 @@ export function renderAssistantGeneratedImagesInto(
   ]
     .filter(Boolean)
     .join(" ");
-  for (const { image, src } of renderable) {
-    const figure = doc.createElement("figure") as HTMLElement;
-    figure.className = [
-      "llm-assistant-generated-image-frame",
-      options.frameClassName || "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-
-    const img = doc.createElement("img") as HTMLImageElement;
-    img.className = "llm-assistant-generated-image";
-    img.src = src;
-    img.alt = image.label || "Generated image";
-    img.title = image.revisedPrompt || image.label || "";
-    img.loading = "lazy";
-    if (options.onImageLoaded) {
-      img.addEventListener("load", options.onImageLoaded);
-      img.addEventListener("error", options.onImageLoaded);
-    }
-    figure.appendChild(img);
-
-    const report = (
-      message: string,
-      level: "ready" | "warning" | "error" = "ready",
-    ) => {
-      options.onImageActionStatus?.(message, level);
-    };
-    const createActionButton = (
-      className: string,
-      title: string,
-      onClick: () => Promise<void> | void,
-    ): HTMLButtonElement => {
-      const button = doc.createElementNS(
-        HTML_NS,
-        "button",
-      ) as HTMLButtonElement;
-      button.className = `llm-generated-image-action ${className}`;
-      button.type = "button";
-      button.title = title;
-      button.setAttribute("aria-label", title);
-      button.addEventListener("click", (event: Event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (typeof event.stopImmediatePropagation === "function") {
-          event.stopImmediatePropagation();
-        }
-        return Promise.resolve(onClick()).catch((error) => {
-          appLogger.warn("LLM: Generated image action failed:", error);
-          report(
-            error instanceof Error
-              ? error.message
-              : "Generated image action failed",
-            "error",
-          );
-        });
-      });
-      return button;
-    };
-
-    if (isEmbeddableGeneratedImage(image)) {
-      const actions = doc.createElement("div") as HTMLDivElement;
-      actions.className = "llm-assistant-generated-image-actions";
-      actions.appendChild(
-        createActionButton(
-          "llm-generated-image-action-copy",
-          "Copy image",
-          async () => {
-            const result = await copyGeneratedImageToClipboard(
-              container,
-              image,
-            );
-            report(result === "image" ? "Copied image" : "Copied image source");
-          },
-        ),
-      );
-      actions.appendChild(
-        createActionButton(
-          "llm-generated-image-action-save",
-          "Save image as...",
-          async () => {
-            const asset = await resolveGeneratedImageAsset(image);
-            if (!asset) {
-              report("Generated image file is unavailable", "error");
-              return;
-            }
-            const saveTarget = await pickGeneratedImageSavePath(
-              doc,
-              asset.fileName,
-            );
-            if (saveTarget.status === "cancelled") {
-              report("Image save cancelled", "ready");
-              return;
-            }
-            if (saveTarget.status === "unavailable") {
-              report("Save dialog unavailable", "warning");
-              return;
-            }
-            await saveGeneratedImageAssetToPath(asset, saveTarget.path);
-            report("Saved image", "ready");
-          },
-        ),
-      );
-      const localPath = resolveGeneratedImageLocalPath(image);
-      const fileUrl = toFileUrl(localPath);
-      const openButton = createActionButton(
-        "llm-generated-image-action-open",
-        "Show image in folder",
-        () => {
-          if (localPath && revealLocalPath(localPath)) {
-            report("Showed image in folder", "ready");
-          } else if (fileUrl && openGeneratedImageFileUrl(fileUrl)) {
-            report("Opened image", "ready");
-          } else {
-            report("Generated image file is unavailable", "error");
-          }
-        },
-      );
-      if (!localPath && !fileUrl) {
-        openButton.disabled = true;
-        openButton.title = "Show image in folder unavailable";
-        openButton.setAttribute(
-          "aria-label",
-          "Show image in folder unavailable",
-        );
-      }
-      actions.appendChild(openButton);
-      figure.appendChild(actions);
-    }
-
-    if (image.label) {
-      const caption = doc.createElement("figcaption") as HTMLElement;
-      caption.className = "llm-assistant-generated-image-caption";
-      caption.textContent = image.label;
-      caption.title = image.label;
-      figure.appendChild(caption);
-    }
-
-    wrap.appendChild(figure);
-  }
+  for (const frame of frames) wrap.appendChild(frame);
   container.appendChild(wrap);
   return true;
 }

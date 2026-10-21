@@ -6335,6 +6335,198 @@
   opacity: 0.38;
 }
 
+/* Hover label under each figure button. Drawn here because the standalone
+   window shows no native title tooltips. Right-aligned so it stays inside
+   the figure box, which clips its overflow. */
+.llm-generated-image-action {
+  position: relative;
+}
+
+.llm-generated-image-action::after {
+  content: attr(aria-label);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 3;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--fill-primary);
+  color: var(--material-background);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.llm-generated-image-action:hover::after,
+.llm-generated-image-action:focus-visible::after {
+  opacity: 1;
+  transition-delay: 250ms;
+}
+
+/* A figure in the chat opens large on a click. */
+.llm-assistant-generated-image-zoomable {
+  cursor: zoom-in;
+}
+
+/* The large figure view: over the chat panel in Zotero's sidebar (its box is
+   set from script), over the whole standalone window there. */
+.llm-figure-viewer {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(16, 16, 20, 0.86);
+  backdrop-filter: blur(3px);
+  color: #f2f2f4;
+  -moz-user-select: none;
+  user-select: none;
+  outline: none;
+}
+
+.llm-figure-viewer-window {
+  inset: 0;
+}
+
+.llm-figure-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.llm-figure-viewer-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-figure-viewer-group {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.llm-figure-viewer-actions {
+  padding-left: 12px;
+}
+
+.llm-figure-viewer-narrow .llm-figure-viewer-actions {
+  display: none;
+}
+
+.llm-figure-viewer-percent {
+  min-width: 42px;
+  color: #cfcfd4;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Full views show bare icons, like the Mermaid viewer: no box around each
+   button, only a faint round highlight under the pointer. */
+.llm-figure-viewer .llm-generated-image-action {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  border-color: transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: #d8d8dd;
+}
+
+.llm-figure-viewer .llm-generated-image-action:hover:not(:disabled),
+.llm-figure-viewer .llm-generated-image-action:focus-visible {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+/* In the standalone window on macOS the view covers the title strip, where
+   the traffic lights are drawn: the title starts after them, and the bar
+   drags the window like the title bar it covers. */
+:root[customtitlebar] .llm-figure-viewer-window .llm-figure-viewer-bar {
+  padding-inline-start: 84px;
+  -moz-window-dragging: drag;
+}
+
+:root[customtitlebar] .llm-figure-viewer-window .llm-figure-viewer-bar button {
+  -moz-window-dragging: no-drag;
+}
+
+.llm-figure-viewer .llm-generated-image-action::after {
+  background: #f2f2f4;
+  color: #1d1d1f;
+}
+
+.llm-figure-viewer-close {
+  margin-left: 4px;
+}
+
+.llm-figure-viewer-zoom-out::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14'/%3E%3C/svg%3E");
+}
+
+.llm-figure-viewer-zoom-in::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14M12 5v14'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14M12 5v14'/%3E%3C/svg%3E");
+}
+
+.llm-figure-viewer-fit::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5'/%3E%3C/svg%3E");
+}
+
+.llm-figure-viewer-close::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 6l12 12M18 6L6 18'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 6l12 12M18 6L6 18'/%3E%3C/svg%3E");
+}
+
+.llm-figure-viewer-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: zoom-out;
+}
+
+.llm-figure-viewer-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  transform-origin: 0 0;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  cursor: zoom-in;
+}
+
+.llm-figure-viewer-zoomed .llm-figure-viewer-image {
+  cursor: grab;
+}
+
+.llm-figure-viewer-dragging .llm-figure-viewer-image {
+  cursor: grabbing;
+}
+
+.llm-figure-viewer-hint {
+  padding: 4px 10px 8px;
+  color: #b9b9be;
+  font-size: 11px;
+  text-align: center;
+}
+
+.llm-figure-viewer-narrow .llm-figure-viewer-hint {
+  display: none;
+}
+
 .llm-generated-image-action-copy::before {
   mask-image: url("icons/action-copy.svg");
   -webkit-mask-image: url("icons/action-copy.svg");
@@ -6348,6 +6540,11 @@
 .llm-generated-image-action-open::before {
   mask-image: url("icons/folder-open.svg");
   -webkit-mask-image: url("icons/folder-open.svg");
+}
+
+.llm-generated-image-action-jump::before {
+  mask-image: url("icons/citation-jump.svg");
+  -webkit-mask-image: url("icons/citation-jump.svg");
 }
 
 .llm-assistant-generated-image {
@@ -6374,6 +6571,12 @@
   width: calc(100% - 18px);
   max-width: 620px;
   margin: -2px 0 2px 18px;
+}
+
+/* Below the activity disclosure the strip lines up with the other outcomes. */
+.llm-agent-image-artifacts.llm-agent-figure-strip {
+  width: 100%;
+  margin: 6px 0;
 }
 
 .llm-agent-image-artifacts .llm-agent-image-artifacts-grid {

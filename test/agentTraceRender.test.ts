@@ -17,6 +17,7 @@ import {
   renderAgentTraceDetailsBodyForTests,
   renderPendingActionCard,
   selectToolResultTraceCards,
+  selectFigureStripImages,
 } from "../src/modules/contextPanel/agentTrace/render";
 import { buildToolResultTraceInfo } from "../src/modules/contextPanel/agentTrace/toolResultTraceInfo";
 import { compactRunEventForPersistence } from "../src/agent/store/traceStore";
@@ -5701,7 +5702,7 @@ describe("agentTrace render", function () {
       trace
         .findAllByClass("llm-assistant-generated-image-caption")
         .map(collectFakeText),
-      ["Figure 1"],
+      ["Figure 1 · p. 2"],
     );
     assert.equal(
       (
@@ -5837,7 +5838,7 @@ describe("agentTrace render", function () {
     const captions = trace
       .findAllByClass("llm-assistant-generated-image-caption")
       .map(collectFakeText);
-    assert.deepEqual(captions, ["Figure 1", "page-4.png"]);
+    assert.deepEqual(captions, ["Figure 1 · p. 2", "page-4.png · p. 4"]);
   });
 
   it("preserves Codex MCP image artifacts through native tool activity coalescing", function () {
@@ -6159,7 +6160,7 @@ describe("agentTrace render", function () {
       );
       assert.equal(launchedUrl, "");
       assert.deepEqual(statuses, ["Showed image in folder"]);
-      assert.equal(openButton.title, "Show image in folder");
+      assert.notOk(openButton.title);
       assert.equal(openButton.attributes["aria-label"], "Show image in folder");
     } finally {
       if (originalComponents) {
@@ -12635,5 +12636,339 @@ describe("text kept before a document", function () {
     assert.isNull(trace.findByClass("llm-plan-document-lead"));
     assert.isTrue(hidden);
     disposeAgentTrace(trace as unknown as HTMLElement);
+  });
+});
+
+describe("figure strip below the activity", function () {
+  const paperContext = {
+    itemId: 11,
+    contextItemId: 12,
+    title: "Paper A",
+  };
+  const figureEvents = (
+    artifacts: Array<Record<string, unknown>>,
+  ): AgentRunEventRecord[] => [
+    {
+      runId: "run-fig",
+      seq: 1,
+      eventType: "tool_result",
+      payload: {
+        type: "tool_result",
+        callId: "figures-1",
+        name: "paper_read",
+        ok: true,
+        content: { mode: "figures" },
+        artifacts,
+      } as unknown as AgentRunEventRecord["payload"],
+      createdAt: 1,
+    },
+  ];
+  const crop = (n: number, extra: Record<string, unknown> = {}) => ({
+    kind: "image",
+    mimeType: "image/png",
+    storedPath: `/tmp/figure_crops/figure-${n}.png`,
+    title: `Figure ${n}`,
+    pageIndex: n,
+    pageLabel: `${n + 1}`,
+    paperContext,
+    ...extra,
+  });
+  const message = (text: string) => ({
+    role: "assistant" as const,
+    text,
+    timestamp: 5,
+    runMode: "agent" as const,
+    streaming: false,
+  });
+  const names = (root: FakeElement) =>
+    (root.children as FakeElement[]).map((child) => child.className);
+
+  it("places the figures between the activity disclosure and the answer, once", function () {
+    const events = figureEvents([crop(1), crop(2)]);
+    const first = renderAgentTrace({
+      doc: fakeDocument,
+      message: message("The answer."),
+      events,
+    }) as unknown as FakeElement;
+    const order = names(first);
+    const details = order.findIndex((n) =>
+      n.includes("llm-agent-activity-details"),
+    );
+    const strip = order.findIndex((n) => n.includes("llm-agent-figure-strip"));
+    const divider = order.findIndex((n) =>
+      n.includes("llm-agent-output-divider"),
+    );
+    assert.isAtLeast(details, 0);
+    assert.isAbove(strip, details);
+    assert.isAbove(divider, strip);
+    // Nothing is left inside the folded activity.
+    const disclosure = first.findByClass(
+      "llm-agent-activity-details",
+    ) as FakeElement;
+    assert.isNull(disclosure.findByClass("llm-agent-image-artifacts"));
+    assert.lengthOf(first.findAllByClass("llm-assistant-generated-image"), 2);
+
+    const stripNode = first.findByClass("llm-agent-figure-strip");
+    const second = renderAgentTrace({
+      doc: fakeDocument,
+      message: message("The answer."),
+      events,
+      previous: first as unknown as HTMLElement,
+    }) as unknown as FakeElement;
+    assert.strictEqual(second, first);
+    assert.lengthOf(second.findAllByClass("llm-agent-figure-strip"), 1);
+    assert.lengthOf(second.findAllByClass("llm-assistant-generated-image"), 2);
+    assert.strictEqual(
+      second.findByClass("llm-agent-figure-strip"),
+      stripNode,
+      "an unchanged strip keeps its images instead of reloading them",
+    );
+    disposeAgentTrace(first as unknown as HTMLElement);
+  });
+
+  it("sends only figure-mode crops to the strip and keeps page renders in the stage", function () {
+    const events: AgentRunEventRecord[] = [
+      ...figureEvents([crop(1)]),
+      {
+        runId: "run-fig",
+        seq: 2,
+        eventType: "tool_result",
+        payload: {
+          type: "tool_result",
+          callId: "visual-1",
+          name: "paper_read",
+          ok: true,
+          content: { mode: "visual" },
+          artifacts: [
+            {
+              kind: "image",
+              mimeType: "image/png",
+              storedPath: "/tmp/pages/page-4.png",
+              pageIndex: 3,
+              pageLabel: "4",
+            },
+          ],
+        } as unknown as AgentRunEventRecord["payload"],
+        createdAt: 2,
+      },
+    ];
+    const trace = renderAgentTrace({
+      doc: fakeDocument,
+      message: message("The answer."),
+      events,
+    }) as unknown as FakeElement;
+    const strip = trace.findByClass("llm-agent-figure-strip") as FakeElement;
+    assert.deepEqual(
+      strip
+        .findAllByClass("llm-assistant-generated-image")
+        .map((image) => (image as unknown as { src?: string }).src),
+      ["file:///tmp/figure_crops/figure-1.png"],
+    );
+    const disclosure = trace.findByClass(
+      "llm-agent-activity-details",
+    ) as FakeElement;
+    assert.deepEqual(
+      disclosure
+        .findAllByClass("llm-assistant-generated-image")
+        .map((image) => (image as unknown as { src?: string }).src),
+      ["file:///tmp/pages/page-4.png"],
+    );
+    disposeAgentTrace(trace as unknown as HTMLElement);
+  });
+
+  it("keeps the strip right after the disclosure and before a kept document card", function () {
+    const documentId = "run-fig:document:1";
+    const events = [
+      ...figureEvents([crop(1)]),
+      {
+        runId: "run-fig",
+        seq: 2,
+        eventType: "tool_result",
+        payload: {
+          type: "tool_result",
+          callId: "submit-1",
+          name: "submit_document",
+          ok: true,
+          actionReceipts: [],
+          content: { documentId, visibleMarkdown: "# Review\n\nBody." },
+        } as unknown as AgentRunEventRecord["payload"],
+        createdAt: 2,
+      },
+      {
+        runId: "run-fig",
+        seq: 3,
+        eventType: "material_finalized",
+        payload: {
+          type: "material_finalized",
+          callId: "submit-1",
+          materialRef: {
+            documentId,
+            documentVersion: 1,
+            contentHash: "sha256:fig",
+          },
+          materialTitle: "Review",
+        } as unknown as AgentRunEventRecord["payload"],
+        createdAt: 3,
+      },
+    ];
+    const params = {
+      doc: fakeDocument,
+      message: { ...message("# Review\n\nBody."), documentId },
+      events,
+    };
+    const check = (root: FakeElement) => {
+      const order = names(root);
+      const details = order.findIndex((n) =>
+        n.includes("llm-agent-activity-details"),
+      );
+      const strip = order.findIndex((n) =>
+        n.includes("llm-agent-figure-strip"),
+      );
+      const card = order.findIndex((n) => n.includes("llm-plan-document-card"));
+      assert.isAtLeast(details, 0);
+      assert.isAtLeast(card, 0, "the document card is present");
+      assert.equal(
+        strip,
+        details + 1,
+        `strip follows the disclosure: ${order}`,
+      );
+      assert.isBelow(strip, card, `strip sits above the card: ${order}`);
+    };
+    const first = renderAgentTrace(params) as unknown as FakeElement;
+    check(first);
+    const second = renderAgentTrace({
+      ...params,
+      previous: first as unknown as HTMLElement,
+    }) as unknown as FakeElement;
+    assert.strictEqual(second, first);
+    check(second);
+    disposeAgentTrace(first as unknown as HTMLElement);
+  });
+
+  it("shows the page and a jump action only when the page is known", function () {
+    const events = figureEvents([
+      crop(1),
+      crop(2, {
+        pageIndex: undefined,
+        pageLabel: undefined,
+      }),
+      crop(3, { paperContext: undefined }),
+    ]);
+    const trace = renderAgentTrace({
+      doc: fakeDocument,
+      message: message("Done."),
+      events,
+    }) as unknown as FakeElement;
+    const frames = trace.findAllByClass("llm-assistant-generated-image-frame");
+    assert.lengthOf(frames, 3);
+    const jumps = frames.map(
+      (frame) =>
+        (frame as FakeElement).findAllByClass("llm-generated-image-action-jump")
+          .length,
+    );
+    assert.deepEqual(jumps, [1, 0, 0]);
+    assert.deepEqual(
+      trace
+        .findAllByClass("llm-assistant-generated-image-caption")
+        .map(collectFakeText),
+      ["Figure 1 \u00b7 p. 2", "Figure 2", "Figure 3 \u00b7 p. 4"],
+    );
+    disposeAgentTrace(trace as unknown as HTMLElement);
+  });
+});
+
+describe("the shared figure box", function () {
+  const images = [
+    {
+      id: "a",
+      label: "Figure 1",
+      path: "/tmp/figure_crops/figure-1.png",
+      figure: {
+        pageIndex: 1,
+        pageLabel: "2",
+        paper: { itemId: 11, contextItemId: 12, title: "Paper A" },
+      },
+    },
+    {
+      id: "b",
+      label: "Figure 2",
+      path: "/tmp/figure_crops/figure-2.png",
+    },
+  ];
+  const boxFor = (
+    list: typeof images,
+    options: Record<string, unknown> = {},
+  ) => {
+    const root = fakeDocument.createElement("div") as unknown as FakeElement;
+    renderAssistantGeneratedImagesInto(
+      root as unknown as HTMLElement,
+      list,
+      fakeDocument as unknown as Document,
+      options,
+    );
+    return root;
+  };
+
+  it("draws the caption with the page and a jump action for a paper figure", function () {
+    const root = boxFor([images[0]]);
+    assert.lengthOf(
+      root.findAllByClass("llm-assistant-generated-image-frame"),
+      1,
+    );
+    assert.deepEqual(
+      root
+        .findAllByClass("llm-assistant-generated-image-caption")
+        .map(collectFakeText),
+      ["Figure 1 · p. 2"],
+    );
+    assert.lengthOf(root.findAllByClass("llm-generated-image-action-jump"), 1);
+  });
+
+  it("offers no jump action when the crop has no page info", function () {
+    const root = boxFor([images[1]]);
+    assert.lengthOf(
+      root.findAllByClass("llm-assistant-generated-image-frame"),
+      1,
+    );
+    assert.lengthOf(root.findAllByClass("llm-generated-image-action-jump"), 0);
+    assert.deepEqual(
+      root
+        .findAllByClass("llm-assistant-generated-image-caption")
+        .map(collectFakeText),
+      ["Figure 2"],
+    );
+  });
+
+  it("opens the page through the injected opener when the jump is clicked", async function () {
+    const opened: unknown[] = [];
+    const root = boxFor([images[0]], {
+      openFigurePage: async (figure: unknown) => {
+        opened.push(figure);
+      },
+    });
+    const jump = root.findByClass("llm-generated-image-action-jump")!;
+    await jump.dispatchFakeEventAsync("click");
+    assert.deepEqual(opened, [images[0].figure]);
+  });
+});
+
+describe("selectFigureStripImages", function () {
+  const list = [
+    { id: "1", path: "/z/f1.png" },
+    { id: "2", path: "C:\\z\\f2.png" },
+    { id: "3", path: "/z/f3.png" },
+  ];
+  it("keeps every crop when the answer shows none", function () {
+    assert.lengthOf(selectFigureStripImages(list, new Set()), 3);
+  });
+  it("omits only the crops the answer shows, matching backslashes as slashes", function () {
+    const kept = selectFigureStripImages(
+      list,
+      new Set(["/z/f1.png", "C:/z/f2.png"]),
+    );
+    assert.deepEqual(
+      kept.map((image) => image.id),
+      ["3"],
+    );
   });
 });

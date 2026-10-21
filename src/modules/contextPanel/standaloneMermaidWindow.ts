@@ -3,6 +3,7 @@ import { installStandaloneWindowTitlebar } from "./standaloneWindowTitlebar";
 import { HTML_NS } from "../../utils/domHelpers";
 import { pluginStylesheetHref } from "../../utils/pluginReload";
 import { createInlineSvgElement } from "./mermaidSvg";
+import { ZOOM_BUTTON_STEP, getWheelZoomScale } from "./wheelZoom";
 
 type MermaidThemeKey = "light" | "dark";
 
@@ -26,9 +27,6 @@ const MERMAID_WINDOW_MIN_WIDTH_PX = 640;
 const MERMAID_WINDOW_MIN_HEIGHT_PX = 420;
 const MERMAID_WINDOW_ZOOM_MIN = 0.5;
 const MERMAID_WINDOW_ZOOM_MAX = 4;
-const MERMAID_WINDOW_ZOOM_STEP = 0.25;
-const MERMAID_WINDOW_WHEEL_ZOOM_DELTA_MAX = 24;
-const MERMAID_WINDOW_WHEEL_ZOOM_SENSITIVITY = 0.002;
 const MERMAID_WINDOW_ROOT_ID = "llmforzotero-standalone-mermaid-root";
 const MERMAID_WINDOW_FEATURES =
   "chrome,extrachrome,menubar,resizable,scrollbars,status,centerscreen,dialog=no,dependent=no";
@@ -41,16 +39,6 @@ function clampZoom(scale: number): number {
   return Math.min(
     MERMAID_WINDOW_ZOOM_MAX,
     Math.max(MERMAID_WINDOW_ZOOM_MIN, scale),
-  );
-}
-
-function getWheelZoomScale(scale: number, deltaY: number): number {
-  const boundedDelta = Math.min(
-    MERMAID_WINDOW_WHEEL_ZOOM_DELTA_MAX,
-    Math.max(-MERMAID_WINDOW_WHEEL_ZOOM_DELTA_MAX, deltaY),
-  );
-  return (
-    scale * Math.exp(-boundedDelta * MERMAID_WINDOW_WHEEL_ZOOM_SENSITIVITY)
   );
 }
 
@@ -211,12 +199,8 @@ function initializeStandaloneSvgWindow(
   };
   const closeWindow = () => targetWin.close();
 
-  zoomOut.addEventListener("click", () =>
-    applyZoom(scale - MERMAID_WINDOW_ZOOM_STEP),
-  );
-  zoomIn.addEventListener("click", () =>
-    applyZoom(scale + MERMAID_WINDOW_ZOOM_STEP),
-  );
+  zoomOut.addEventListener("click", () => applyZoom(scale - ZOOM_BUTTON_STEP));
+  zoomIn.addEventListener("click", () => applyZoom(scale + ZOOM_BUTTON_STEP));
   fit.addEventListener("click", () => {
     applyZoom(1);
     viewport.scrollTop = 0;

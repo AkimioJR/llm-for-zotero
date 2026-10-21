@@ -56,6 +56,7 @@ import {
 } from "../contextIcons";
 import { createDocumentCardLayout } from "../documentCard";
 import { renderAssistantGeneratedImagesInto } from "../generatedImageRender";
+import { setStatus } from "../textUtils";
 import {
   normalizePaperContextRefs,
   normalizeSelectedTextSources,
@@ -217,6 +218,8 @@ type AgentTraceDisplayItem =
   | {
       type: "image_grid";
       images: GeneratedChatImage[];
+      /** Figure crops from paper_read mode "figures"; they go to the strip. */
+      figures?: boolean;
     }
   | {
       type: "reasoning";
@@ -4110,6 +4113,30 @@ function imageArtifactTooltip(artifact: ImageAgentToolArtifact): string {
   return parts.join(" · ");
 }
 
+/** The page and paper an image artifact came from, for its figure box. */
+function imageArtifactFigure(
+  artifact: ImageAgentToolArtifact,
+): GeneratedChatImage["figure"] | undefined {
+  const paper = artifact.paperContext;
+  const itemId = Math.floor(Number(paper?.itemId));
+  const contextItemId = Math.floor(Number(paper?.contextItemId));
+  const pageIndex = Number.isFinite(artifact.pageIndex)
+    ? Math.floor(Number(artifact.pageIndex))
+    : undefined;
+  const pageLabel = artifact.pageLabel?.trim();
+  const title = sanitizeText(paper?.title || "").trim();
+  const figure: NonNullable<GeneratedChatImage["figure"]> = {
+    ...(pageIndex !== undefined && pageIndex >= 0 ? { pageIndex } : {}),
+    ...(pageLabel ? { pageLabel } : {}),
+    ...(itemId > 0 && contextItemId > 0
+      ? {
+          paper: { itemId, contextItemId, ...(title ? { title } : {}) },
+        }
+      : {}),
+  };
+  return Object.keys(figure).length ? figure : undefined;
+}
+
 function imageArtifactsToGeneratedImages(
   artifacts: unknown,
   keyPrefix: string,
@@ -4123,13 +4150,35 @@ function imageArtifactsToGeneratedImages(
     ...(imageArtifactTooltip(artifact)
       ? { revisedPrompt: imageArtifactTooltip(artifact) }
       : {}),
+    ...(imageArtifactFigure(artifact)
+      ? { figure: imageArtifactFigure(artifact) }
+      : {}),
   }));
+}
+
+/**
+ * Whether a result's own content (or a call's own input) says it ran in
+ * figure mode. The event decides, not the tool's name.
+ */
+function isFiguresModeRecord(source: unknown): boolean {
+  if (!source || typeof source !== "object") return false;
+  const record = source as Record<string, unknown>;
+  if (record.mode === "figures") return true;
+  // A big persisted result keeps a bounded preview of its content.
+  const preview = record.preview;
+  return Boolean(
+    record.truncated === true &&
+    preview &&
+    typeof preview === "object" &&
+    (preview as Record<string, unknown>).mode === "figures",
+  );
 }
 
 function appendImageArtifactGrid(
   ctx: AgentTraceAdapterContext,
   artifacts: unknown,
   keyPrefix: string,
+  options: { figures?: boolean } = {},
 ): boolean {
   const images = imageArtifactsToGeneratedImages(artifacts, keyPrefix).filter(
     (image) => {
@@ -4141,7 +4190,11 @@ function appendImageArtifactGrid(
     },
   );
   if (images.length) {
-    ctx.items.push({ type: "image_grid", images });
+    ctx.items.push({
+      type: "image_grid",
+      images,
+      ...(options.figures ? { figures: true } : {}),
+    });
     return true;
   }
   return false;
@@ -4791,6 +4844,9 @@ function appendLegacyAgentTraceEvent(
           ctx,
           entry.payload.artifacts,
           `tool-result:${entry.payload.callId}`,
+          {
+            figures: isFiguresModeRecord(entry.payload.content),
+          },
         );
         if (hasImageGrid && !row) {
           const inserted = ctx.items.pop();
@@ -4875,6 +4931,7 @@ function appendCodexAgentTraceEvent(
           ctx,
           entry.payload.artifacts,
           `codex:${entry.payload.itemId}`,
+          { figures: isFiguresModeRecord(entry.payload.args) },
         );
       }
       return true;
@@ -5522,6 +5579,47 @@ function createTraceStageGrouper(items: AgentTraceDisplayItem[]) {
       }
     },
   };
+}
+
+/** Reports a figure action's result in the panel's status line, if any. */
+function figureActionStatusReporter(
+  doc: Document,
+  anchor: HTMLElement,
+): (message: string, level: "ready" | "warning" | "error") => void {
+  return (message, level) => {
+    // Look up at click time: the document can hold more than one panel, and
+    // the strip may have moved since it was built.
+    const root = anchor.closest?.("#llm-main") as HTMLElement | null;
+    const status = (root || doc).querySelector(
+      "#llm-status",
+    ) as HTMLElement | null;
+    if (status) setStatus(status, message, level);
+  };
+}
+
+function collectDisplayItemFigureImages(
+  items: readonly AgentTraceDisplayItem[],
+): GeneratedChatImage[] {
+  const images: GeneratedChatImage[] = [];
+  forEachAgentTraceDisplayItem(items, (item) => {
+    if (item.type === "image_grid" && item.figures) images.push(...item.images);
+  });
+  return images;
+}
+
+/**
+ * The figure crops the strip shows: every crop except those the answer
+ * already shows. Paths compare with backslashes read as slashes.
+ */
+export function selectFigureStripImages(
+  images: readonly GeneratedChatImage[],
+  shownInAnswer: ReadonlySet<string>,
+): GeneratedChatImage[] {
+  if (!shownInAnswer.size) return [...images];
+  return images.filter(
+    (image) =>
+      !image.path || !shownInAnswer.has(image.path.replace(/\\/g, "/")),
+  );
 }
 
 /** Visit every item, inside a stage group or not, in the order produced. */
@@ -6624,6 +6722,8 @@ type TraceView = {
   quoteCitations?: Message["quoteCitations"];
   quoteOverride?: Message["quoteDisplayOverride"];
   formattingVersion?: number;
+  /** The figure strip below the activity; rebuilt only when its images change. */
+  figures?: { signature: string; node: HTMLElement };
 };
 const traceViews = new WeakMap<HTMLElement, TraceView>();
 
@@ -6953,6 +7053,10 @@ export function renderAgentTrace({
       }
 
       if (itemEntry.type === "image_grid") {
+        // Extracted figures are an outcome, not a step: the strip below the
+        // activity disclosure shows them, so the folded stage keeps only the
+        // action row that prepared them. Other images stay in the stage.
+        if (itemEntry.figures) continue;
         const container = doc.createElement("div") as HTMLDivElement;
         container.className = "llm-agent-image-artifacts";
         const rendered = renderAssistantGeneratedImagesInto(
@@ -7122,7 +7226,8 @@ export function renderAgentTrace({
         child !== view.document?.node &&
         child !== view.document?.caption &&
         child !== view.document?.lead?.node &&
-        child !== view.discovery?.node
+        child !== view.discovery?.node &&
+        child !== view.figures?.node
       )
         child?.remove();
     }
@@ -7196,6 +7301,49 @@ export function renderAgentTrace({
         ? renderNoteChangeCard(doc, card, { readOnly })
         : renderSavedNoteCard(doc, card),
     );
+
+  // The figures the run extracted, shown once between the activity and the
+  // answer. A crop the answer already shows is left to the answer. The node
+  // is kept while its images are unchanged, so a streaming frame does not
+  // reload the pictures.
+  // Follow-up: the inline [[figure:ID]] block passes the paths it renders.
+  const stripImages = selectFigureStripImages(
+    collectDisplayItemFigureImages(processItems),
+    new Set<string>(),
+  );
+  if (!stripImages.length) {
+    view.figures?.node.remove();
+    view.figures = undefined;
+  } else {
+    const signature = JSON.stringify(
+      stripImages.map((image) => [image.id, image.path, image.figure]),
+    );
+    if (view.figures?.signature !== signature) {
+      view.figures?.node.remove();
+      const strip = doc.createElement("div") as HTMLDivElement;
+      strip.className = "llm-agent-image-artifacts llm-agent-figure-strip";
+      renderAssistantGeneratedImagesInto(strip, stripImages, doc, {
+        wrapClassName: "llm-agent-image-artifacts-grid",
+        frameClassName: "llm-agent-image-artifact-frame",
+        onImageActionStatus: figureActionStatusReporter(doc, strip),
+      });
+      view.figures = { signature, node: strip };
+    }
+    // A fixed place: before the first plan, document or discovery card the
+    // run keeps, so the strip does not jump when those cards are retained.
+    const keptCards = new Set<Node | undefined>([
+      view.plan?.node,
+      view.document?.node,
+      view.document?.caption,
+      view.document?.lead?.node,
+      view.discovery?.node,
+    ]);
+    const anchorNode = Array.from(wrap.children).find((child) =>
+      keptCards.has(child),
+    );
+    if (anchorNode) wrap.insertBefore(view.figures.node, anchorNode);
+    else wrap.appendChild(view.figures.node);
+  }
 
   const planProjection = readPlanProjection(scan);
   if (!planProjection && view.plan) {

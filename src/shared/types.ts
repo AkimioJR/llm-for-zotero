@@ -31,12 +31,24 @@ export type ChatAttachment = {
   contentHash?: string;
 };
 
+/** Where an extracted paper figure came from, so its box can reopen the page. */
+export type GeneratedChatImageFigure = {
+  pageIndex?: number;
+  pageLabel?: string;
+  paper?: {
+    itemId: number;
+    contextItemId: number;
+    title?: string;
+  };
+};
+
 export type GeneratedChatImage = {
   id: string;
   label?: string;
   path?: string;
   src?: string;
   revisedPrompt?: string;
+  figure?: GeneratedChatImageFigure;
 };
 
 export type PaperContentSourceMode =
