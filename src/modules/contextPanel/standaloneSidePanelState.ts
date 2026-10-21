@@ -313,6 +313,45 @@ export function openItemSidePanelTab(
   });
 }
 
+/**
+ * "Back to Miscellaneous" on an item picked in the Miscellaneous list: the
+ * item tab turns back into the Miscellaneous tab, in the same place. When a
+ * Miscellaneous tab is open elsewhere, the item tab closes and that one is
+ * focused instead.
+ */
+export function returnItemTabToMisc(
+  state: SidePanelTabsState,
+  itemTabId: string,
+  miscId: string,
+): SidePanelTabOpenResult {
+  const index = state.tabs.findIndex(
+    (tab) => tab.id === itemTabId && tab.kind === "item",
+  );
+  if (index < 0) {
+    return { state, tabId: null, opened: false, refused: false };
+  }
+  const existing = state.tabs.find((tab) => tab.kind === "misc");
+  if (existing) {
+    return {
+      state: focusSidePanelTab(
+        closeSidePanelTab(state, itemTabId),
+        existing.id,
+      ),
+      tabId: existing.id,
+      opened: false,
+      refused: false,
+    };
+  }
+  const tabs = [...state.tabs];
+  tabs[index] = { id: miscId, kind: "misc", conversationKey: 0 };
+  return {
+    state: focusSidePanelTab({ ...state, tabs }, miscId),
+    tabId: miscId,
+    opened: true,
+    refused: false,
+  };
+}
+
 export function openSideChatSidePanelTab(
   state: SidePanelTabsState,
   id: string,

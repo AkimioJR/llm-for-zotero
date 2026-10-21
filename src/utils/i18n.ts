@@ -1568,6 +1568,7 @@ const zhCN: Record<string, string> = {
   // Side panel items, Miscellaneous tab, HTML preview.
   "Move to side panel": "移到侧边面板",
   "Mermaid diagram": "Mermaid 图表",
+  "Back to Miscellaneous": "返回杂项",
   "HTML page": "HTML 页面",
   Code: "代码",
   Plan: "计划",

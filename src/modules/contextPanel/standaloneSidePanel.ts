@@ -92,6 +92,7 @@ import {
   moveSidePanelTab,
   openItemSidePanelTab,
   openMiscSidePanelTab,
+  returnItemTabToMisc,
   openReadOnlySidePanelTab,
   openSideChatSidePanelTab,
   openSidePanel,
@@ -289,6 +290,8 @@ type ItemTabView = TabViewBase & {
 
 type MiscTabView = TabViewBase & {
   kind: "misc";
+  /** The scrolling list; its position is kept while a picked item is shown. */
+  list: HTMLElement;
   /** Redraws the list from the main chat's rendered messages. */
   refresh: () => void;
   /** Stops watching the main chat. */
@@ -1707,6 +1710,7 @@ export function createStandaloneSidePanel(
     itemKey: string,
     messageIndex: number,
     conversationKey: number,
+    fromMisc: boolean,
   ): ItemTabView => {
     const kind = request.kind;
     const title = resolveItemTabTitle(request, t);
@@ -1715,6 +1719,17 @@ export function createStandaloneSidePanel(
     root.dataset.sideItemKind = kind;
     root.dataset.sideTabId = id;
     const { row, actions } = createTitleRow(title);
+    // Only an item picked in the Miscellaneous list can go back to it.
+    if (fromMisc) {
+      const back = createIconButton(
+        doc,
+        "llm-standalone-side-panel-item-action llm-standalone-side-panel-icon-back",
+        t("Back to Miscellaneous"),
+      );
+      back.dataset.itemAction = "back";
+      back.addEventListener("click", () => backToMisc(id));
+      row.prepend(back);
+    }
     row
       .querySelector(".llm-standalone-content-title-text")
       ?.after(createPill(t(ITEM_KIND_LABELS[kind]), "kind"));
@@ -1900,6 +1915,7 @@ export function createStandaloneSidePanel(
       reportTabLimit();
       return false;
     }
+    const replaced = replaceId ? views.get(replaceId) : undefined;
     if (result.opened && result.tabId) {
       views.set(
         result.tabId,
@@ -1909,15 +1925,16 @@ export function createStandaloneSidePanel(
           itemKey,
           messageIndex,
           conversationKey,
+          replaced?.kind === "misc",
         ),
       );
     }
-    const replaced = replaceId ? views.get(replaceId) : undefined;
     if (
       replaced &&
       replaced.kind === "misc" &&
       !result.state.tabs.some((tab) => tab.id === replaced.id)
     ) {
+      miscScrollTop = replaced.list.scrollTop;
       views.delete(replaced.id);
       disposeMiscView(replaced);
     }
@@ -1925,7 +1942,31 @@ export function createStandaloneSidePanel(
     return true;
   };
 
+  /**
+   * Turns an item tab picked from the Miscellaneous list back into that list,
+   * refreshed and scrolled where it was.
+   */
+  const backToMisc = (itemTabId: string) => {
+    const item = views.get(itemTabId);
+    if (disposed || item?.kind !== "item") return;
+    const result = returnItemTabToMisc(tabsState, itemTabId, nextTabId("misc"));
+    if (!result.tabId) return;
+    views.delete(itemTabId);
+    disposeItemView(item);
+    let misc = views.get(result.tabId);
+    if (result.opened) {
+      misc = buildMiscView(result.tabId);
+      views.set(result.tabId, misc);
+    } else if (misc?.kind === "misc") {
+      misc.refresh();
+    }
+    setTabsState(result.state);
+    if (misc?.kind === "misc") misc.list.scrollTop = miscScrollTop;
+  };
+
   // -- Miscellaneous tab -------------------------------------------------------
+  /** Where the list was scrolled when a picked item replaced it. */
+  let miscScrollTop = 0;
   // What the model made in the main chat (diagrams, figures, pages, code,
   // plan documents), newest first, in the History list's row styles. A picked
   // row turns this tab into that item's tab.
@@ -2027,6 +2068,7 @@ export function createStandaloneSidePanel(
     );
     const view: MiscTabView = {
       kind: "misc",
+      list,
       id,
       root,
       body: root,

@@ -12,6 +12,7 @@ import {
   openItemSidePanelTab,
   openMiscSidePanelTab,
   openSidePanel,
+  returnItemTabToMisc,
   showSidePanelNewTabPage,
 } from "../src/modules/contextPanel/standaloneSidePanelState";
 import { t } from "../src/utils/i18n";
@@ -327,6 +328,37 @@ describe("side panel Miscellaneous and host registration", function () {
       assert.equal(picked.state.activeId, "item-1");
     });
 
+    it("goes back from a picked item to the list in the same place", function () {
+      const side = openItemSidePanelTab(openSidePanel(CLOSED_SIDE_PANEL_TABS), {
+        id: "item-0",
+        itemKey: "other",
+      });
+      const misc = openMiscSidePanelTab(
+        showSidePanelNewTabPage(side.state),
+        "misc-1",
+      );
+      const picked = openItemSidePanelTab(misc.state, {
+        id: "item-1",
+        itemKey: "7|code|msg=2:0",
+        replaceId: "misc-1",
+      });
+      const back = returnItemTabToMisc(picked.state, "item-1", "misc-2");
+      assert.isTrue(back.opened);
+      assert.equal(back.tabId, "misc-2");
+      assert.deepEqual(
+        back.state.tabs.map((tab) => [tab.id, tab.kind]),
+        [
+          ["item-0", "item"],
+          ["misc-2", "misc"],
+        ],
+      );
+      assert.equal(back.state.activeId, "misc-2");
+      // Not an item tab: nothing changes.
+      const none = returnItemTabToMisc(back.state, "misc-2", "misc-3");
+      assert.isNull(none.tabId);
+      assert.strictEqual(none.state, back.state);
+    });
+
     it("focuses an item tab that is already open and drops the list", function () {
       const first = openItemSidePanelTab(
         openSidePanel(CLOSED_SIDE_PANEL_TABS),
@@ -356,6 +388,7 @@ describe("side panel Miscellaneous and host registration", function () {
   describe("Chinese strings", function () {
     const keys = [
       "Move to side panel",
+      "Back to Miscellaneous",
       "Mermaid diagram",
       "HTML page",
       "Code",

@@ -396,6 +396,11 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
       );
     }
 
+    assert.isNull(
+      shownItemRoot()!.querySelector('[data-item-action="back"]'),
+      "an item moved with →| has no Back to Miscellaneous",
+    );
+
     // Show in chat scrolls to the source message and flashes it.
     moveButton("mermaid")!.click();
     await Zotero.Promise.delay(300);
@@ -621,5 +626,116 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
     assert.equal(itemTabMetrics.fontSize, historyTabMetrics.fontSize);
     assert.equal(itemTabMetrics.borderRadius, historyTabMetrics.borderRadius);
     assert.closeTo(itemTabMetrics.height, historyTabMetrics.height, 0.5);
+
+    // Back to Miscellaneous: the picked item's tab shows the list again.
+    const back = shownItemRoot()!.querySelector<HTMLElement>(
+      '[data-item-action="back"]',
+    );
+    assert.isOk(back, "an item picked in the list has a back button");
+    assert.equal(back!.title, "Back to Miscellaneous");
+    const titleRow = back!.parentElement!;
+    assert.equal(titleRow.firstElementChild, back, "back comes first");
+    const copy = shownItemRoot()!.querySelector<HTMLElement>(
+      '[data-item-action="copy"]',
+    )!;
+    assert.equal(back!.className.split(" ")[0], copy.className.split(" ")[0]);
+    const backRect = back!.getBoundingClientRect();
+    const copyRect = copy.getBoundingClientRect();
+    assert.closeTo(backRect.width, copyRect.width, 0.5, "same button size");
+    assert.closeTo(backRect.height, copyRect.height, 0.5, "same button size");
+    // The back icon's mask is first used here; let it load before the shot.
+    await Zotero.Promise.delay(500);
+    await shoot(win, "misc-item-back.png");
+    back!.click();
+    await until(
+      () =>
+        qa("[data-made-kind]").filter((el) => el.offsetParent !== null)
+          .length === 4,
+      () => `misc rows after back: ${qa("[data-made-kind]").length}`,
+    );
+    assert.lengthOf(itemTabs(), 0, "the item tab became the list again");
+    assert.lengthOf(
+      qa('.llm-standalone-side-panel-tab[data-side-tab-kind="misc"]'),
+      1,
+      "one Miscellaneous tab",
+    );
+    assert.equal(
+      qa(".llm-standalone-side-panel-tab").length,
+      tabCountBefore,
+      "the tab count did not change",
+    );
+  });
+
+  it("lists only the answer's items, not code from the agent's tool calls", async function () {
+    const fixture = await api.createPaperWithPdfFixture({
+      title: "Miscellaneous trace paper",
+      pdfTitle: "Miscellaneous trace paper PDF",
+    });
+    fixtures.push(fixture);
+    await api.openStandaloneForItem(fixture.parentItemId);
+    await api.resizeStandaloneWindow(1300, 800);
+    win = (Zotero as any).LLMForZotero.data.standaloneWindow as Window;
+    const toolEvent = (seq: number, toolName: string) => ({
+      runId: "misc-trace",
+      seq,
+      createdAt: seq,
+      eventType: "codex_tool_activity",
+      payload: {
+        type: "codex_tool_activity",
+        itemId: `tool-${seq}`,
+        phase: "completed",
+        toolName,
+        args: { operation: "next_work", view: "full" },
+      },
+    });
+    await api.seedStandaloneConversation([
+      { role: "user", text: "Look things up, then write code" },
+      {
+        role: "assistant",
+        text: `Here is the code.\n\n${CODE_FENCE}`,
+        runMode: "agent",
+        modelProviderLabel: "Codex",
+        pendingAgentTraceEvents: [
+          toolEvent(1, "inspect_records"),
+          toolEvent(2, "search_library"),
+        ],
+      } as any,
+    ]);
+    await until(
+      () => qa(".llm-agent-trace-code .llm-codeblock-shell").length >= 1,
+      () =>
+        `trace code blocks: ${qa(".llm-agent-trace-code .llm-codeblock-shell").length}`,
+      30_000,
+    );
+    await until(
+      () => qa(".llm-side-move-btn").length >= 1,
+      () => `move buttons: ${qa(".llm-side-move-btn").length}`,
+      30_000,
+    );
+    assert.lengthOf(
+      qa(".llm-agent-trace-code .llm-side-move-btn"),
+      0,
+      "trace code blocks have no →|",
+    );
+    assert.lengthOf(
+      qa(".llm-agent-trace-code [data-side-item-kind]"),
+      0,
+      "trace code blocks are not side items",
+    );
+
+    await api.clickStandaloneSidePanelControl("toggle");
+    await api.clickStandaloneSidePanelControl("new-tab");
+    qa('[data-side-launch="misc"]')[0].click();
+    await until(
+      () => qa("[data-made-kind]").length >= 1,
+      () => `misc rows: ${qa("[data-made-kind]").length}`,
+    );
+    await Zotero.Promise.delay(300);
+    assert.deepEqual(
+      qa("[data-made-kind]").map((row) => row.getAttribute("data-made-kind")),
+      ["code"],
+      "only the answer's code block is listed",
+    );
+    await shoot(win, "misc-list-no-trace.png");
   });
 });
