@@ -1,3 +1,4 @@
+import { isEphemeralConversationKey } from "../../../shared/conversationKeySpace";
 import type { PaperContextRef } from "../../../shared/types";
 import type {
   AgentToolContext,
@@ -531,8 +532,12 @@ export function createLiteratureSearchTool(
           : OUTSIDE_SEARCH_STOP_NOTE,
       );
     },
+    // A temporary side chat is read-only: its Apply would be refused, so it
+    // shows no metadata card and the proposed changes reach the model as text.
     createResultReviewAction: (input, result, context) =>
-      input.mode === "metadata" && input.workflow === "review"
+      input.mode === "metadata" &&
+      input.workflow === "review" &&
+      !isEphemeralConversationKey(context.request.conversationKey)
         ? createSearchLiteratureReviewAction(result, context, input)
         : null,
     resolveResultReview: (input, result, resolution, context) =>

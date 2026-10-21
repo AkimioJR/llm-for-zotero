@@ -2,6 +2,7 @@ import { assert } from "chai";
 import { createLiteratureSearchTool } from "../src/agent/tools/read/literatureSearch";
 import { AGENT_SEARCH_TOOL_ROUTES } from "../src/agent/model/agentPersona";
 import type { AgentToolContext } from "../src/agent/types";
+import { EPHEMERAL_PAPER_CONVERSATION_KEY_BASE } from "../src/shared/conversationKeySpace";
 import { resolvedAgentRequest } from "./helpers/resolvedAgentRequest";
 
 describe("literature_search tool", function () {
@@ -119,6 +120,42 @@ describe("literature_search tool", function () {
     assert.equal((result as { mode: string }).mode, "metadata");
     assert.equal((result as { workflow: string }).workflow, "answer");
     assert.lengthOf((result as { results: unknown[] }).results, 2);
+
+    // A metadata review shows its card in a chat that can apply it, and
+    // none in a temporary side chat, which is read-only (2026-10-21).
+    const review = tool.validate({
+      mode: "metadata",
+      workflow: "review",
+      title: "Example Title",
+    });
+    assert.isTrue(review.ok);
+    if (!review.ok) return;
+    const reviewed = await tool.execute(review.value, baseContext);
+    const toolResult = {
+      callId: "call-metadata",
+      name: "literature_search",
+      ok: true,
+      content: reviewed,
+    };
+    assert.isNotNull(
+      await tool.createResultReviewAction?.(
+        review.value,
+        toolResult,
+        baseContext,
+      ),
+    );
+    const sideChat: AgentToolContext = {
+      ...baseContext,
+      request: resolvedAgentRequest({
+        conversationKey: EPHEMERAL_PAPER_CONVERSATION_KEY_BASE,
+        mode: "agent",
+        userText: "Check this paper's metadata",
+        libraryID: 1,
+      }),
+    };
+    assert.isNull(
+      await tool.createResultReviewAction?.(review.value, toolResult, sideChat),
+    );
   });
 
   it("resolves metadata lookups from the current Zotero item when only item context is provided", async function () {
