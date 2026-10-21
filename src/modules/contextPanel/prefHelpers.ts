@@ -50,6 +50,10 @@ import {
   STANDALONE_SIDEBAR_DEFAULT_WIDTH_PX,
 } from "./standaloneWindowSizing";
 import {
+  parsePinnedPaperIDs,
+  serializePinnedPaperIDs,
+} from "./standalonePinnedPapers";
+import {
   forgetPaperRestoreTarget,
   getPaperRestoreTarget,
   rememberPaperRestoreTarget,
@@ -100,6 +104,7 @@ const LAST_CONVERSATION_MODE_MAP_PREF_KEY = "lastUsedConversationModeMap";
 const LAST_GLOBAL_CONVERSATION_MAP_PREF_KEY = "lastUsedGlobalConversationMap";
 const PANEL_FONT_SCALE_PREF_KEY = "panelFontScale";
 const STANDALONE_SIDEBAR_WIDTH_PREF_KEY = "standaloneSidebarWidth";
+const STANDALONE_PINNED_PAPERS_PREF_KEY = "standalonePinnedPapers";
 const SHORTCUT_DEFAULTS_MIGRATION_PREF_KEY = "shortcutDefaultsMigrationVersion";
 const SHORTCUT_DEFAULTS_MIGRATION_VERSION = 2;
 const MESSAGE_LINE_SPACING_PREF_KEY = "messageLineSpacing";
@@ -587,6 +592,24 @@ export function setStandaloneSidebarWidthPref(value: number): void {
   getZoteroPrefs()?.set?.(
     `${config.prefsPrefix}.${STANDALONE_SIDEBAR_WIDTH_PREF_KEY}`,
     clampStandaloneSidebarPreferredWidth(value),
+    true,
+  );
+}
+
+/** The standalone window's pinned papers (item IDs), oldest first. */
+export function getStandalonePinnedPapersPref(): number[] {
+  return parsePinnedPaperIDs(
+    getZoteroPrefs()?.get?.(
+      `${config.prefsPrefix}.${STANDALONE_PINNED_PAPERS_PREF_KEY}`,
+      true,
+    ),
+  );
+}
+
+export function setStandalonePinnedPapersPref(ids: readonly number[]): void {
+  getZoteroPrefs()?.set?.(
+    `${config.prefsPrefix}.${STANDALONE_PINNED_PAPERS_PREF_KEY}`,
+    serializePinnedPaperIDs(ids),
     true,
   );
 }

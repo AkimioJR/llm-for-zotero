@@ -24,6 +24,10 @@ export type StandaloneSidebarView = {
   skillsButton: HTMLButtonElement;
   skillsLabel: HTMLSpanElement;
   refreshButton: HTMLButtonElement;
+  /** "Pinned papers": its label and rows; hidden while nothing is pinned. */
+  pinnedRegion: HTMLDivElement;
+  pinnedList: HTMLDivElement;
+  pinnedClear: HTMLButtonElement;
   historyRegion: HTMLDivElement;
   undo: HTMLDivElement;
   undoText: HTMLSpanElement;
@@ -155,6 +159,41 @@ export function createStandaloneSidebarView(
   searchNavigationRow.append(search.button, refreshButton);
   primaryNavigation.append(newChat.button, searchNavigationRow, skills.button);
 
+  const pinnedRegion = createHtmlElement(
+    doc,
+    "div",
+    "llm-standalone-pinned-region",
+  );
+  pinnedRegion.setAttribute("aria-label", translate("Pinned papers"));
+  const pinnedHeader = createHtmlElement(
+    doc,
+    "div",
+    "llm-standalone-day-label llm-standalone-pinned-label",
+  );
+  const pinnedLabel = createHtmlElement(
+    doc,
+    "span",
+    "llm-standalone-pinned-label-text",
+  );
+  pinnedLabel.textContent = translate("Pinned papers");
+  const pinnedClear = createHtmlElement(
+    doc,
+    "button",
+    "llm-standalone-pinned-clear",
+  );
+  pinnedClear.type = "button";
+  pinnedClear.textContent = translate("Clear");
+  pinnedClear.title = translate("Unpin all papers");
+  pinnedClear.setAttribute("aria-label", translate("Unpin all papers"));
+  pinnedClear.hidden = true;
+  pinnedHeader.append(pinnedLabel, pinnedClear);
+  const pinnedList = createHtmlElement(
+    doc,
+    "div",
+    "llm-standalone-pinned-list",
+  );
+  pinnedRegion.append(pinnedHeader, pinnedList);
+
   const historyRegion = createHtmlElement(
     doc,
     "div",
@@ -203,7 +242,13 @@ export function createStandaloneSidebarView(
   footerRow.append(preferences.button, updateSlot);
   preferencesRegion.append(footerDivider, footerRow);
 
-  panel.append(header, primaryNavigation, historyRegion, preferencesRegion);
+  panel.append(
+    header,
+    primaryNavigation,
+    pinnedRegion,
+    historyRegion,
+    preferencesRegion,
+  );
 
   const resizeHandle = createHtmlElement(
     doc,
@@ -231,6 +276,9 @@ export function createStandaloneSidebarView(
     skillsButton: skills.button,
     skillsLabel: skills.label,
     refreshButton,
+    pinnedRegion,
+    pinnedList,
+    pinnedClear,
     historyRegion,
     undo,
     undoText,

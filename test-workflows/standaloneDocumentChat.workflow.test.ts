@@ -175,7 +175,7 @@ describe("workflow: standalone document chat", function () {
     );
     assert.deepEqual(
       expanded.titleActionLabels,
-      ["Show task progress", "Export", "Delete conversation"],
+      ["Pin this paper", "Show task progress", "Export", "Delete conversation"],
       diagnosticsMessage(expanded),
     );
     assert.isDefined(expanded.alignment, diagnosticsMessage(expanded));

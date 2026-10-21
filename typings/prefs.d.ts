@@ -11,6 +11,7 @@ declare namespace _ZoteroTypes {
       "logLevel": string;
       "sidebarLayout": string;
       "standaloneSidebarWidth": number;
+      "standalonePinnedPapers": string;
       "input": string;
       "apiBase": string;
       "apiKey": string;

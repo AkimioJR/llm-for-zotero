@@ -2,6 +2,7 @@ pref("enable", true);
 pref("logLevel", "warn");
 pref("sidebarLayout", "stacked");
 pref("standaloneSidebarWidth", 220);
+pref("standalonePinnedPapers", "");
 pref("input", "This is input");
 pref("apiBase", "");
 pref("apiKey", "");

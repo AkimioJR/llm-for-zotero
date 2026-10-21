@@ -754,6 +754,34 @@ export type WorkflowTestPendingSendDeleteResult = {
   statusText: string;
 };
 
+/** The window's pin button and its "Pinned papers" rows. */
+export type WorkflowTestStandalonePinnedPapers = {
+  pinButton: { visible: boolean; pressed: boolean; label: string };
+  regionVisible: boolean;
+  /**
+   * The "Clear" button on the section's label row: present once a paper is
+   * pinned (on screen only while the pointer is over the section).
+   */
+  clearVisible: boolean;
+  /**
+   * Left edges (px) of the section's label and first row, and of the first
+   * history day label and row, so the two can be checked to line up.
+   */
+  edges: {
+    pinnedLabel: number | null;
+    pinnedRow: number | null;
+    historyLabel: number | null;
+    historyRow: number | null;
+  };
+  rows: Array<{
+    paperItemId: number;
+    label: string;
+    active: boolean;
+    /** "writing" while its chat answers, "ready" for an unseen answer. */
+    dot: "writing" | "ready" | null;
+  }>;
+};
+
 export type WorkflowTestHistoryRow = {
   conversationKey: number;
   title: string;
@@ -1845,6 +1873,17 @@ export type WorkflowTestApi = {
   /** Clicks a row of the window's history list; waits for the mount. */
   clickStandaloneSidebarHistoryRow: (
     conversationKey: number,
+  ) => Promise<WorkflowTestStandaloneDiagnostics>;
+  /** The window's pin button and "Pinned papers" rows. */
+  listStandalonePinnedPapers: () => Promise<WorkflowTestStandalonePinnedPapers>;
+  /** Clicks the pin button next to the paper chat's title. */
+  clickStandalonePinButton: () => Promise<WorkflowTestStandalonePinnedPapers>;
+  /** Clicks "Clear" on the "Pinned papers" label row (unpins all). */
+  clickStandalonePinnedClear: () => Promise<WorkflowTestStandalonePinnedPapers>;
+  /** Clicks a "Pinned papers" row (open) or its × (unpin). */
+  clickStandalonePinnedPaper: (
+    paperItemId: number,
+    action?: "open" | "unpin",
   ) => Promise<WorkflowTestStandaloneDiagnostics>;
   /**
    * Opens the window's Search history popup, searches `query`, and clicks

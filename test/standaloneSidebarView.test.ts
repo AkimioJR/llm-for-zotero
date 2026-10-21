@@ -122,9 +122,16 @@ describe("standalone sidebar view", function () {
     assert.deepEqual(view.panel.children, [
       view.header,
       view.primaryNavigation,
+      view.pinnedRegion,
       view.historyRegion,
       view.preferencesRegion,
     ]);
+    // "Pinned papers" always shows, just its label until a paper is
+    // pinned, and "Clear" on that label row once one is.
+    assert.notOk(view.pinnedRegion.hidden);
+    assert.equal(view.pinnedList.parentElement, view.pinnedRegion);
+    assert.isTrue(view.pinnedClear.hidden);
+    assert.equal(view.pinnedClear.textContent, "Clear");
     assert.equal(view.preferencesRegion.children[0], view.footerDivider);
     assert.equal(view.preferencesRegion.children[1], view.footerRow);
     assert.deepEqual(view.footerRow.children, [

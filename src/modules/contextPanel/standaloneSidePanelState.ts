@@ -607,3 +607,24 @@ export function buildSidePanelExcludedKeys(
   const key = positiveInt(mainConversationKey);
   return new Set(key ? [key] : []);
 }
+
+/**
+ * Each paper (and each library's chat) keeps its own side panel tabs: the
+ * key names whose tabs the panel shows for this main chat context.
+ */
+export function resolveSidePanelWorkspaceKey(params: {
+  mode: "open" | "paper";
+  basePaperItemID: number | null | undefined;
+  libraryID: number;
+}): string {
+  const context = resolveSideChatContext(params);
+  return context.kind === "paper"
+    ? `paper:${context.paperItemID}`
+    : `library:${context.libraryID}`;
+}
+
+/** The paper a workspace key names, or 0 for a library's workspace. */
+export function resolveSidePanelWorkspacePaperID(key: string): number {
+  const match = /^paper:(\d+)$/.exec(String(key || ""));
+  return match ? positiveInt(match[1]) : 0;
+}

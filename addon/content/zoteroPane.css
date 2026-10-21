@@ -1728,6 +1728,16 @@
   -webkit-mask-image: url("icons/action-task-progress.svg");
 }
 
+.llm-standalone-icon-pin::before {
+  mask-image: url("icons/action-pin.svg");
+  -webkit-mask-image: url("icons/action-pin.svg");
+}
+
+.llm-standalone-icon-pin[aria-pressed="true"]::before {
+  mask-image: url("icons/action-pin-filled.svg");
+  -webkit-mask-image: url("icons/action-pin-filled.svg");
+}
+
 .llm-standalone-icon-exit::before {
   display: none;
 }
@@ -3018,6 +3028,97 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: 4px 8px 12px;
+}
+
+/* "Pinned papers": above the history list, in its row styles. */
+.llm-standalone-pinned-region {
+  flex: 0 0 auto;
+  max-height: 40%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 8px;
+}
+
+.llm-standalone-pinned-region[hidden] {
+  display: none;
+}
+
+/* Same left edge as the history list below (8px region + 10px label). */
+.llm-standalone-pinned-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.llm-standalone-pinned-label-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-standalone-pinned-clear {
+  appearance: none;
+  -moz-appearance: none;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fill-tertiary);
+  font: inherit;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.llm-standalone-pinned-clear:hover {
+  color: var(--fill-primary);
+}
+
+.llm-standalone-pinned-clear:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+.llm-standalone-pinned-clear[hidden] {
+  display: none;
+}
+
+/* "Clear" shows only while the pointer is over the section (or it is
+   reached with the keyboard). */
+.llm-standalone-pinned-region:not(:hover):not(:focus-within)
+  .llm-standalone-pinned-clear {
+  visibility: hidden;
+}
+
+.llm-standalone-pinned-paper > .llm-history-activity {
+  margin-inline-start: 6px;
+}
+
+/* An answer finished while this paper was not on screen. */
+.llm-standalone-pinned-ready {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-inline-start: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
+.llm-standalone-pinned-paper:hover .llm-history-activity,
+.llm-standalone-pinned-paper:hover .llm-standalone-pinned-ready,
+.llm-standalone-pinned-paper:focus-within .llm-standalone-pinned-ready {
+  display: none;
+}
+
+.llm-standalone-pinned-paper .llm-standalone-conv-delete:hover {
+  color: var(--fill-primary);
 }
 
 .llm-standalone-sidebar-empty {

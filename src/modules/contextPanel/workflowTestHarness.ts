@@ -133,6 +133,7 @@ import type {
   WorkflowTestStandaloneSidePanelControl,
   WorkflowTestStandaloneSidePanelSlideFrame,
   WorkflowTestStandaloneSidePanelDiagnostics,
+  WorkflowTestStandalonePinnedPapers,
   WorkflowTestComposerMetrics,
   WorkflowTestSegmentedTabMetrics,
   WorkflowTestHistoryChipColors,
@@ -8111,6 +8112,123 @@ async function listStandaloneSidebarHistory(): Promise<
   );
 }
 
+function readStandalonePinnedPapers(
+  doc: Document,
+): WorkflowTestStandalonePinnedPapers {
+  const button = doc.querySelector(
+    ".llm-standalone-icon-pin",
+  ) as HTMLButtonElement | null;
+  const region = doc.querySelector(
+    ".llm-standalone-pinned-region",
+  ) as HTMLElement | null;
+  const clear = doc.querySelector(
+    ".llm-standalone-pinned-clear",
+  ) as HTMLElement | null;
+  const leftEdge = (selector: string): number | null => {
+    const element = doc.querySelector(selector) as HTMLElement | null;
+    if (!element || !element.getClientRects().length) return null;
+    return Math.round(element.getBoundingClientRect().left);
+  };
+  return {
+    pinButton: {
+      visible: Boolean(button && !button.hidden),
+      pressed: button?.getAttribute("aria-pressed") === "true",
+      label: (button?.getAttribute("aria-label") || "").trim(),
+    },
+    regionVisible: Boolean(region && !region.hidden),
+    clearVisible: Boolean(clear && !clear.hidden),
+    edges: {
+      pinnedLabel: leftEdge(".llm-standalone-pinned-label"),
+      pinnedRow: leftEdge(".llm-standalone-pinned-paper"),
+      historyLabel: leftEdge(
+        ".llm-standalone-sidebar-list > .llm-standalone-day-label",
+      ),
+      historyRow: leftEdge(
+        ".llm-standalone-sidebar-list > .llm-standalone-conv-item",
+      ),
+    },
+    rows: (
+      Array.from(
+        doc.querySelectorAll(".llm-standalone-pinned-paper"),
+      ) as HTMLElement[]
+    ).map((row) => {
+      const writing = row.querySelector(".llm-history-activity");
+      return {
+        paperItemId: Number(row.dataset.paperItemId || 0),
+        label: (
+          row.querySelector(".llm-standalone-conv-title")?.textContent || ""
+        ).trim(),
+        active: row.classList.contains("active"),
+        dot:
+          writing && !(writing as HTMLElement).hidden
+            ? "writing"
+            : row.querySelector(".llm-standalone-pinned-ready")
+              ? "ready"
+              : null,
+      };
+    }),
+  };
+}
+
+async function listStandalonePinnedPapers(): Promise<WorkflowTestStandalonePinnedPapers> {
+  assertWorkflowTestEnabled();
+  return readStandalonePinnedPapers(await waitForStandaloneReady());
+}
+
+async function clickStandalonePinButton(): Promise<WorkflowTestStandalonePinnedPapers> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const button = doc.querySelector(
+    ".llm-standalone-icon-pin",
+  ) as HTMLButtonElement | null;
+  if (!button || button.hidden) {
+    throw new Error("The window's pin button is not shown");
+  }
+  dispatchWorkflowMouseClick(button);
+  await Zotero.Promise.delay(100);
+  return readStandalonePinnedPapers(doc);
+}
+
+async function clickStandalonePinnedClear(): Promise<WorkflowTestStandalonePinnedPapers> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const button = doc.querySelector(
+    ".llm-standalone-pinned-clear",
+  ) as HTMLButtonElement | null;
+  if (!button || button.hidden) {
+    throw new Error('The "Pinned papers" Clear button is not shown');
+  }
+  dispatchWorkflowMouseClick(button);
+  await Zotero.Promise.delay(100);
+  return readStandalonePinnedPapers(doc);
+}
+
+async function clickStandalonePinnedPaper(
+  paperItemId: number,
+  action: "open" | "unpin" = "open",
+): Promise<WorkflowTestStandaloneDiagnostics> {
+  assertWorkflowTestEnabled();
+  const doc = await waitForStandaloneReady();
+  const row = await waitForWorkflowElement(
+    doc,
+    `.llm-standalone-pinned-paper[data-paper-item-id="${paperItemId}"]`,
+  );
+  if (!row) throw new Error(`Pinned paper ${paperItemId} not rendered`);
+  const target =
+    action === "unpin"
+      ? (row.querySelector('[data-action="unpin"]') as HTMLElement | null)
+      : row;
+  if (!target) throw new Error(`Pinned paper ${paperItemId} has no unpin`);
+  dispatchWorkflowMouseClick(target);
+  if (action === "open") {
+    await waitForStandaloneDiagnostics(
+      (state) => state.basePaperItemId === paperItemId,
+    );
+  }
+  await Zotero.Promise.delay(250);
+  return readStandaloneDiagnostics();
+}
+
 async function waitForStandaloneDiagnostics(
   done: (diagnostics: WorkflowTestStandaloneDiagnostics) => boolean,
   timeoutMs = 10000,
@@ -9667,6 +9785,10 @@ export function installWorkflowTestHarness(targetAddon: {
     renamePanelHistoryConversation,
     listStandaloneSidebarHistory,
     clickStandaloneSidebarHistoryRow,
+    listStandalonePinnedPapers,
+    clickStandalonePinButton,
+    clickStandalonePinnedClear,
+    clickStandalonePinnedPaper,
     searchAndOpenStandaloneHistory,
     deletePanelHistoryConversation,
     clickPanelDelete,

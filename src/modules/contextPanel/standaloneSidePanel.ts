@@ -88,6 +88,7 @@ import {
   focusSidePanelTab,
   hasFinishedAnswer,
   isSameSideChatContext,
+  resolveSidePanelWorkspaceKey,
   openHistorySidePanelTab,
   moveSidePanelTab,
   openItemSidePanelTab,
@@ -214,6 +215,11 @@ export type StandaloneSidePanelDeps = {
   minWindowWidth?: number;
   /** The panel opened, closed, or changed width. */
   onLayoutChanged: () => void;
+  /**
+   * Whether a paper's (or the library's) tabs are kept when the main chat
+   * moves away from it; tabs that are not kept are dropped.
+   */
+  shouldKeepWorkspace: (key: string) => boolean;
 };
 
 export type StandaloneSidePanelController = {
@@ -233,6 +239,8 @@ export type StandaloneSidePanelController = {
   onMainMounted: () => void;
   /** Opens the panel if closed, then the item's tab (the →| buttons). */
   openItem: (request: SidePanelItemRequest) => void;
+  /** Drops the tabs kept for a paper or library that is not on screen. */
+  dropWorkspace: (key: string) => void;
   /** Window close: drop everything without asking. */
   dispose: () => void;
 };
@@ -2439,8 +2447,10 @@ export function createStandaloneSidePanel(
    * Closing: the window shrinks back (or the main column grows, if the user
    * kept the width) over the panel, which keeps its content until the end.
    */
-  const slideClose = () => {
-    const closingViews = [...views.values()];
+  const slideClose = (
+    closingViews: TabView[] = [...views.values()],
+    afterClose?: () => void,
+  ) => {
     const fromMainWidth = mainColumnWidth();
     const panelWidth = readPixelVariable(lowerArea, SIDE_PANEL_WIDTH_VARIABLE);
     const occupied = panelLayoutWidth();
@@ -2459,6 +2469,7 @@ export function createStandaloneSidePanel(
           if (views.get(view.id) === view) views.delete(view.id);
           disposeView(view);
         }
+        afterClose?.();
         if (!isOpen()) {
           destroyNewTabPage();
           hidePanelConfirm();
@@ -2500,6 +2511,77 @@ export function createStandaloneSidePanel(
   newTabButton.addEventListener("click", () =>
     setTabsState(showSidePanelNewTabPage(tabsState)),
   );
+
+  // -- One set of tabs per paper ------------------------------------------
+  // The panel shows the tabs of the main chat's paper (or library). Moving
+  // the main chat elsewhere puts them away, hidden but alive (a side chat
+  // keeps answering), when that paper's tabs are kept; otherwise they are
+  // dropped. Coming back shows them as they were.
+  type StashedWorkspace = {
+    state: SidePanelTabsState;
+    views: TabView[];
+  };
+  const stashedWorkspaces = new Map<string, StashedWorkspace>();
+  let workspaceKey: string | null = null;
+  const resolveCurrentWorkspaceKey = () => {
+    const main = deps.getMainContext();
+    return resolveSidePanelWorkspaceKey({
+      mode: main.mode,
+      basePaperItemID: Number(main.basePaperItem?.id || 0),
+      libraryID: main.libraryID,
+    });
+  };
+  const putAwayView = (view: TabView) => {
+    hideTabConfirm(view);
+    view.root.hidden = true;
+    view.tab.remove();
+  };
+  const switchWorkspace = (nextKey: string) => {
+    const previousKey = workspaceKey;
+    workspaceKey = nextKey;
+    if (previousKey === null || previousKey === nextKey) return;
+    // A close slide still running drops its tabs first.
+    finishSlide();
+    hidePanelConfirm();
+    const leavingState = tabsState;
+    const leavingViews = [...views.values()];
+    const keep = leavingState.open && deps.shouldKeepWorkspace(previousKey);
+    const incoming = stashedWorkspaces.get(nextKey);
+    stashedWorkspaces.delete(nextKey);
+    views.clear();
+    for (const view of incoming?.views || []) views.set(view.id, view);
+    const putAwayLeaving = () => {
+      for (const view of leavingViews) putAwayView(view);
+      if (keep) {
+        stashedWorkspaces.set(previousKey, {
+          state: leavingState,
+          views: leavingViews,
+        });
+      } else {
+        for (const view of leavingViews) disposeView(view);
+      }
+    };
+    const nextState = incoming?.state || CLOSED_SIDE_PANEL_TABS;
+    const wasOpen = isOpen();
+    tabsState = nextState;
+    if (wasOpen && !isOpen()) {
+      // The panel slides shut over the tabs it was showing.
+      slideClose([], putAwayLeaving);
+      renderToggle();
+      deps.onLayoutChanged();
+      return;
+    }
+    putAwayLeaving();
+    if (isOpen() && !wasOpen) slideOpen();
+    else render();
+    if (isOpen() !== wasOpen) deps.onLayoutChanged();
+  };
+  const dropWorkspace = (key: string) => {
+    const stashed = stashedWorkspaces.get(key);
+    if (!stashed) return;
+    stashedWorkspaces.delete(key);
+    for (const view of stashed.views) disposeView(view);
+  };
 
   // -- Main-chat registrations ---------------------------------------------
   const slashSideChat = () =>
@@ -2562,6 +2644,7 @@ export function createStandaloneSidePanel(
     },
     onMainMounted: () => {
       if (disposed) return;
+      switchWorkspace(resolveCurrentWorkspaceKey());
       applyMainExtensions();
       for (const view of sideChatViews()) followMainContext(view);
       if (isOpen()) historyView(tabsState.activeId)?.list.refresh();
@@ -2570,12 +2653,14 @@ export function createStandaloneSidePanel(
       }
     },
     openItem: (request) => void openItem(request),
+    dropWorkspace,
     dispose: () => {
       if (disposed) return;
       if (slide?.frameId != null) win.cancelAnimationFrame?.(slide.frameId);
       slide = null;
       closing = false;
       disposeAllViews();
+      for (const key of [...stashedWorkspaces.keys()]) dropWorkspace(key);
       disposed = true;
       unregisterSidePanelItemHost(doc, itemHost);
       resize.dispose();

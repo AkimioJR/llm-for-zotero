@@ -33,9 +33,11 @@ import {
   getClaudeCodeModeEnabled,
   getLastUsedUpstreamGlobalConversationKey,
   getStandaloneSidebarWidthPref,
+  getStandalonePinnedPapersPref,
   getLockedGlobalConversationKey,
   setLockedGlobalConversationKey,
   setStandaloneSidebarWidthPref,
+  setStandalonePinnedPapersPref,
 } from "./prefHelpers";
 import {
   clearStandaloneSelection,
@@ -90,6 +92,7 @@ import {
   isAnyRequestPending,
   isRequestPending,
   loadedConversationKeys,
+  subscribeRequestActivity,
   webChatIsolatedConversationKeys,
 } from "./state";
 import { loadAllConversationHistory } from "./historyLoader";
@@ -206,6 +209,14 @@ import { createPluginUpdateController } from "../pluginUpdate";
 import { getPluginUpdateDeps } from "../pluginUpdateAdapters";
 import { createStandaloneUpdateControl } from "./standaloneUpdateControl";
 import { registerSidePanelItemHost } from "./sidePanelItems";
+import { resolveSidePanelWorkspacePaperID } from "./standaloneSidePanelState";
+import {
+  resolvePinnedPaperDot,
+  togglePinnedPaper,
+  updateReadyPinnedPapers,
+} from "./standalonePinnedPapers";
+import { formatPaperCreatorYearLabel } from "./setupHandlers/controllers/composeContextController";
+import { resolvePaperContextRefFromItem } from "../../services/paperContent/paperAttribution";
 import {
   createStandaloneSidePanel,
   type StandaloneSidePanelController,
@@ -596,6 +607,7 @@ export function openStandaloneChat(options?: {
   let unbindStandaloneTaskProgressToggle: (() => void) | null = null;
   let enforceStandaloneMinimumSize: (() => void) | null = null;
   let disposeStandaloneSidePanel: (() => void) | null = null;
+  let disposePinnedPaperActivity: (() => void) | null = null;
 
   const initWindow = () => {
     // Now the window is loaded — safe to clear the pending flag.
@@ -908,6 +920,14 @@ export function openStandaloneChat(options?: {
       lowerArea.className = "llm-standalone-lower";
 
       const sidebarView = createStandaloneSidebarView(doc, t);
+      // Pinned papers (oldest first), and the papers whose answer finished
+      // while another paper was on screen. The list and its actions are set
+      // up below, once the paper switch code exists.
+      let pinnedPaperIDs = getStandalonePinnedPapersPref();
+      let readyPinnedPaperIDs = new Set<number>();
+      // The main chat each paper last showed in this window.
+      const shownPaperConversationKeys = new Map<number, number>();
+      let renderPinnedPapers: () => void = () => {};
       disposeHistoryActivity = observeHistoryActivity(sidebarView.list);
       {
         const lastSeenKey = `${config.prefsPrefix}.lastSeenVersion`;
@@ -1023,6 +1043,16 @@ export function openStandaloneChat(options?: {
       // bound to the chat panel below, once the content area exists.
       const iconTaskProgress = createTaskProgressToggleButton(doc);
 
+      // Pins the paper on screen: it is listed under "Pinned papers" and
+      // keeps its side panel tabs while another paper is shown.
+      const iconPin = doc.createElementNS(
+        HTML_NS,
+        "button",
+      ) as HTMLButtonElement;
+      iconPin.className = "llm-standalone-title-action llm-standalone-icon-pin";
+      iconPin.type = "button";
+      iconPin.hidden = true;
+
       const iconExport = doc.createElementNS(
         HTML_NS,
         "button",
@@ -1042,7 +1072,12 @@ export function openStandaloneChat(options?: {
       iconClear.type = "button";
       iconClear.title = t("Delete conversation");
       iconClear.setAttribute("aria-label", t("Delete conversation"));
-      contentTitleBarSpacer.append(iconTaskProgress, iconExport, iconClear);
+      contentTitleBarSpacer.append(
+        iconPin,
+        iconTaskProgress,
+        iconExport,
+        iconClear,
+      );
       contentTitleBar.append(contentTitleText, contentTitleBarSpacer);
 
       const contentArea = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
@@ -1356,6 +1391,8 @@ export function openStandaloneChat(options?: {
         updateContentTitle();
         webHistoryRefreshBtn.style.display = isWebChat ? "inline-flex" : "none";
 
+        renderPinnedPapers();
+
         // Sidebar: populate with webchat history, or restore local history
         if (isWebChat) {
           void renderWebChatSidebar();
@@ -1607,6 +1644,20 @@ export function openStandaloneChat(options?: {
         } else {
           contentTitleText.textContent = "Library chat";
         }
+        syncPinButton();
+      };
+
+      const syncPinButton = () => {
+        const paperID =
+          standaloneMode === "paper"
+            ? Number(currentBasePaperItem?.id || 0)
+            : 0;
+        iconPin.hidden = paperID <= 0;
+        const pinned = paperID > 0 && pinnedPaperIDs.includes(paperID);
+        iconPin.setAttribute("aria-pressed", pinned ? "true" : "false");
+        const label = pinned ? t("Unpin this paper") : t("Pin this paper");
+        iconPin.title = label;
+        iconPin.setAttribute("aria-label", label);
       };
 
       // The window's own runtime (never the sidebar's saved one) decides the
@@ -1720,11 +1771,17 @@ export function openStandaloneChat(options?: {
                 paperItemID,
                 activeConversationKey,
               );
+              shownPaperConversationKeys.set(
+                paperItemID,
+                activeConversationKey,
+              );
+              readyPinnedPaperIDs.delete(paperItemID);
             }
           }
 
           clearContent();
           updateContentTitle();
+          renderPinnedPapers();
 
           let standaloneInputFitRequestId = 0;
           const cancelPendingStandaloneInputFit = () => {
@@ -2670,6 +2727,12 @@ export function openStandaloneChat(options?: {
           applyAutoSidebarStateForCurrentWidth();
           standaloneSidebarResize.relayout();
           standaloneSidePanel?.relayout();
+        },
+        // Every paper keeps its tabs until the window closes; a paper that
+        // is gone (deleted) gives them up.
+        shouldKeepWorkspace: (key) => {
+          const paperID = resolveSidePanelWorkspacePaperID(key);
+          return paperID > 0 ? Boolean(Zotero.Items.get(paperID)) : true;
         },
       });
       disposeStandaloneSidePanel = () => {
@@ -4461,10 +4524,23 @@ export function openStandaloneChat(options?: {
         standaloneMode === "paper"
           ? Number(currentPaperItem?.id || 0) || null
           : null;
+      // A pinned paper opened from the sidebar selects it in Zotero; until
+      // that settles, other papers Zotero shows on the way are not followed.
+      let pinnedPaperNavigation: { paperID: number; until: number } | null =
+        null;
       standaloneItemChangeHandler = (rawItem: Zotero.Item | null) => {
         if (cancelled || standaloneMode !== "paper") return;
         const target = resolvePaperSwitchTarget(rawItem);
         const newBasePaper = target.paperItem;
+        if (pinnedPaperNavigation) {
+          if (Date.now() > pinnedPaperNavigation.until) {
+            pinnedPaperNavigation = null;
+          } else if (
+            Number(newBasePaper?.id || 0) !== pinnedPaperNavigation.paperID
+          ) {
+            return;
+          }
+        }
         if (!newBasePaper) {
           currentRawContextItem = rawItem;
           currentBasePaperItem = null;
@@ -4537,6 +4613,228 @@ export function openStandaloneChat(options?: {
       cleanupStandaloneTabFollow = () =>
         Zotero.Notifier.unregisterObserver(tabFollowObserverID);
 
+      // -- Pinned papers ------------------------------------------------------
+      const savePinnedPapers = (ids: number[]) => {
+        pinnedPaperIDs = ids;
+        setStandalonePinnedPapersPref(ids);
+      };
+      const getPinnedPaper = (paperID: number): Zotero.Item | null => {
+        const item = Zotero.Items.get(paperID) as Zotero.Item | false;
+        return item && !(item as any).deleted ? item : null;
+      };
+      const togglePin = (paperID: number) => {
+        savePinnedPapers(togglePinnedPaper(pinnedPaperIDs, paperID));
+        if (!pinnedPaperIDs.includes(paperID)) {
+          readyPinnedPaperIDs.delete(paperID);
+        }
+        syncPinButton();
+        renderPinnedPapers();
+      };
+      const resolvePinnedPaperLabel = (paper: Zotero.Item): string => {
+        const ref = resolvePaperContextRefFromItem(paper);
+        const label = ref ? formatPaperCreatorYearLabel(ref) : "";
+        if (label && label !== "Paper") return label;
+        try {
+          return String(paper.getField("title") || "").trim() || t("Paper");
+        } catch {
+          return t("Paper");
+        }
+      };
+      /** The reader tab showing the paper (or one of its files), if open. */
+      const findPaperReaderTab = (
+        paperID: number,
+      ): { tabID: string; item: Zotero.Item } | null => {
+        const tabs = (mainWin as any)?.Zotero_Tabs;
+        for (const tab of (tabs?._tabs || []) as any[]) {
+          if (!String(tab?.type || "").startsWith("reader")) continue;
+          const item = Zotero.Items.get(Number(tab?.data?.itemID || 0)) as
+            | Zotero.Item
+            | false;
+          if (!item) continue;
+          const base = resolvePaperChatSourceItem(item);
+          if (Number(base?.id || 0) === paperID) {
+            return { tabID: String(tab.id), item };
+          }
+        }
+        return null;
+      };
+      /**
+       * Shows the paper in Zotero too: its reader tab when one is open,
+       * otherwise the paper selected in the library (no new reader tab).
+       * keepTabFocused stops Zotero from focusing the reader, which would
+       * bring the main Zotero window in front of this one.
+       */
+      const revealPaperInZotero = (paperID: number, readerTabID?: string) => {
+        try {
+          const tabs = (mainWin as any)?.Zotero_Tabs;
+          const keepFocus = { keepTabFocused: true };
+          if (readerTabID) {
+            tabs?.select?.(readerTabID, false, keepFocus);
+            return;
+          }
+          if (tabs && tabs.selectedID !== "zotero-pane") {
+            tabs.select?.("zotero-pane", false, keepFocus);
+          }
+          void (mainWin as any)?.ZoteroPane?.selectItem?.(paperID);
+        } catch (err) {
+          appLogger.warn("LLM: standalone pinned paper reveal failed", err);
+        }
+      };
+      const openPinnedPaper = (paperID: number) => {
+        if (cancelled || isInWebChatMode) return;
+        const paper = getPinnedPaper(paperID);
+        if (!paper) {
+          togglePin(paperID);
+          return;
+        }
+        const readerTab = findPaperReaderTab(paperID);
+        pinnedPaperNavigation = { paperID, until: Date.now() + 1500 };
+        const shown =
+          standaloneMode === "paper" &&
+          Number(currentBasePaperItem?.id || 0) === paperID;
+        if (!shown) {
+          const target = resolvePaperSwitchTarget(readerTab?.item || paper);
+          if (target.paperItem) {
+            mountRememberedStandalonePaperConversation({
+              paperItem: target.paperItem,
+              panelItem: target.panelItem,
+              rawItem: target.rawItem || target.paperItem,
+            });
+          }
+        }
+        revealPaperInZotero(paperID, readerTab?.tabID);
+      };
+      renderPinnedPapers = () => {
+        if (cancelled) return;
+        const list = sidebarView.pinnedList;
+        list.replaceChildren();
+        const shownPaperID =
+          standaloneMode === "paper"
+            ? Number(currentBasePaperItem?.id || 0)
+            : 0;
+        let shownCount = 0;
+        for (const paperID of pinnedPaperIDs) {
+          const paper = getPinnedPaper(paperID);
+          if (!paper) continue;
+          shownCount += 1;
+          const row = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
+          row.className =
+            "llm-standalone-conv-item llm-standalone-pinned-paper";
+          row.classList.toggle("active", paperID === shownPaperID);
+          row.setAttribute("role", "button");
+          row.tabIndex = 0;
+          row.dataset.paperItemId = String(paperID);
+          let title = "";
+          try {
+            title = String(paper.getField("title") || "");
+          } catch {
+            title = "";
+          }
+          row.title = title || resolvePinnedPaperLabel(paper);
+          const label = doc.createElementNS(HTML_NS, "span") as HTMLSpanElement;
+          label.className = "llm-standalone-conv-title";
+          label.textContent = resolvePinnedPaperLabel(paper);
+          row.append(label);
+          const conversationKey = shownPaperConversationKeys.get(paperID) || 0;
+          const dot = resolvePinnedPaperDot({
+            writing: conversationKey > 0 && isRequestPending(conversationKey),
+            readyUnseen: readyPinnedPaperIDs.has(paperID),
+          });
+          if (dot === "writing") {
+            row.appendChild(
+              createHistoryActivityIndicator(
+                doc,
+                conversationKey,
+                t("Writing an answer"),
+              ),
+            );
+          } else if (dot === "ready") {
+            const ready = doc.createElementNS(
+              HTML_NS,
+              "span",
+            ) as HTMLSpanElement;
+            ready.className = "llm-standalone-pinned-ready";
+            ready.setAttribute("role", "img");
+            ready.setAttribute("aria-label", t("Answer ready"));
+            ready.title = t("Answer ready");
+            row.appendChild(ready);
+          }
+          const unpin = doc.createElementNS(
+            HTML_NS,
+            "button",
+          ) as HTMLButtonElement;
+          unpin.className = "llm-standalone-conv-delete";
+          unpin.type = "button";
+          unpin.dataset.action = "unpin";
+          unpin.title = t("Unpin");
+          unpin.setAttribute("aria-label", t("Unpin"));
+          row.appendChild(unpin);
+          list.appendChild(row);
+        }
+        // The section always shows (outside WebChat), empty or not.
+        sidebarView.pinnedRegion.hidden = isInWebChatMode;
+        sidebarView.pinnedClear.hidden = shownCount === 0;
+      };
+      sidebarView.pinnedClear.addEventListener("click", () => {
+        if (cancelled || !pinnedPaperIDs.length) return;
+        savePinnedPapers([]);
+        readyPinnedPaperIDs.clear();
+        syncPinButton();
+        renderPinnedPapers();
+      });
+      sidebarView.pinnedList.addEventListener("click", (event) => {
+        const target = event.target as Element | null;
+        const row = target?.closest?.(
+          ".llm-standalone-pinned-paper",
+        ) as HTMLElement | null;
+        const paperID = Number(row?.dataset.paperItemId || 0);
+        if (!row || paperID <= 0) return;
+        if (target?.closest?.('[data-action="unpin"]')) {
+          event.stopPropagation();
+          togglePin(paperID);
+          return;
+        }
+        openPinnedPaper(paperID);
+      });
+      sidebarView.pinnedList.addEventListener(
+        "keydown",
+        (event: KeyboardEvent) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          const row = (event.target as Element | null)?.closest?.(
+            ".llm-standalone-pinned-paper",
+          ) as HTMLElement | null;
+          if (!row || event.target !== row) return;
+          event.preventDefault();
+          openPinnedPaper(Number(row.dataset.paperItemId || 0));
+        },
+      );
+      iconPin.addEventListener("click", () => {
+        const paperID =
+          standaloneMode === "paper"
+            ? Number(currentBasePaperItem?.id || 0)
+            : 0;
+        if (paperID > 0) togglePin(paperID);
+      });
+      // A pinned paper's dot follows its main chat's answer.
+      disposePinnedPaperActivity = subscribeRequestActivity(
+        (conversationKey) => {
+          if (cancelled) return;
+          for (const [paperID, key] of shownPaperConversationKeys) {
+            if (key !== conversationKey) continue;
+            readyPinnedPaperIDs = updateReadyPinnedPapers(readyPinnedPaperIDs, {
+              paperID,
+              pending: isRequestPending(conversationKey),
+              shownPaperID:
+                standaloneMode === "paper"
+                  ? Number(currentBasePaperItem?.id || 0) || null
+                  : null,
+            });
+            if (pinnedPaperIDs.includes(paperID)) renderPinnedPapers();
+          }
+        },
+      );
+      renderPinnedPapers();
+
       // Initial mount preserves the current paper/library conversation. The
       // only automatic blank draft is created once during Zotero startup.
       appLogger.debug(
@@ -4584,6 +4882,8 @@ export function openStandaloneChat(options?: {
     unbindStandaloneTaskProgressToggle = null;
     disposeHistoryActivity?.();
     disposeHistoryActivity = null;
+    disposePinnedPaperActivity?.();
+    disposePinnedPaperActivity = null;
     disposePluginUpdate?.();
     disposePluginUpdate = null;
     unsubscribeStandalonePendingDeletions?.();

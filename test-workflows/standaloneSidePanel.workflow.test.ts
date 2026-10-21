@@ -17,8 +17,8 @@ import {
 /**
  * The standalone window's side panel: a third column opened from the tab
  * row's trailing toggle. It holds tabs: past chats opened read-only from the
- * new-tab page's Search history list, and temporary side chats that follow
- * the main chat.
+ * new-tab page's Search history list, and temporary side chats on the main
+ * chat's paper or library. Each paper and the library chat have their own.
  *
  * Everything runs in the real window; sends go through the side chat's own
  * composer and the real send flow, and only the network is scripted (a held
@@ -1021,26 +1021,30 @@ describe("workflow: standalone side panel", function () {
       "the shown side chat's transcript is attached",
     );
 
-    // Library chat: every side chat follows and marks the switch.
+    // Library chat has its own tabs: the paper's are put away, alive, and
+    // come back unchanged with Paper chat (no move, no context note).
     await api.clickStandaloneTab("open");
     side = await waitForSide(
-      (state) =>
-        state.sideChat?.conversationKind === "global" &&
-        state.sideChat.contextNotes.length === 1,
-      "the side chat follows the main chat to Library chat",
+      (state) => !state.open,
+      "Library chat shows its own (closed) side panel",
     );
-    assert.include(side.sideChat!.contextNotes[0], "My Library");
-    assert.notEqual(side.sideChat!.conversationKey, secondSideKey);
+    await api.clickStandaloneTab("paper");
+    side = await waitForSide(
+      (state) =>
+        state.open &&
+        state.tabs.length === 4 &&
+        state.activeTab === secondSideTab,
+      "Paper chat brings the paper's tabs back",
+    );
+    assert.equal(side.sideChat!.conversationKey, secondSideKey);
+    assert.lengthOf(side.sideChat!.contextNotes, 0);
     assert.equal(
       side.sideChat!.placeholder,
-      "Ask a side question about your library...",
+      "Ask a side question about this paper...",
     );
     side = await api.clickStandaloneSidePanelTab(2);
     assert.equal(side.activeTab, firstSideTab);
-    side = await waitForSide(
-      (state) => state.sideChat?.conversationKind === "global",
-      "the first side chat follows too",
-    );
+    assert.equal(side.sideChat!.conversationKey, firstSideKey);
     assert.isTrue(
       side.sideChat!.messageTexts.some((text) => text.includes(ANSWER_1)),
       "the side chat keeps its messages",
