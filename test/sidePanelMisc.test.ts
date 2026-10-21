@@ -420,6 +420,7 @@ describe("side panel Miscellaneous and host registration", function () {
     const keys = [
       "Move to side panel",
       "Back to Miscellaneous",
+      "Back to History",
       "Mermaid diagram",
       "HTML page",
       "Code",

@@ -93,6 +93,7 @@ import {
   openItemSidePanelTab,
   openMiscSidePanelTab,
   returnItemTabToMisc,
+  returnReadOnlyTabToHistory,
   openReadOnlySidePanelTab,
   openSideChatSidePanelTab,
   openSidePanel,
@@ -1190,6 +1191,7 @@ export function createStandaloneSidePanel(
     id: string,
     entry: ConversationHistoryEntry,
     item: Zotero.Item,
+    fromHistory = false,
   ): ReadOnlyTabView => {
     const savedScroll = saveChatScrollStateForConversationKey(
       entry.conversationKey,
@@ -1203,6 +1205,17 @@ export function createStandaloneSidePanel(
     root.dataset.sideView = "readonly";
     root.dataset.sideTabId = id;
     const { row, actions } = createTitleRow(title);
+    // Only a chat picked in the History list can go back to it.
+    if (fromHistory) {
+      const back = createIconButton(
+        doc,
+        "llm-standalone-side-panel-item-action llm-standalone-side-panel-icon-back",
+        t("Back to History"),
+      );
+      back.dataset.itemAction = "back";
+      back.addEventListener("click", () => backToHistory(id));
+      row.prepend(back);
+    }
     actions.appendChild(createPill(t("Read-only"), "read-only"));
     const body = createElement(
       doc,
@@ -1305,7 +1318,10 @@ export function createStandaloneSidePanel(
     if (result.opened && result.tabId) {
       const item = deps.buildHistoryEntryItem(entry);
       if (!item) return false;
-      views.set(result.tabId, buildReadOnlyView(result.tabId, entry, item));
+      views.set(
+        result.tabId,
+        buildReadOnlyView(result.tabId, entry, item, Boolean(fromHistoryId)),
+      );
     }
     const replaced = historyView(fromHistoryId ?? null);
     if (replaced && !result.state.tabs.some((tab) => tab.id === replaced.id)) {
@@ -1314,6 +1330,24 @@ export function createStandaloneSidePanel(
     }
     setTabsState(result.state);
     return true;
+  };
+
+  /** "Back to History": the read-only tab turns back into the History tab. */
+  const backToHistory = (readOnlyTabId: string) => {
+    const readOnly = views.get(readOnlyTabId);
+    if (disposed || readOnly?.kind !== "readonly") return;
+    const result = returnReadOnlyTabToHistory(
+      tabsState,
+      readOnlyTabId,
+      nextTabId("history"),
+    );
+    if (!result.tabId) return;
+    views.delete(readOnlyTabId);
+    disposeReadOnlyView(readOnly);
+    if (result.opened) {
+      views.set(result.tabId, buildHistoryView(result.tabId));
+    }
+    setTabsState(result.state);
   };
 
   /** Open `entry` read-only again at `index` in the strip. */

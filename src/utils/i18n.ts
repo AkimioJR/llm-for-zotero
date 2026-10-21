@@ -1569,6 +1569,7 @@ const zhCN: Record<string, string> = {
   "Move to side panel": "移到侧边面板",
   "Mermaid diagram": "Mermaid 图表",
   "Back to Miscellaneous": "返回杂项",
+  "Back to History": "返回历史记录",
   "HTML page": "HTML 页面",
   Code: "代码",
   Plan: "计划",

@@ -352,6 +352,44 @@ export function returnItemTabToMisc(
   };
 }
 
+/**
+ * "Back to History" on a past chat picked in the History list: the read-only
+ * tab turns back into the History tab, in the same place. When a History tab
+ * is open elsewhere, the read-only tab closes and that one is focused.
+ */
+export function returnReadOnlyTabToHistory(
+  state: SidePanelTabsState,
+  readOnlyTabId: string,
+  historyId: string,
+): SidePanelTabOpenResult {
+  const index = state.tabs.findIndex(
+    (tab) => tab.id === readOnlyTabId && tab.kind === "readonly",
+  );
+  if (index < 0) {
+    return { state, tabId: null, opened: false, refused: false };
+  }
+  const existing = state.tabs.find((tab) => tab.kind === "history");
+  if (existing) {
+    return {
+      state: focusSidePanelTab(
+        closeSidePanelTab(state, readOnlyTabId),
+        existing.id,
+      ),
+      tabId: existing.id,
+      opened: false,
+      refused: false,
+    };
+  }
+  const tabs = [...state.tabs];
+  tabs[index] = { id: historyId, kind: "history", conversationKey: 0 };
+  return {
+    state: focusSidePanelTab({ ...state, tabs }, historyId),
+    tabId: historyId,
+    opened: true,
+    refused: false,
+  };
+}
+
 export function openSideChatSidePanelTab(
   state: SidePanelTabsState,
   id: string,
