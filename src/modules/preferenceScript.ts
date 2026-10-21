@@ -38,6 +38,7 @@ import {
   notifyModelProviderGroupsChanged,
   setModelProviderGroups,
   setLastUsedModelEntryId,
+  subscribeModelProviderGroups,
   type ModelProviderAuthMode,
   type CodexDirectProviderGroup,
   type ModelProviderGroup,
@@ -318,7 +319,7 @@ import { applyClaudeCodeModePreferenceChange } from "../claudeCode/bootstrapGate
 import {
   getTavilyApiKey,
   setTavilyApiKey,
-  getWebAccessProvider,
+  isWebAccessConfigured,
 } from "../webAccess/prefs";
 import { registerWebAccessPreferences } from "./preferences/webAccessPanel";
 import { TavilyClient } from "../webAccess/tavilyClient";
@@ -3670,7 +3671,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     });
   }
 
-  registerWebAccessPreferences(doc);
+  const webAccessPreferences = registerWebAccessPreferences(doc);
 
   if (tavilyApiKeyInput) {
     tavilyApiKeyInput.value = getTavilyApiKey();
@@ -3681,6 +3682,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         tavilyStatus.style.display = "none";
         tavilyStatus.textContent = "";
       }
+      // In Automatic, saving or clearing a Tavily key switches the provider.
+      webAccessPreferences.refresh();
+      refreshAgentRowSummaries();
     };
     tavilyApiKeyInput.addEventListener("change", commitTavilyKey);
     tavilyApiKeyInput.addEventListener("blur", commitTavilyKey);
@@ -3705,6 +3709,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         }
         setTavilyApiKey(key);
         if (tavilyApiKeyInput) tavilyApiKeyInput.value = key;
+        webAccessPreferences.refresh();
         tavilyTestButton.disabled = true;
         tavilyStatus.style.color = "var(--fill-secondary, #888)";
         tavilyStatus.textContent = t("Testing…");
@@ -4006,10 +4011,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       originalOn
         ? [
             selectedOptionLabel(originalAgentPermissionModeSelect),
-            getWebAccessProvider() === "anysearch" ||
-            tavilyApiKeyInput?.value.trim()
-              ? t("Web search on")
-              : t("Web search off"),
+            isWebAccessConfigured() ? t("Web search on") : t("Web search off"),
           ]
         : [t("Off")],
     );
@@ -4080,6 +4082,12 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     agentPanel.addEventListener("input", onAgentPanelEdit);
   }
   refreshAgentRowSummaries();
+  // A DeepSeek model profile can turn web search on or off.
+  _window.addEventListener(
+    "unload",
+    subscribeModelProviderGroups(() => refreshAgentRowSummaries()),
+    { once: true },
+  );
 
   if (codexAppServerEnableToggle) {
     const applyCodexAppServerUi = (enabled: boolean) => {

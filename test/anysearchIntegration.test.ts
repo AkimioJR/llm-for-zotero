@@ -505,6 +505,60 @@ describe("AnySearch native integration (offline)", function () {
     assert.include(JSON.stringify(plan), "egress");
   });
 
+  it("renders past Tavily calls from their stored arguments under another provider", function () {
+    const search = createWebSearchTool();
+    const read = createWebReadTool();
+    const stored = { query: "old query", depth: "advanced", topic: "news" };
+    const content = { provider: "tavily", results: [] };
+    assert.equal(
+      search.presentation!.buildTraceSummary!({ args: stored, content }),
+      "Searched web · Depth: advanced",
+    );
+    assert.deepEqual(
+      search.presentation!.buildTraceDetails!({ args: stored, content }),
+      [{ label: "Query", value: "old query" }],
+    );
+    assert.equal(
+      (search.presentation!.summaries!.onCall as any)({ args: stored }),
+      "Searching the web for “old query”",
+    );
+    assert.equal(
+      read.presentation!.buildTraceSummary!({
+        args: { urls: ["https://example.org/a"], query: "q", depth: "basic" },
+        content: { provider: "tavily", pages: [] },
+      }),
+      "Read web pages · Depth: basic",
+    );
+  });
+
+  it("renders a past DeepSeek call with its need under Tavily", function () {
+    assert.equal(getWebAccessProvider(), "tavily");
+    const search = createWebSearchTool();
+    // No depth: Tavily validation would reject these stored args.
+    const stored = {
+      query: "zotero 8 release",
+      includeDomains: ["zotero.org"],
+      need: "not_in_scope_or_library",
+      gap: "No release notes in the library.",
+    };
+    const content = { provider: "deepseek", results: [] };
+    assert.equal(
+      search.presentation!.buildTraceSummary!({ args: stored, content }),
+      "Searched web · DeepSeek",
+    );
+    assert.deepEqual(
+      search.presentation!.buildTraceDetails!({ args: stored, content }),
+      [
+        { label: "Query", value: "zotero 8 release" },
+        {
+          label: "Why outside",
+          value:
+            "Not in this chat's papers or your library: No release notes in the library.",
+        },
+      ],
+    );
+  });
+
   it("revalidates stale Tavily arguments instead of silently dropping them after a switch", async function () {
     const search = createWebSearchTool();
     setWebAccessProvider("anysearch");
@@ -559,7 +613,7 @@ describe("AnySearch native integration (offline)", function () {
       },
     });
     const elements = makePreferencesDocument();
-    assert.equal(elements.get("web-access-provider")!.value, "tavily");
+    assert.equal(elements.get("web-access-provider")!.value, "auto");
     elements.get("web-access-provider")!.value = "anysearch";
     elements.get("web-access-provider")!.fire("change");
     elements.get("anysearch-api-key")!.value = "   ";

@@ -50,12 +50,15 @@ export function validateWebReadInput(
     return fail(error instanceof Error ? error.message : String(error));
   }
   const uniqueUrls = Array.from(new Set(urls));
-  if (getWebAccessProvider() === "anysearch") {
+  const provider = getWebAccessProvider();
+  if (provider === "anysearch" || provider === "deepseek") {
     if (
       Object.keys(args).some((key) => key !== "urls" && args[key] !== undefined)
     ) {
       return fail(
-        "AnySearch extraction accepts only urls; query, depth and chunksPerSource are not supported.",
+        provider === "deepseek"
+          ? "DeepSeek fetch accepts only urls; query, depth and chunksPerSource are not supported."
+          : "AnySearch extraction accepts only urls; query, depth and chunksPerSource are not supported.",
       );
     }
     return ok({ urls: uniqueUrls });
@@ -84,36 +87,70 @@ export function validateWebReadInput(
   });
 }
 
+// Stored args come from past calls; do not validate them against today's provider.
+function storedReadArgs(args: unknown): { urls: string[]; query: string } {
+  if (!validateObject<Record<string, unknown>>(args)) {
+    return { urls: [], query: "" };
+  }
+  const urls: string[] = [];
+  if (Array.isArray(args.urls)) {
+    for (const value of args.urls) {
+      try {
+        const url = normalizePublicWebUrl(value);
+        if (!urls.includes(url)) urls.push(url);
+      } catch {
+        // Skip a URL that no longer normalizes.
+      }
+    }
+  }
+  return {
+    urls,
+    query: typeof args.query === "string" ? args.query.trim() : "",
+  };
+}
+
 function buildReadTraceDetails(
   args: unknown,
   content: unknown,
 ): AgentTraceDetail[] {
-  const input = validateWebReadInput(args);
+  const input = storedReadArgs(args);
   const result =
     content && typeof content === "object"
       ? (content as Partial<WebReadToolResult>)
       : {};
   const details: AgentTraceDetail[] = [];
-  if (input.ok) {
-    if (input.value.query) {
-      details.push({ label: "Query", value: input.value.query });
-    }
-    for (const url of input.value.urls) {
-      const source = (result.pages || []).find((page) => page.url === url);
-      details.push({
-        label: "URL",
-        value: url,
-        kind: "url",
-        timeline: {
-          icon: "website",
-          href: url,
-          ...(source?.faviconUrl ? { faviconUrl: source.faviconUrl } : {}),
-        },
-      });
-    }
+  if (input.query) {
+    details.push({ label: "Query", value: input.query });
+  }
+  for (const url of input.urls) {
+    const source = (result.pages || []).find((page) => page.url === url);
+    details.push({
+      label: "URL",
+      value: url,
+      kind: "url",
+      timeline: {
+        icon: "website",
+        href: url,
+        ...(source?.faviconUrl ? { faviconUrl: source.faviconUrl } : {}),
+      },
+    });
   }
   return details;
 }
+
+const URLS_ONLY_SCHEMA = {
+  type: "object",
+  required: ["urls"],
+  additionalProperties: false,
+  properties: {
+    urls: {
+      type: "array",
+      minItems: 1,
+      maxItems: 5,
+      items: { type: "string" },
+    },
+  },
+};
 
 export function createWebReadTool(
   providerFactory: WebAccessProviderFactory = createConfiguredWebAccessProvider,
@@ -161,18 +198,21 @@ export function createWebReadTool(
       traceIcon: "web",
       mergeResultIntoCallTrace: true,
       buildTraceSummary: ({ args, content }) => {
-        const input = validateWebReadInput(args);
         const result = content as Partial<WebReadToolResult> | undefined;
-        if (!input.ok || !result) return null;
+        if (!result) return null;
         if (result.provider === "anysearch")
           return "Read web pages · AnySearch";
-        return `Read web pages · Depth: ${input.value.depth}`;
+        if (result.provider === "deepseek") return "Read web pages · DeepSeek";
+        const depth = validateObject<Record<string, unknown>>(args)
+          ? args.depth
+          : undefined;
+        if (depth !== "basic" && depth !== "advanced") return null;
+        return `Read web pages · Depth: ${depth}`;
       },
       summaries: {
         onCall: ({ args }) => {
-          const validated = validateWebReadInput(args);
-          if (!validated.ok) return "Reading web pages";
-          const count = validated.value.urls.length;
+          const count = storedReadArgs(args).urls.length;
+          if (!count) return "Reading web pages";
           return `Reading ${count} web page${count === 1 ? "" : "s"}`;
         },
         onSuccess: "Web page reading complete",
@@ -215,7 +255,16 @@ export function createWebReadTool(
   return {
     ...tool,
     get spec() {
-      if (getWebAccessProvider() !== "anysearch") return tool.spec;
+      const provider = getWebAccessProvider();
+      if (provider === "deepseek") {
+        return {
+          ...tool.spec,
+          description:
+            "Read one to five public URLs returned by web_search in this run with DeepSeek Fetch, which returns each page as Markdown. No query-focused extraction, depth or chunks controls. Output is bounded and may be truncated.",
+          inputSchema: URLS_ONLY_SCHEMA,
+        };
+      }
+      if (provider !== "anysearch") return tool.spec;
       return {
         ...tool.spec,
         description:

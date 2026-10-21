@@ -62,7 +62,7 @@ describe("web source UI contract", function () {
       assert.deepEqual(
         tavilyCopy.filter(
           (english) =>
-            !["Tavily", "AnySearch"].includes(english) &&
+            !["Tavily", "AnySearch", "DeepSeek"].includes(english) &&
             t(english) === english,
         ),
         [],

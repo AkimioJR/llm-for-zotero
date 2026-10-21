@@ -1,19 +1,28 @@
 import type { AgentRuntimeRequest } from "../../types";
 import {
   getTavilyApiKey,
-  hasTavilyApiKey,
   getAnysearchApiKey,
   getWebAccessProvider,
+  isWebAccessConfigured,
 } from "../../../webAccess/prefs";
 import type { WebAccessProvider } from "../../../webAccess/types";
 import { TavilyClient } from "../../../webAccess/tavilyClient";
 import { AnysearchClient } from "../../../webAccess/anysearchClient";
+import { DeepSeekSearchClient } from "../../../webAccess/deepseekSearchClient";
+import { getDeepSeekSearchCredential } from "../../../webAccess/deepseekSearchKey";
 
 export type WebAccessProviderFactory = () => WebAccessProvider;
 
 export function createConfiguredWebAccessProvider(): WebAccessProvider {
-  if (getWebAccessProvider() === "anysearch") {
+  const provider = getWebAccessProvider();
+  if (provider === "anysearch") {
     return new AnysearchClient(getAnysearchApiKey());
+  }
+  if (provider === "deepseek") {
+    // An empty key throws here: no other provider is tried instead.
+    return new DeepSeekSearchClient(
+      getDeepSeekSearchCredential()?.apiKey || "",
+    );
   }
   return new TavilyClient(getTavilyApiKey());
 }
@@ -21,8 +30,7 @@ export function createConfiguredWebAccessProvider(): WebAccessProvider {
 export function isWebAccessToolAvailable(
   request: AgentRuntimeRequest,
 ): boolean {
-  if (getWebAccessProvider() !== "anysearch" && !hasTavilyApiKey())
-    return false;
+  if (!isWebAccessConfigured()) return false;
   if (
     request.authMode === "codex_app_server" ||
     request.authMode === "webchat"

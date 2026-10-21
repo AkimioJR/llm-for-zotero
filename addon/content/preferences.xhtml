@@ -1202,9 +1202,17 @@
                       id="__addonRef__-web-access-provider"
                       class="llm-pref-input"
                     >
+                      <html:option value="auto">Automatic</html:option>
                       <html:option value="tavily">Tavily</html:option>
                       <html:option value="anysearch">AnySearch</html:option>
+                      <html:option value="deepseek">DeepSeek</html:option>
                     </html:select>
+                    <html:span
+                      id="__addonRef__-web-access-auto-status"
+                      class="llm-pref-hint"
+                      role="status"
+                      hidden="hidden"
+                    ></html:span>
                   </html:div>
                 </html:div>
                 <html:div id="__addonRef__-anysearch-settings" hidden="hidden">
@@ -1248,6 +1256,47 @@
                         depth, topic, date/domain filters, query-focused
                         extraction, or PDF/Office/media extraction. Usage
                         credits are not reported.
+                      </html:span>
+                    </html:div>
+                  </html:div>
+                </html:div>
+                <html:div
+                  id="__addonRef__-deepseek-search-settings"
+                  hidden="hidden"
+                >
+                  <html:div class="llm-pref-field">
+                    <html:label for="__addonRef__-deepseek-search-test"
+                      >DeepSeek key</html:label
+                    >
+                    <html:div class="llm-pref-control">
+                      <html:span
+                        id="__addonRef__-deepseek-search-key"
+                        class="llm-pref-hint"
+                      ></html:span>
+                      <html:button
+                        id="__addonRef__-deepseek-search-test"
+                        class="llm-pref-button"
+                        type="button"
+                        >Test search (sends a public query)</html:button
+                      >
+                      <html:span
+                        id="__addonRef__-deepseek-search-status"
+                        class="llm-pref-hint"
+                        role="status"
+                        aria-live="polite"
+                        style="white-space: pre-line"
+                      ></html:span>
+                      <html:span class="llm-pref-hint">
+                        $0.75 per 1,000 successful searches or page fetches;
+                        failed or empty calls are not billed. Search queries and
+                        requested URLs are sent to DeepSeek.
+                      </html:span>
+                      <html:span class="llm-pref-hint">
+                        Uses the key of your first DeepSeek model profile with
+                        the official API address; calls are billed to that
+                        DeepSeek account. Queries are limited to 128 characters,
+                        including site and date filters. No depth, topic, or
+                        query-focused page reading.
                       </html:span>
                     </html:div>
                   </html:div>

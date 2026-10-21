@@ -39,7 +39,7 @@ pref("claudeCodePermissionModeMigrationDone", false);
 pref("originalAgentPermissionMode", "auto");
 pref("originalAgentPermissionModeMigrationDone", false);
 pref("tavilyApiKey", "");
-pref("webAccessProvider", "tavily");
+pref("webAccessProvider", "auto");
 pref("anysearchApiKey", "");
 pref("conversationSystem", "upstream");
 pref("enableCodexAppServerMode", false);
