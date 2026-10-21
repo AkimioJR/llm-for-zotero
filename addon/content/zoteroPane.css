@@ -4263,6 +4263,19 @@
   user-select: text;
 }
 
+/* With no task-progress card, the first message starts where the card starts:
+   the same gap under the actions row. The independent pane keeps its spacing. */
+.llm-panel:not(.llm-dedicated-chat-pane .llm-panel) .llm-messages {
+  padding-top: 0;
+}
+
+.llm-panel:not([data-standalone="true"]):not(
+    .llm-dedicated-chat-pane .llm-panel
+  )
+  .llm-chat-shell {
+  margin-top: -8px;
+}
+
 .llm-chat-latest {
   appearance: none;
   -moz-appearance: none;
