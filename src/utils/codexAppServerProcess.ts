@@ -25,6 +25,7 @@ const DEFAULT_CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STDERR_TAIL_WAIT_MS = 100;
 const CODEX_APP_SERVER_DIAGNOSTIC_BUFFER_MAX = 4000;
 const CODEX_APP_SERVER_DIAGNOSTIC_BUFFER_TRIM_THRESHOLD = 8000;
+const CODEX_APP_SERVER_CLOSE_REASON_MAX = 400;
 const CODEX_ENV_KEYS = [
   "CODEX_PATH",
   "HOME",
@@ -239,7 +240,8 @@ export class CodexAppServerProcess {
           request.method === "mcpServer/elicitation/request"),
     );
   }
-  private closeHandlers = new Set<() => void>();
+  private closeHandlers = new Set<(reason?: string) => void>();
+  private closeReason: string | undefined;
   private readLoopPromise: Promise<void> | null = null;
   private stderrLoopPromise: Promise<void> | null = null;
   private turnQueues = new Map<string, Promise<void>>();
@@ -750,9 +752,9 @@ export class CodexAppServerProcess {
     };
   }
 
-  onClose(handler: () => void): () => void {
+  onClose(handler: (reason?: string) => void): () => void {
     if (this.didNotifyClose || this.destroyed) {
-      handler();
+      handler(this.closeReason);
       return () => {};
     }
     this.closeHandlers.add(handler);
@@ -865,6 +867,19 @@ export class CodexAppServerProcess {
   }
 
   private fail(error: Error, killProcess: boolean): void {
+    if (this.closeReason === undefined) {
+      const reason = redactAllRememberedLocalDocumentPathsFromTerminalText(
+        error.message || "",
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      if (reason) {
+        this.closeReason =
+          reason.length > CODEX_APP_SERVER_CLOSE_REASON_MAX
+            ? `${reason.slice(0, CODEX_APP_SERVER_CLOSE_REASON_MAX)}...`
+            : reason;
+      }
+    }
     if (!this.destroyed) {
       this.destroyed = true;
       for (const [, pending] of this.pendingRequests) {
@@ -884,9 +899,14 @@ export class CodexAppServerProcess {
     }
     if (this.didNotifyClose) return;
     this.didNotifyClose = true;
+    if (this.closeReason) {
+      appLogger.warn(
+        `[llm-for-zotero] codex app-server closed: ${this.closeReason}`,
+      );
+    }
     for (const handler of this.closeHandlers) {
       try {
-        handler();
+        handler(this.closeReason);
       } catch {
         /* ignore */
       }
@@ -2026,9 +2046,17 @@ export function waitForCodexAppServerTurnCompletion(params: {
     });
 
     signal?.addEventListener("abort", abortHandler, { once: true });
-    unsubscribeClose = proc.onClose(() => {
+    unsubscribeClose = proc.onClose((reason) => {
       void callbacks.then(() =>
-        settle(() => reject(new Error("Codex app-server connection closed"))),
+        settle(() =>
+          reject(
+            new Error(
+              reason
+                ? `Codex app-server connection closed: ${reason}`
+                : "Codex app-server connection closed",
+            ),
+          ),
+        ),
       );
     });
     if (!settled && params.startTurn) {
