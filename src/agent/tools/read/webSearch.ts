@@ -12,6 +12,12 @@ import type {
 import { registerWebSearchSources } from "../../../webAccess/runSources";
 import { normalizePublicWebUrl } from "../../../webAccess/tavilyClient";
 import { getWebAccessProvider } from "../../../webAccess/prefs";
+import {
+  buildDeepSeekQuery,
+  countQueryCharacters,
+  DEEPSEEK_DOMAIN_LIMIT,
+  DEEPSEEK_QUERY_LIMIT,
+} from "../../../webAccess/deepseekSearchClient";
 import { readOnlyInvocationPlan } from "../../authorization/invocationPlan";
 import { neverSelected } from "../guidance";
 import { fail, ok, validateObject } from "../shared";
@@ -76,7 +82,10 @@ function webSearchLatchReason(error: unknown): string | undefined {
 }
 
 function webProviderLabel(): string {
-  return getWebAccessProvider() === "anysearch" ? "AnySearch" : "Tavily";
+  const provider = getWebAccessProvider();
+  if (provider === "anysearch") return "AnySearch";
+  if (provider === "deepseek") return "DeepSeek";
+  return "Tavily";
 }
 
 function normalizeTopic(value: unknown): WebSearchTopic {
@@ -104,9 +113,9 @@ function normalizeDate(value: unknown): string | undefined {
     : undefined;
 }
 
-function normalizeDomains(value: unknown): string[] | undefined {
+function normalizeDomains(value: unknown, maxItems = 10): string[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length > 10) return undefined;
+  if (!Array.isArray(value) || value.length > maxItems) return undefined;
   const domains = value.map((entry) =>
     typeof entry === "string" ? entry.trim().toLowerCase() : "",
   );
@@ -130,6 +139,88 @@ function normalizeDomains(value: unknown): string[] | undefined {
   return Array.from(new Set(domains));
 }
 
+const DEEPSEEK_SEARCH_FIELDS = [
+  "query",
+  "maxResults",
+  "includeDomains",
+  "excludeDomains",
+  "startDate",
+  "endDate",
+  // The outside-search need; validateWebSearchCall checks it, and it never
+  // reaches the provider or the query limit.
+  "need",
+  "gap",
+];
+
+/** DeepSeek filters become query operators, so they share the query limit. */
+function validateDeepSeekSearch(
+  args: Record<string, unknown>,
+  query: string,
+): AgentToolInputValidation<WebSearchInput> {
+  if (
+    Object.keys(args).some(
+      (key) => !DEEPSEEK_SEARCH_FIELDS.includes(key) && args[key] !== undefined,
+    )
+  ) {
+    return fail(
+      "DeepSeek search supports query, maxResults, includeDomains, excludeDomains, startDate and endDate; depth, topic and timeRange are not supported.",
+    );
+  }
+  const maxResults = args.maxResults ?? 5;
+  if (
+    typeof maxResults !== "number" ||
+    !Number.isInteger(maxResults) ||
+    maxResults < 1 ||
+    maxResults > 10
+  ) {
+    return fail("maxResults must be an integer from 1 to 10");
+  }
+  const startDate = normalizeDate(args.startDate);
+  const endDate = normalizeDate(args.endDate);
+  if (args.startDate !== undefined && !startDate) {
+    return fail("startDate must use YYYY-MM-DD");
+  }
+  if (args.endDate !== undefined && !endDate) {
+    return fail("endDate must use YYYY-MM-DD");
+  }
+  if (startDate && endDate && startDate > endDate) {
+    return fail("startDate must not be after endDate");
+  }
+  const includeDomains = normalizeDomains(
+    args.includeDomains,
+    DEEPSEEK_DOMAIN_LIMIT,
+  );
+  const excludeDomains = normalizeDomains(
+    args.excludeDomains,
+    DEEPSEEK_DOMAIN_LIMIT,
+  );
+  if (args.includeDomains !== undefined && !includeDomains) {
+    return fail(
+      `includeDomains must contain at most ${DEEPSEEK_DOMAIN_LIMIT} valid domain names`,
+    );
+  }
+  if (args.excludeDomains !== undefined && !excludeDomains) {
+    return fail(
+      `excludeDomains must contain at most ${DEEPSEEK_DOMAIN_LIMIT} valid domain names`,
+    );
+  }
+  const value: WebSearchInput = {
+    query,
+    maxResults,
+    ...(includeDomains ? { includeDomains } : {}),
+    ...(excludeDomains ? { excludeDomains } : {}),
+    ...(startDate ? { startDate } : {}),
+    ...(endDate ? { endDate } : {}),
+  };
+  const length = countQueryCharacters(buildDeepSeekQuery(value));
+  if (length > DEEPSEEK_QUERY_LIMIT) {
+    return fail(
+      `query with filters uses ${length} of ${DEEPSEEK_QUERY_LIMIT} characters; shorten the query or drop filters`,
+    );
+  }
+  return ok(value);
+}
+
 export function validateWebSearchInput(
   args: unknown,
 ): AgentToolInputValidation<WebSearchInput> {
@@ -140,7 +231,8 @@ export function validateWebSearchInput(
   if (!query) return fail("query is required");
   if (query.length > 2_000)
     return fail("query must be 2,000 characters or less");
-  if (getWebAccessProvider() === "anysearch") {
+  const provider = getWebAccessProvider();
+  if (provider === "anysearch") {
     if (
       Object.keys(args).some(
         (key) =>
@@ -163,6 +255,7 @@ export function validateWebSearchInput(
     }
     return ok({ query, maxResults });
   }
+  if (provider === "deepseek") return validateDeepSeekSearch(args, query);
   if (args.depth !== "basic" && args.depth !== "advanced") {
     return fail("depth must be one of: basic, advanced");
   }
@@ -232,19 +325,25 @@ export function validateWebSearchCall(
   return needError ? fail(needError) : validated;
 }
 
+function storedQuery(args: unknown): string {
+  const query = validateObject<Record<string, unknown>>(args)
+    ? args.query
+    : undefined;
+  return typeof query === "string" ? query.trim() : "";
+}
+
 function buildSearchTraceDetails(
   args: unknown,
   content: unknown,
 ): AgentTraceDetail[] {
-  const input = validateWebSearchInput(args);
   const result =
     content && typeof content === "object"
       ? (content as Partial<WebSearchToolResult>)
       : {};
   const details: AgentTraceDetail[] = [];
-  if (input.ok) {
-    details.push({ label: "Query", value: input.value.query });
-  }
+  // Stored args come from past calls; do not validate them against today's provider.
+  const query = storedQuery(args);
+  if (query) details.push({ label: "Query", value: query });
   const reason = buildOutsideSearchReasonDetail(args);
   if (reason) details.push(reason);
   for (const source of result.results || []) {
@@ -261,6 +360,53 @@ function buildSearchTraceDetails(
   }
   return details;
 }
+
+const DEEPSEEK_SEARCH_SPEC = {
+  description:
+    `Search the current public web with DeepSeek Search; write the query in the user's language by default. The query may use at most ${DEEPSEEK_QUERY_LIMIT} characters, including the site and date filters built from includeDomains, excludeDomains, startDate and endDate. No depth, topic or time range. Returns ranked results with summaries; web_read reads a result's page text. ` +
+    OUTSIDE_SEARCH_NEED_SENTENCE +
+    ".",
+  inputSchema: {
+    type: "object",
+    required: ["query", "need"],
+    additionalProperties: false,
+    properties: {
+      query: {
+        type: "string",
+        minLength: 1,
+        maxLength: DEEPSEEK_QUERY_LIMIT,
+        description: `The focused web search query. At most ${DEEPSEEK_QUERY_LIMIT} characters, including any filters.`,
+      },
+      maxResults: { type: "integer", minimum: 1, maximum: 10 },
+      includeDomains: {
+        type: "array",
+        maxItems: DEEPSEEK_DOMAIN_LIMIT,
+        items: { type: "string" },
+        description: "Search only these sites.",
+      },
+      excludeDomains: {
+        type: "array",
+        maxItems: DEEPSEEK_DOMAIN_LIMIT,
+        items: { type: "string" },
+        description: "Leave out these sites.",
+      },
+      startDate: {
+        type: "string",
+        description: "YYYY-MM-DD. Only pages published after this date.",
+      },
+      endDate: {
+        type: "string",
+        description: "YYYY-MM-DD. Only pages published before this date.",
+      },
+      ...OUTSIDE_SEARCH_NEED_PROPERTIES,
+    },
+  },
+};
+
+const DEEPSEEK_SEARCH_GUIDANCE = {
+  matches: neverSelected,
+  instruction: `DeepSeek Search accepts query, maxResults, includeDomains, excludeDomains, startDate and endDate; do not send depth, topic or timeRange. Keep the query within ${DEEPSEEK_QUERY_LIMIT} characters including filters. Use web_read with searched URLs only when search summaries are insufficient. Every final-answer paragraph that uses web results must end with the exact hidden source marker described in the tool result, using only returned sourceId values. Do not add a references footer.`,
+};
 
 export function createWebSearchTool(
   providerFactory: WebAccessProviderFactory = createConfiguredWebAccessProvider,
@@ -326,17 +472,21 @@ export function createWebSearchTool(
       traceIcon: "web",
       mergeResultIntoCallTrace: true,
       buildTraceSummary: ({ args, content }) => {
-        const input = validateWebSearchInput(args);
         const result = content as Partial<WebSearchToolResult> | undefined;
-        if (!input.ok || !result) return null;
+        if (!result) return null;
         if (result.provider === "anysearch") return "Searched web · AnySearch";
-        return `Searched web · Depth: ${input.value.depth}`;
+        if (result.provider === "deepseek") return "Searched web · DeepSeek";
+        const depth = validateObject<Record<string, unknown>>(args)
+          ? args.depth
+          : undefined;
+        if (depth !== "basic" && depth !== "advanced") return null;
+        return `Searched web · Depth: ${depth}`;
       },
       summaries: {
         onCall: ({ args }) => {
-          const validated = validateWebSearchInput(args);
-          return validated.ok
-            ? `Searching the web for “${validated.value.query}”`
+          const query = storedQuery(args);
+          return query
+            ? `Searching the web for “${query}”`
             : "Searching the web";
         },
         onSuccess: "Web search complete",
@@ -414,7 +564,10 @@ export function createWebSearchTool(
   return {
     ...tool,
     get spec() {
-      if (getWebAccessProvider() !== "anysearch") return tool.spec;
+      const provider = getWebAccessProvider();
+      if (provider === "deepseek")
+        return { ...tool.spec, ...DEEPSEEK_SEARCH_SPEC };
+      if (provider !== "anysearch") return tool.spec;
       return {
         ...tool.spec,
         description:
@@ -434,7 +587,9 @@ export function createWebSearchTool(
       };
     },
     get guidance() {
-      if (getWebAccessProvider() !== "anysearch") return tool.guidance;
+      const provider = getWebAccessProvider();
+      if (provider === "deepseek") return DEEPSEEK_SEARCH_GUIDANCE;
+      if (provider !== "anysearch") return tool.guidance;
       return {
         matches: neverSelected,
         instruction:

@@ -79,7 +79,7 @@ import {
 } from "../../../src/services/mineru/mineruCache";
 import {
   getWebAccessProvider,
-  hasTavilyApiKey,
+  isWebAccessConfigured,
 } from "../../../src/webAccess/prefs";
 import { allocateEphemeralPaperConversationKey } from "../../../src/shared/conversationKeySpace";
 import type { WorkflowTestApi } from "../../../src/modules/contextPanel/workflowTestTypes";
@@ -643,9 +643,9 @@ describe("live: search routing and the evidence ladder", function () {
     return Zotero.Libraries.userLibraryID;
   }
 
-  /** The plugin's own rule (isWebAccessToolAvailable): AnySearch needs no key. */
+  /** The plugin's own rule (isWebAccessToolAvailable), DeepSeek included. */
   function hasWebAccess(): boolean {
-    return getWebAccessProvider() === "anysearch" || hasTavilyApiKey();
+    return isWebAccessConfigured();
   }
 
   /**

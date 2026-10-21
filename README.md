@@ -392,19 +392,20 @@ as Markdown files in `{ZoteroDataDir}/llm-for-zotero/skills/`.
 
 ## General Web Search
 
-Agent Mode can search the current public web with Tavily or AnySearch and read returned pages when search-result snippets are not enough.
+Agent Mode can search the current public web with Tavily, AnySearch, or DeepSeek and read returned pages when search-result snippets are not enough.
 Use it for current facts, official documentation, news, finance, product information, and other general-web evidence.
 Scholarly discovery remains separate: the agent searches OpenAlex, arXiv, and Europe PMC (with CrossRef and Semantic Scholar for metadata lookup), and it can combine both kinds of search when a question needs academic and general-web sources.
 
-To enable general web search with Tavily (the default):
+To enable general web search with Tavily:
 
 1. Get a Tavily API key from [app.tavily.com](https://app.tavily.com/).
 2. Open `Preferences` -> `llm-for-zotero` -> **Agent**.
-3. In **Web search**, select **Tavily**, paste the API key and click **Test connection**.
+3. In **Web search**, keep **Automatic** or select **Tavily**, paste the API key and click **Test connection**.
 4. Enable Agent Mode and ask it to search or verify something online.
 
 There is no separate enable switch.
-The `web_search` and `web_read` tools become available to compatible in-plugin Agent conversations when Tavily has a key or AnySearch is selected.
+The `web_search` and `web_read` tools become available to compatible in-plugin Agent conversations when the provider in use can run: Tavily has a key, AnySearch is selected, or DeepSeek finds an official DeepSeek model profile.
+**Automatic** (the default) uses Tavily when a Tavily key is saved, otherwise DeepSeek when an official DeepSeek model profile exists.
 They are not added to WebChat, Codex App Server, or Claude Code conversations, which use their own runtimes and tool sets.
 
 With Tavily, the agent chooses basic or advanced search and page-reading depth from the request, or follows an explicit request such as _"use advanced web search."_
@@ -438,6 +439,12 @@ credentials or private library content.
 Anonymous quotas and permissions are server-controlled. An exhausted quota
 produces an error; the integration does not adopt credentials from responses,
 automatically retry, switch providers, or report fictional credit usage.
+
+### DeepSeek
+
+DeepSeek search uses the key of your first model profile whose API address is the official `https://api.deepseek.com`; keys of relays and other hosts are never sent to DeepSeek.
+It costs $0.75 per 1,000 successful searches or page fetches, billed to that DeepSeek account, and failed or empty calls are not billed.
+Queries are limited to 128 characters, including the site and date filters, and search queries and requested URLs are sent to DeepSeek.
 
 ## Codex Setup (ChatGPT Plus Subscribers)
 

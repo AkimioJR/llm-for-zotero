@@ -44,6 +44,51 @@ const zhCN: Record<string, string> = {
     "AnySearch 会接收搜索词和请求的公开网址。密钥保存在本地 Zotero 偏好设置中。请勿发送凭据或私密文献库文本。不会自动重试或回退到其他服务。",
   "General search and bounded page extraction only. No depth, topic, date/domain filters, query-focused extraction, or PDF/Office/media extraction. Usage credits are not reported.":
     "仅支持通用搜索和有数量限制的网页正文提取。不支持深度、主题、日期或域名过滤、按问题聚焦提取以及 PDF、Office 或媒体提取。不报告积分用量。",
+  Automatic: "自动",
+  "Automatic: using Tavily": "自动：使用 Tavily",
+  "Automatic: using DeepSeek (key from your DeepSeek model profile)":
+    "自动：使用 DeepSeek（密钥来自你的 DeepSeek 模型配置）",
+  "Automatic: no web search key yet. Add a Tavily API key, or a DeepSeek model profile with the official API address.":
+    "自动：尚无网页搜索密钥。请添加 Tavily API 密钥，或添加使用官方 API 地址的 DeepSeek 模型配置。",
+  "DeepSeek key": "DeepSeek 密钥",
+  "Key from your DeepSeek model profile": "密钥来自你的 DeepSeek 模型配置",
+  "Add a DeepSeek model profile with the official API address (api.deepseek.com) to use DeepSeek search. Keys from other hosts do not work.":
+    "请添加使用官方 API 地址（api.deepseek.com）的 DeepSeek 模型配置以使用 DeepSeek 搜索。其他地址的密钥无法使用。",
+  "$0.75 per 1,000 successful searches or page fetches; failed or empty calls are not billed. Search queries and requested URLs are sent to DeepSeek.":
+    "每 1,000 次成功的搜索或网页读取收费 0.75 美元；失败或无结果的调用不收费。搜索词和请求的网址会发送给 DeepSeek。",
+  "Uses the key of your first DeepSeek model profile with the official API address; calls are billed to that DeepSeek account. Queries are limited to 128 characters, including site and date filters. No depth, topic, or query-focused page reading.":
+    "使用第一个采用官方 API 地址的 DeepSeek 模型配置中的密钥；费用从该 DeepSeek 账户扣除。搜索词最多 128 个字符，包括网站和日期过滤条件。不支持深度、主题或按问题聚焦的网页读取。",
+  "Select DeepSeek before testing.": "请先选择 DeepSeek 再测试。",
+  "DeepSeek results": "DeepSeek 结果",
+  "DeepSeek test search failed.": "DeepSeek 测试搜索失败。",
+  "DeepSeek returned an invalid response.": "DeepSeek 返回了无效响应。",
+  "DeepSeek returned an invalid results list.": "DeepSeek 返回了无效结果列表。",
+  "DeepSeek returned no page content.": "DeepSeek 未返回网页内容。",
+  "DeepSeek rejected this page URL.": "DeepSeek 拒绝了该网页地址。",
+  "DeepSeek rejected the search request parameters.":
+    "DeepSeek 拒绝了搜索请求参数。",
+  "DeepSeek rejected the API key. Check the key in your DeepSeek model profile.":
+    "DeepSeek 拒绝了该 API 密钥。请检查 DeepSeek 模型配置中的密钥。",
+  "DeepSeek balance is insufficient. Top up at platform.deepseek.com.":
+    "DeepSeek 余额不足。请在 platform.deepseek.com 充值。",
+  "DeepSeek refused the search request.": "DeepSeek 拒绝了搜索请求。",
+  "DeepSeek refused to fetch this page under its security policy.":
+    "DeepSeek 依据其安全策略拒绝读取该网页。",
+  "DeepSeek could not get usable content from this page.":
+    "DeepSeek 无法从该网页获取可用内容。",
+  "DeepSeek request failed.": "DeepSeek 请求失败。",
+  "DeepSeek request failed or returned an invalid response.":
+    "DeepSeek 请求失败或返回了无效响应。",
+  "DeepSeek request timed out.": "DeepSeek 请求超时。",
+  "DeepSeek request was cancelled.": "DeepSeek 请求已取消。",
+  "DeepSeek search rate limit reached. Try again later.":
+    "DeepSeek 搜索请求已被限流，请稍后重试。",
+  "DeepSeek fetch rate limit reached for this site. Try again later.":
+    "DeepSeek 对该网站的读取请求已被限流，请稍后重试。",
+  "DeepSeek search is temporarily unavailable. Try again later.":
+    "DeepSeek 搜索暂时不可用，请稍后重试。",
+  "DeepSeek search needs the API key of an official DeepSeek model profile.":
+    "DeepSeek 搜索需要官方 DeepSeek 模型配置中的 API 密钥。",
   // ── Shortcut actions ────────────────────────────────────────────────────
   Summarize: "摘要",
   "Key Points": "要点",
