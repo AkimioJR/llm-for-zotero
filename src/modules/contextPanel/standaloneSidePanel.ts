@@ -1700,6 +1700,7 @@ export function createStandaloneSidePanel(
     html: "HTML",
     code: "Code",
     plan: "Plan",
+    figure: "Paper figure",
   };
   const HTML_SAFE_BOX_NOTE =
     "Runs in a safe box: no internet, no access to Zotero";

@@ -11,8 +11,14 @@ import { HTML_NS } from "../../utils/domHelpers";
 import { toFileUrl } from "../../utils/localPath";
 import { revealLocalPath } from "../../utils/revealLocalPath";
 import { copyTextToClipboard } from "./clipboard";
-import { openFigureViewer } from "./figureViewer";
+import { mountFigureTabZoom, openFigureViewer } from "./figureViewer";
 import { openReaderForItem } from "./quoteNavigator";
+import {
+  SIDE_ITEM_KIND_ATTRIBUTE,
+  appendMoveToSidePanelButton,
+  getSidePanelItemHost,
+  type SidePanelItemRequest,
+} from "./sidePanelItems";
 import {
   isEmbeddableGeneratedImage,
   resolveGeneratedImageAsset,
@@ -310,7 +316,15 @@ export type GeneratedImageRenderOptions = {
   frameClassName?: string;
   /** Opens a figure's source page; defaults to the Zotero reader. */
   openFigurePage?: (figure: GeneratedChatImageFigure) => Promise<void>;
-  /** A click on the picture opens the large view unless this is false. */
+  /**
+   * A paper figure gets a "Move to side panel" button where the document has
+   * a side panel. The side panel tab turns it off for its own copy.
+   */
+  allowMoveToSidePanel?: boolean;
+  /**
+   * A click on the picture opens the large view. The side panel tab turns it
+   * off: there a click toggles actual size in place.
+   */
   zoomOnClick?: boolean;
 };
 
@@ -416,7 +430,11 @@ function appendGeneratedImageActions(
   const jumpFigure = canJumpToFigurePage(image.figure)
     ? image.figure
     : undefined;
-  if (!embeddable && !jumpFigure) return false;
+  const canMoveToSidePanel =
+    options.allowMoveToSidePanel !== false &&
+    Boolean(image.figure) &&
+    Boolean(getSidePanelItemHost(doc));
+  if (!embeddable && !jumpFigure && !canMoveToSidePanel) return false;
   if (jumpFigure) {
     const title = jumpFigure.pageLabel
       ? `Jump to page ${jumpFigure.pageLabel}`
@@ -486,6 +504,15 @@ function appendGeneratedImageActions(
       openButton.setAttribute("aria-label", "Show image in folder unavailable");
     }
     parent.appendChild(openButton);
+  }
+  if (canMoveToSidePanel) {
+    figure.setAttribute(SIDE_ITEM_KIND_ATTRIBUTE, "figure");
+    appendMoveToSidePanelButton({
+      doc,
+      parent,
+      className: "llm-generated-image-action llm-side-move-glyph",
+      buildRequest: () => buildFigureSidePanelRequest(image, figure, options),
+    })?.removeAttribute("title");
   }
   return true;
 }
@@ -562,6 +589,39 @@ export function createGeneratedImageFrame(
     figure.appendChild(caption);
   }
   return figure;
+}
+
+/**
+ * What the figure box's →| button hands to the side panel. The tab draws the
+ * same figure box (caption, page, copy / save / show-in-folder / jump), fitted
+ * to the tab; scroll or pinch zooms and a drag moves it.
+ */
+export function buildFigureSidePanelRequest(
+  image: GeneratedChatImage,
+  element: Element,
+  options: GeneratedImageRenderOptions = {},
+): SidePanelItemRequest {
+  const caption = buildGeneratedImageCaption(image);
+  const localPath = resolveGeneratedImageLocalPath(image);
+  const source =
+    toFileUrl(localPath) || localPath || resolveGeneratedChatImageSrc(image);
+  return {
+    kind: "figure",
+    title: caption || undefined,
+    source,
+    element,
+    renderBody: (targetDoc, root) => {
+      const frame = createGeneratedImageFrame(root, image, targetDoc, {
+        ...options,
+        allowMoveToSidePanel: false,
+        zoomOnClick: false,
+      });
+      if (!frame) return;
+      root.appendChild(frame);
+      const img = frame.querySelector("img") as HTMLImageElement | null;
+      if (img) mountFigureTabZoom(frame, img);
+    },
+  };
 }
 
 export function renderAssistantGeneratedImagesInto(

@@ -246,6 +246,37 @@ describe("side panel Miscellaneous and host registration", function () {
       }
     });
 
+    it("lists figures with their own key, in order with other kinds", function () {
+      const doc = fakeDoc();
+      const host = { open() {} };
+      registerSidePanelItemHost(doc, host);
+      try {
+        const chat = buildChat(doc, [
+          {
+            index: 4,
+            items: [
+              { kind: "figure", source: "file:///a.png" },
+              { kind: "code", source: "x" },
+              { kind: "figure", source: "file:///b.png" },
+            ],
+          },
+        ]);
+        const made = collectMadeItems(chat as unknown as ParentNode);
+        assert.deepEqual(
+          made.map((item) => item.kind),
+          ["figure", "code", "figure"],
+        );
+        assert.deepEqual(
+          made.map(
+            (item) => resolveSidePanelItemIdentity(item.request, 3).itemKey,
+          ),
+          ["3|figure|msg=4:1", "3|code|msg=4:0", "3|figure|msg=4:0"],
+        );
+      } finally {
+        unregisterSidePanelItemHost(doc, host);
+      }
+    });
+
     it("skips an item with no button and returns nothing for an empty chat", function () {
       const doc = fakeDoc();
       const host = { open() {} };

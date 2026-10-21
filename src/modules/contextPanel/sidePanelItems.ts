@@ -1,6 +1,7 @@
 /**
  * Items that move from the main chat into a side panel tab: a Mermaid
- * diagram, an SVG figure, an HTML page, a code block, or a plan document.
+ * diagram, an SVG figure, a paper figure crop, an HTML page, a code block, or
+ * a plan document.
  *
  * Only the standalone window has a side panel, and only its panel registers an
  * item host for its document. A renderer that wants a "Move to side panel"
@@ -17,7 +18,8 @@ export type SidePanelItemKind =
   | "svg"
   | "html"
   | "code"
-  | "plan";
+  | "plan"
+  | "figure";
 
 /** What a renderer hands over when its button is clicked. */
 export type SidePanelItemRequest = {
@@ -72,6 +74,7 @@ export const SIDE_PANEL_ITEM_KINDS: readonly SidePanelItemKind[] = [
   "html",
   "code",
   "plan",
+  "figure",
 ];
 
 /** The renderer marks the element it moves, so its position can be counted. */
@@ -189,6 +192,8 @@ export function resolveItemTabTitle(
       return own || String(request.lang || "").trim() || translate("Code");
     case "plan":
       return own || translate("Plan");
+    case "figure":
+      return own || translate("Figure");
   }
 }
 

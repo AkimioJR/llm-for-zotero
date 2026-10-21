@@ -209,6 +209,11 @@ describe("side panel items", function () {
       assert.equal(resolveItemTabTitle({ kind: "mermaid" }), "Mermaid diagram");
       assert.equal(resolveItemTabTitle({ kind: "svg" }), "Figure");
       assert.equal(resolveItemTabTitle({ kind: "html" }), "HTML page");
+      assert.equal(resolveItemTabTitle({ kind: "figure" }), "Figure");
+      assert.equal(
+        resolveItemTabTitle({ kind: "figure", title: "Fig. 2 · p. 4" }),
+        "Fig. 2 · p. 4",
+      );
       assert.equal(
         resolveItemTabTitle({ kind: "code", lang: "python" }),
         "python",

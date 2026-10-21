@@ -122,6 +122,157 @@ function resolveFigureViewerHost(anchor: Element): {
   return fallback ? { host: fallback, coversWindow: true } : null;
 }
 
+export type FigurePanZoom = {
+  fit: () => void;
+  zoomTo: (scale: number, clientX?: number, clientY?: number) => void;
+  /** Reads the stage size again: refits when fitted, else keeps the zoom. */
+  relayout: () => void;
+  scale: () => number;
+  isZoomed: () => boolean;
+};
+
+/**
+ * Wheel / pinch zoom and drag-to-move for a picture in a stage. The large
+ * view and the side panel figure tab both use it, so they zoom alike (at the
+ * Mermaid window's speed, see wheelZoom.ts).
+ */
+export function attachFigurePanZoom(params: {
+  stage: HTMLElement;
+  image: HTMLImageElement;
+  /** Gets the zoomed / dragging classes for the cursors. */
+  stateRoot: HTMLElement;
+  percent?: HTMLElement;
+  /** A press that did not move: on the picture or beside it. */
+  onClick?: (onImage: boolean, clientX: number, clientY: number) => void;
+}): FigurePanZoom {
+  const { stage, image, stateRoot, percent } = params;
+  let natural: FigureViewSize = { width: 0, height: 0 };
+  let view: FigureViewTransform = { scale: 1, x: 0, y: 0 };
+  let minScale = 1;
+
+  const stageSize = (): FigureViewSize => ({
+    width: stage.clientWidth,
+    height: stage.clientHeight,
+  });
+  const isZoomed = () => view.scale > minScale + 0.001;
+  const paint = () => {
+    image.style.width = `${natural.width}px`;
+    image.style.height = `${natural.height}px`;
+    image.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+    if (percent) percent.textContent = `${Math.round(view.scale * 100)}%`;
+    stateRoot.classList.toggle("llm-figure-viewer-zoomed", isZoomed());
+  };
+  const fit = () => {
+    if (!natural.width) return;
+    minScale = fitFigureScale(natural, stageSize());
+    view = clampFigurePan(
+      { scale: minScale, x: 0, y: 0 },
+      natural,
+      stageSize(),
+    );
+    paint();
+  };
+  const zoomTo = (scale: number, clientX?: number, clientY?: number) => {
+    if (!natural.width) return;
+    const rect = stage.getBoundingClientRect();
+    const point = {
+      x: clientX === undefined ? rect.width / 2 : clientX - rect.left,
+      y: clientY === undefined ? rect.height / 2 : clientY - rect.top,
+    };
+    view = zoomFigureAround(view, scale, point, minScale, natural, stageSize());
+    paint();
+  };
+  const relayout = () => {
+    if (!natural.width) return;
+    if (!isZoomed()) {
+      fit();
+      return;
+    }
+    minScale = fitFigureScale(natural, stageSize());
+    view = clampFigurePan(
+      { ...view, scale: Math.max(view.scale, minScale) },
+      natural,
+      stageSize(),
+    );
+    paint();
+  };
+
+  const onImageReady = () => {
+    natural = {
+      width: image.naturalWidth || 800,
+      height: image.naturalHeight || 600,
+    };
+    fit();
+  };
+  image.draggable = false;
+  image.addEventListener("load", onImageReady);
+  if (image.complete && image.naturalWidth) onImageReady();
+
+  let press: {
+    x: number;
+    y: number;
+    viewX: number;
+    viewY: number;
+    onImage: boolean;
+    moved: boolean;
+  } | null = null;
+  stage.addEventListener("pointerdown", (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    press = {
+      x: event.clientX,
+      y: event.clientY,
+      viewX: view.x,
+      viewY: view.y,
+      onImage: event.target === image,
+      moved: false,
+    };
+    try {
+      stage.setPointerCapture(event.pointerId);
+    } catch {
+      // Capture only keeps a drag alive outside the stage.
+    }
+  });
+  stage.addEventListener("pointermove", (event: PointerEvent) => {
+    if (!press) return;
+    const dx = event.clientX - press.x;
+    const dy = event.clientY - press.y;
+    if (Math.abs(dx) + Math.abs(dy) > FIGURE_VIEW_CLICK_SLOP)
+      press.moved = true;
+    if (!press.moved || !isZoomed()) return;
+    stateRoot.classList.add("llm-figure-viewer-dragging");
+    view = clampFigurePan(
+      { scale: view.scale, x: press.viewX + dx, y: press.viewY + dy },
+      natural,
+      stageSize(),
+    );
+    paint();
+  });
+  const endPress = (event: PointerEvent) => {
+    const current = press;
+    press = null;
+    stateRoot.classList.remove("llm-figure-viewer-dragging");
+    if (!current || current.moved || event.type !== "pointerup") return;
+    params.onClick?.(current.onImage, event.clientX, event.clientY);
+  };
+  stage.addEventListener("pointerup", endPress);
+  stage.addEventListener("pointercancel", endPress);
+  stage.addEventListener(
+    "wheel",
+    (event: WheelEvent) => {
+      event.preventDefault();
+      zoomTo(
+        getWheelZoomScale(view.scale, event.deltaY),
+        event.clientX,
+        event.clientY,
+      );
+    },
+    { passive: false },
+  );
+
+  return { fit, zoomTo, relayout, scale: () => view.scale, isZoomed };
+}
+
 /** Opens the large view of a figure; returns a function that closes it. */
 export function openFigureViewer(
   anchor: Element,
@@ -176,7 +327,6 @@ export function openFigureViewer(
   const stage = htmlEl(doc, "div", "llm-figure-viewer-stage");
   const image = htmlEl(doc, "img", "llm-figure-viewer-image");
   image.alt = options.alt;
-  image.draggable = false;
   stage.appendChild(image);
 
   const hint = htmlEl(doc, "div", "llm-figure-viewer-hint");
@@ -184,45 +334,20 @@ export function openFigureViewer(
     "Click the figure for actual size · Scroll to zoom · Drag to move · Esc or click outside to close";
   overlay.append(bar, stage, hint);
 
-  let natural: FigureViewSize = { width: 0, height: 0 };
-  let view: FigureViewTransform = { scale: 1, x: 0, y: 0 };
-  let minScale = 1;
   let closed = false;
-
-  const stageSize = (): FigureViewSize => ({
-    width: stage.clientWidth,
-    height: stage.clientHeight,
+  const panZoom = attachFigurePanZoom({
+    stage,
+    image,
+    stateRoot: overlay,
+    percent,
+    onClick: (onImage, clientX, clientY) => {
+      if (!onImage) close();
+      else if (panZoom.isZoomed()) panZoom.fit();
+      else panZoom.zoomTo(1, clientX, clientY);
+    },
   });
-  const paint = () => {
-    image.style.width = `${natural.width}px`;
-    image.style.height = `${natural.height}px`;
-    image.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
-    percent.textContent = `${Math.round(view.scale * 100)}%`;
-    overlay.classList.toggle(
-      "llm-figure-viewer-zoomed",
-      view.scale > minScale + 0.001,
-    );
-  };
-  const fit = () => {
-    if (!natural.width) return;
-    minScale = fitFigureScale(natural, stageSize());
-    view = clampFigurePan(
-      { scale: minScale, x: 0, y: 0 },
-      natural,
-      stageSize(),
-    );
-    paint();
-  };
-  const zoomTo = (scale: number, clientX?: number, clientY?: number) => {
-    if (!natural.width) return;
-    const rect = stage.getBoundingClientRect();
-    const point = {
-      x: clientX === undefined ? rect.width / 2 : clientX - rect.left,
-      y: clientY === undefined ? rect.height / 2 : clientY - rect.top,
-    };
-    view = zoomFigureAround(view, scale, point, minScale, natural, stageSize());
-    paint();
-  };
+  const { fit, zoomTo } = panZoom;
+  const currentScale = () => panZoom.scale();
 
   // The panel can move or resize (the sidebar is dragged) while the view is
   // open, so its box is read again on every resize.
@@ -243,90 +368,17 @@ export function openFigureViewer(
     fit();
   };
 
-  const onImageReady = () => {
-    natural = {
-      width: image.naturalWidth || 800,
-      height: image.naturalHeight || 600,
-    };
-    fit();
-  };
-  image.addEventListener("load", onImageReady);
-
-  let press: {
-    x: number;
-    y: number;
-    viewX: number;
-    viewY: number;
-    onImage: boolean;
-    moved: boolean;
-  } | null = null;
-  stage.addEventListener("pointerdown", (event: PointerEvent) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    press = {
-      x: event.clientX,
-      y: event.clientY,
-      viewX: view.x,
-      viewY: view.y,
-      onImage: event.target === image,
-      moved: false,
-    };
-    try {
-      stage.setPointerCapture(event.pointerId);
-    } catch {
-      // Capture only keeps a drag alive outside the stage.
-    }
-  });
-  stage.addEventListener("pointermove", (event: PointerEvent) => {
-    if (!press) return;
-    const dx = event.clientX - press.x;
-    const dy = event.clientY - press.y;
-    if (Math.abs(dx) + Math.abs(dy) > FIGURE_VIEW_CLICK_SLOP)
-      press.moved = true;
-    if (!press.moved || view.scale <= minScale + 0.001) return;
-    overlay.classList.add("llm-figure-viewer-dragging");
-    view = clampFigurePan(
-      { scale: view.scale, x: press.viewX + dx, y: press.viewY + dy },
-      natural,
-      stageSize(),
-    );
-    paint();
-  });
-  const endPress = (event: PointerEvent) => {
-    const current = press;
-    press = null;
-    overlay.classList.remove("llm-figure-viewer-dragging");
-    if (!current || current.moved || event.type !== "pointerup") return;
-    if (!current.onImage) close();
-    else if (view.scale > minScale + 0.001) fit();
-    else zoomTo(1, event.clientX, event.clientY);
-  };
-  stage.addEventListener("pointerup", endPress);
-  stage.addEventListener("pointercancel", endPress);
-  stage.addEventListener(
-    "wheel",
-    (event: WheelEvent) => {
-      event.preventDefault();
-      zoomTo(
-        getWheelZoomScale(view.scale, event.deltaY),
-        event.clientX,
-        event.clientY,
-      );
-    },
-    { passive: false },
-  );
-
   const stopButtonEvent = (event: Event) => {
     event.preventDefault();
     event.stopPropagation();
   };
   zoomIn.addEventListener("click", (event: Event) => {
     stopButtonEvent(event);
-    zoomTo(view.scale + ZOOM_BUTTON_STEP);
+    zoomTo(currentScale() + ZOOM_BUTTON_STEP);
   });
   zoomOut.addEventListener("click", (event: Event) => {
     stopButtonEvent(event);
-    zoomTo(view.scale - ZOOM_BUTTON_STEP);
+    zoomTo(currentScale() - ZOOM_BUTTON_STEP);
   });
   fitButton.addEventListener("click", (event: Event) => {
     stopButtonEvent(event);
@@ -360,8 +412,8 @@ export function openFigureViewer(
     let handled = true;
     if (event.key === "Escape") close();
     else if (event.key === "+" || event.key === "=")
-      zoomTo(view.scale + ZOOM_BUTTON_STEP);
-    else if (event.key === "-") zoomTo(view.scale - ZOOM_BUTTON_STEP);
+      zoomTo(currentScale() + ZOOM_BUTTON_STEP);
+    else if (event.key === "-") zoomTo(currentScale() - ZOOM_BUTTON_STEP);
     else if (event.key === "0") fit();
     else handled = false;
     if (handled) {
@@ -404,7 +456,6 @@ export function openFigureViewer(
   resizeObserver?.observe(host);
   win.addEventListener("resize", onWindowResize);
   image.src = options.src;
-  if (image.complete && image.naturalWidth) onImageReady();
   relayout();
   // The view itself takes focus (for Esc and the zoom keys); focusing the
   // close button would show its ring and label before anything is pressed.
@@ -414,4 +465,76 @@ export function openFigureViewer(
     overlay.focus();
   }
   return close;
+}
+
+/**
+ * Turns a figure box in a side panel tab into a zoomable view: the picture
+ * fits the tab, scroll or pinch zooms around the pointer, a drag moves it,
+ * and a double click (or the fit button) fits it again.
+ */
+export function mountFigureTabZoom(
+  frame: HTMLElement,
+  image: HTMLImageElement,
+): FigurePanZoom | null {
+  const doc = frame.ownerDocument;
+  const win = doc?.defaultView;
+  if (!doc || !win) return null;
+  frame.classList.add("llm-figure-tab-frame");
+  const stage = htmlEl(doc, "div", "llm-figure-tab-stage");
+  image.replaceWith(stage);
+  image.classList.add("llm-figure-tab-image");
+  image.removeAttribute("title");
+  stage.appendChild(image);
+
+  const button = (className: string, label: string) => {
+    const node = htmlEl(
+      doc,
+      "button",
+      `llm-generated-image-action llm-figure-viewer-button ${className}`,
+    );
+    node.type = "button";
+    node.setAttribute("aria-label", label);
+    return node;
+  };
+  const controls = htmlEl(doc, "div", "llm-figure-tab-zoom");
+  const zoomOut = button("llm-figure-viewer-zoom-out", "Zoom out");
+  const percent = htmlEl(doc, "span", "llm-figure-viewer-percent");
+  const zoomIn = button("llm-figure-viewer-zoom-in", "Zoom in");
+  const fitButton = button("llm-figure-viewer-fit", "Fit to tab");
+  controls.append(zoomOut, percent, zoomIn, fitButton);
+  stage.appendChild(controls);
+
+  const panZoom = attachFigurePanZoom({
+    stage,
+    image,
+    stateRoot: frame,
+    percent,
+  });
+  // The controls sit inside the stage: their presses are not drags.
+  controls.addEventListener("pointerdown", (event: Event) =>
+    event.stopPropagation(),
+  );
+  controls.addEventListener("wheel", (event: Event) => event.stopPropagation());
+  const onButton = (target: HTMLElement, run: () => void) =>
+    target.addEventListener("click", (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      run();
+    });
+  onButton(zoomIn, () => panZoom.zoomTo(panZoom.scale() + ZOOM_BUTTON_STEP));
+  onButton(zoomOut, () => panZoom.zoomTo(panZoom.scale() - ZOOM_BUTTON_STEP));
+  onButton(fitButton, () => panZoom.fit());
+  stage.addEventListener("dblclick", (event: Event) => {
+    if (controls.contains(event.target as Node)) return;
+    event.preventDefault();
+    panZoom.fit();
+  });
+
+  const ResizeObserverCtor = (
+    win as unknown as { ResizeObserver?: typeof ResizeObserver }
+  ).ResizeObserver;
+  if (ResizeObserverCtor) {
+    new ResizeObserverCtor(() => panZoom.relayout()).observe(stage);
+  }
+  return panZoom;
 }

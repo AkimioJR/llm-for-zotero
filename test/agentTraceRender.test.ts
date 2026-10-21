@@ -75,6 +75,10 @@ import {
   STABLE_ANIMATION_DELAY_PROPERTY,
 } from "../src/modules/contextPanel/stableAnimationPhase";
 import {
+  registerSidePanelItemHost,
+  unregisterSidePanelItemHost,
+} from "../src/modules/contextPanel/sidePanelItems";
+import {
   collectFakeText,
   fakeDocument,
   FakeElement,
@@ -12937,6 +12941,57 @@ describe("the shared figure box", function () {
         .map(collectFakeText),
       ["Figure 2"],
     );
+  });
+
+  it("adds the move-to-side-panel button only where a side panel host exists", function () {
+    const doc = fakeDocument as unknown as Document;
+    const run = () => {
+      return boxFor(images);
+    };
+    const without = run();
+    assert.lengthOf(without.findAllByClass("llm-side-move-btn"), 0);
+
+    const opened: any[] = [];
+    const host = { open: (request: unknown) => opened.push(request) };
+    registerSidePanelItemHost(doc, host);
+    try {
+      const withHost = run();
+      const frames = withHost.findAllByClass(
+        "llm-assistant-generated-image-frame",
+      );
+      assert.lengthOf(frames, 2);
+      // Only the crop with figure info (a paper figure) is movable.
+      const buttons = withHost.findAllByClass("llm-side-move-btn");
+      assert.lengthOf(buttons, 1);
+      assert.isTrue(buttons[0].classList.contains("llm-side-move-glyph"));
+      assert.equal(frames[0].getAttribute("data-side-item-kind"), "figure");
+      assert.isNull(frames[1].getAttribute("data-side-item-kind"));
+
+      buttons[0].dispatchFakeEvent("click");
+      assert.lengthOf(opened, 1);
+      assert.equal(opened[0].kind, "figure");
+      assert.equal(opened[0].title, "Figure 1 · p. 2");
+      assert.equal(opened[0].source, "file:///tmp/figure_crops/figure-1.png");
+      assert.strictEqual(opened[0].element, frames[0]);
+      assert.isFunction(opened[0].renderBody);
+
+      // The tab draws its own copy of the box, with no second →| button.
+      const target = fakeDocument.createElement(
+        "div",
+      ) as unknown as FakeElement;
+      opened[0].renderBody(doc, target);
+      assert.lengthOf(
+        target.findAllByClass("llm-assistant-generated-image-frame"),
+        1,
+      );
+      assert.lengthOf(target.findAllByClass("llm-side-move-btn"), 0);
+      assert.lengthOf(
+        target.findAllByClass("llm-generated-image-action-jump"),
+        1,
+      );
+    } finally {
+      unregisterSidePanelItemHost(doc, host);
+    }
   });
 
   it("opens the page through the injected opener when the jump is clicked", async function () {

@@ -17377,7 +17377,8 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='7' height='5' rx='1'/%3E%3Crect x='14' y='16' width='7' height='5' rx='1'/%3E%3Crect x='3' y='16' width='7' height='5' rx='1'/%3E%3Cpath d='M6.5 8v8M6.5 12h11v4'/%3E%3C/svg%3E");
 }
 
-.llm-standalone-side-panel-icon-item-svg::before {
+.llm-standalone-side-panel-icon-item-svg::before,
+.llm-standalone-side-panel-icon-item-figure::before {
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3v18h18'/%3E%3Cpath d='M7 16v-4M12 16V8M17 16v-6'/%3E%3C/svg%3E");
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3v18h18'/%3E%3Cpath d='M7 16v-4M12 16V8M17 16v-6'/%3E%3C/svg%3E");
 }
@@ -17549,6 +17550,90 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   .llm-mermaid-preview,
 .llm-standalone-side-panel-item-body[data-item-kind="svg"] .llm-svg-preview {
   min-height: 60%;
+}
+
+/* A figure tab fits the picture to the tab; scroll or pinch zooms, a drag
+   moves it (figureViewer.ts mountFigureTabZoom). */
+.llm-standalone-side-panel-item-body[data-item-kind="figure"] {
+  overflow: hidden;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="figure"]
+  .llm-standalone-side-panel-item-rendered {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.llm-figure-tab-frame {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.llm-figure-tab-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.llm-figure-tab-stage .llm-figure-tab-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  transform-origin: 0 0;
+  background: #ffffff;
+  cursor: default;
+  -moz-user-select: none;
+  user-select: none;
+}
+
+.llm-figure-tab-frame.llm-figure-viewer-zoomed .llm-figure-tab-image {
+  cursor: grab;
+}
+
+.llm-figure-tab-frame.llm-figure-viewer-dragging .llm-figure-tab-image {
+  cursor: grabbing;
+}
+
+.llm-figure-tab-zoom {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 75%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--material-background) 88%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, #000 18%, transparent);
+}
+
+.llm-figure-tab-zoom .llm-figure-viewer-percent {
+  color: var(--fill-secondary);
+}
+
+.llm-figure-tab-zoom .llm-generated-image-action {
+  border-color: transparent;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.llm-figure-tab-zoom .llm-generated-image-action:hover:not(:disabled),
+.llm-figure-tab-zoom .llm-generated-image-action:focus-visible {
+  background: color-mix(in srgb, var(--fill-primary) 10%, transparent);
+}
+
+/* The controls sit at the bottom of the stage, which clips: labels go up. */
+.llm-figure-tab-zoom .llm-generated-image-action::after {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 
 .llm-standalone-side-panel-item-body[data-item-kind="code"]

@@ -1572,6 +1572,7 @@ const zhCN: Record<string, string> = {
   "HTML page": "HTML 页面",
   Code: "代码",
   Plan: "计划",
+  "Paper figure": "论文图片",
   Diagram: "图表",
   HTML: "HTML",
   "Runs in a safe box: no internet, no access to Zotero":
