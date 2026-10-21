@@ -28,6 +28,7 @@ import {
 } from "../src/agent/services/literatureSearchService";
 import { WebAccessError } from "../src/webAccess/errors";
 import { AgentToolRegistry } from "../src/agent/tools/registry";
+import { ToolInputRejection } from "../src/agent/tools/execution/failure";
 import {
   TAVILY_API_KEY_PREF,
   setWebAccessProvider,
@@ -215,6 +216,54 @@ describe("literature_search outside-search discipline", function () {
     >;
   }
 
+  /** The message the tool refuses with at planning, before anything runs. */
+  async function planRejection(
+    args: Record<string, unknown>,
+    context = makeContext(),
+  ): Promise<string> {
+    const tool = createLiteratureSearchTool(gateway as never);
+    const parsed = tool.validate(args);
+    if (!parsed.ok) throw new Error(parsed.error);
+    try {
+      await tool.planInvocation!(parsed.value, context);
+    } catch (error) {
+      assert.instanceOf(error, ToolInputRejection);
+      return String((error as Error).message);
+    }
+    return "";
+  }
+
+  it("reports a refused need as an input rejection through the registry", async function () {
+    const calls: FetchCall[] = [];
+    globalThis.fetch = openAlexFetch(calls);
+    const registry = new AgentToolRegistry();
+    registry.register(createLiteratureSearchTool(gateway as never));
+    const sideChat: AgentToolContext = {
+      ...makeContext(),
+      request: resolvedAgentRequest({
+        conversationKey: EPHEMERAL_PAPER_CONVERSATION_KEY_BASE,
+        mode: "agent",
+        userText: "Find papers on drift.",
+        libraryID: 1,
+      }),
+    };
+    const cases: Array<[Record<string, unknown>, AgentToolContext]> = [
+      [{ mode: "search", query: "drift", workflow: "review" }, sideChat],
+      [{ mode: "search", query: "x", need: "host_action" }, makeContext()],
+    ];
+    for (const [args, context] of cases) {
+      const prepared = await registry.prepareExecution(
+        { id: "c", name: "literature_search", arguments: args },
+        context,
+      );
+      assert.equal(prepared.kind, "result");
+      if (prepared.kind !== "result") continue;
+      assert.isFalse(prepared.execution.result.ok);
+      assert.isTrue(prepared.execution.result.inputRejected);
+    }
+    assert.lengthOf(calls, 0);
+  });
+
   it("throws a typed rate-limit error from search mode instead of an empty result", async function () {
     const calls: FetchCall[] = [];
     globalThis.fetch = openAlexFetch(calls, 429);
@@ -361,12 +410,11 @@ describe("literature_search outside-search discipline", function () {
     // enums; only the action executor marks a call as host-built.
     const calls: FetchCall[] = [];
     globalThis.fetch = openAlexFetch(calls);
-    let message = "";
-    try {
-      await run({ mode: "search", query: "place cells", need: "host_action" });
-    } catch (error) {
-      message = String((error as Error).message);
-    }
+    const message = await planRejection({
+      mode: "search",
+      query: "place cells",
+      need: "host_action",
+    });
     assert.equal(message, OUTSIDE_SEARCH_NEED_MESSAGE);
     assert.lengthOf(calls, 0);
     assert.equal(outsideSearchCount(RUN, "scholarly"), 0);
@@ -392,12 +440,7 @@ describe("literature_search outside-search discipline", function () {
     globalThis.fetch = openAlexFetch(calls);
     const review = { mode: "search", query: "drift", workflow: "review" };
     for (const context of [sideChat, mcpWithoutCard]) {
-      let message = "";
-      try {
-        await run(review, context);
-      } catch (error) {
-        message = String((error as Error).message);
-      }
+      const message = await planRejection(review, context);
       assert.equal(message, REVIEW_WITHOUT_CARD_NEED_MESSAGE);
       assert.include(message, OUTSIDE_SEARCH_NEED_MESSAGE);
     }

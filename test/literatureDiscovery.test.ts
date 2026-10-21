@@ -818,7 +818,7 @@ describe("ranked literature discovery workflow", function () {
     // leads to the card; answer results carry no card branch.
     assert.include(
       description,
-      "Use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers; with nothing attached, only if the library holds none relevant or the user asks for papers outside it); it leads to the selection card (literature_review); discovery never imports silently.",
+      "Use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers; with nothing attached, only if the library holds no relevant papers or the user asks for papers outside it); it leads to the selection card (literature_review); discovery never imports silently.",
     );
     assert.notInclude(description, "For a find or recommend request");
     assert.notInclude(description, "to choose from");

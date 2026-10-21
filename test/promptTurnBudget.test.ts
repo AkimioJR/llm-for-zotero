@@ -49,14 +49,14 @@ import {
  * source families to its tools, with the selection-card rule; the reason
  * (need and gap) every outside search states; and literature_search's
  * wording of the find (workflow:'review') and answer (workflow:'answer')
- * workflows. Measured against a10986c0, that is 1,199 more fixed prompt and
- * 400 more tool characters, less 21, 5 and 21 turn characters: net growth
- * of 1,578, 1,594 and 1,578, to 39,025, 37,758 and 39,123.
+ * workflows. Measured against a10986c0, that is 1,204 more fixed prompt and
+ * 405 more tool characters, less 21, 5 and 21 turn characters: net growth
+ * of 1,588, 1,604 and 1,588, to 39,035, 37,768 and 39,133.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 39_025,
-  paper: 37_758,
-  collection: 39_123,
+  global: 39_035,
+  paper: 37_768,
+  collection: 39_133,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

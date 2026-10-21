@@ -61,13 +61,13 @@ describe("direct Agent model tool surface", function () {
     // contract with its nothing-attached rule, the plugin Agent's search-tool
     // map with the selection-card rule, the reason every outside search
     // states, and literature_search's find and answer workflow wording)
-    // raised both caps to the measured payload on 2026-10-20: 25,362 tool
-    // characters (400 more than 24,962 at a10986c0) and 35,380 with the
-    // fixed prompt (1,599 more than 33,781).
-    assert.isAtMost(serializedToolCharacters, 25_362);
+    // raised both caps to the measured payload on 2026-10-20: 25,367 tool
+    // characters (405 more than 24,962 at a10986c0) and 35,390 with the
+    // fixed prompt (1,609 more than 33,781).
+    assert.isAtMost(serializedToolCharacters, 25_367);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      35_380,
+      35_390,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

@@ -156,7 +156,7 @@ describe("prompt rules have a single owner", function () {
       // papers (user decision 2a, 2026-10-20).
       rule: "with nothing attached, the card waits for an empty library or a request for outside papers",
       marker:
-        "with nothing attached, only if the library holds none relevant or the user asks for papers outside it",
+        "with nothing attached, only if the library holds no relevant papers or the user asks for papers outside it",
       owner: ["persona", "tool:literature_search"],
     },
     {

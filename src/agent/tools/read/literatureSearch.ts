@@ -13,6 +13,7 @@ import {
   MAX_DISCOVERY_COUNT,
   parseDiscoveryCount,
 } from "../../services/literatureDiscovery";
+import { ToolInputRejection } from "../execution/failure";
 import { canShowLiteratureReview } from "./reviewLiterature";
 import type { ZoteroGateway } from "../../services/zoteroGateway";
 import { readOnlyInvocationPlan } from "../../authorization/invocationPlan";
@@ -252,7 +253,7 @@ export function createLiteratureSearchTool(
     spec: {
       name: "literature_search",
       description:
-        "Search scholarly sources outside the library. Use workflow:'answer' for any search that informs an answer, including whether other studies found or tested something, and explicit imports (then library_import). Use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers; with nothing attached, only if the library holds none relevant or the user asks for papers outside it); it leads to the selection card (literature_review); discovery never imports silently. workflow:'review' with mode:'metadata' proposes changes to approve; use it only when the user asks to check or fix an item's metadata. " +
+        "Search scholarly sources outside the library. Use workflow:'answer' for any search that informs an answer, including whether other studies found or tested something, and explicit imports (then library_import). Use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers; with nothing attached, only if the library holds no relevant papers or the user asks for papers outside it); it leads to the selection card (literature_review); discovery never imports silently. workflow:'review' with mode:'metadata' proposes changes to approve; use it only when the user asks to check or fix an item's metadata. " +
         OUTSIDE_SEARCH_NEED_SENTENCE +
         `; ${REVIEW_SEARCH_NEED_CLAUSE}; mode:'metadata' needs none.`,
       inputSchema: {
@@ -463,17 +464,20 @@ export function createLiteratureSearchTool(
           : {}),
       });
     },
-    planInvocation: (input) =>
-      readOnlyInvocationPlan({
+    planInvocation: (input, context) => {
+      // Nothing has run yet, so a refused need is an input rejection, not a
+      // failing tool; it is checked before authorization and receipts.
+      const needError = callerNeedError(input, context);
+      if (needError) throw new ToolInputRejection(needError);
+      return readOnlyInvocationPlan({
         domains: ["network"],
         effects: ["read", "egress"],
         targets: input.query ? [input.query] : [],
         reason:
           "The literature provider receives the query and returns public metadata without changing Zotero.",
-      }),
+      });
+    },
     execute: async (input, context) => {
-      const needError = callerNeedError(input, context);
-      if (needError) throw new Error(needError);
       // The turn's outside searches: not a metadata lookup or a host action.
       const turn =
         input.mode === "metadata" ||
