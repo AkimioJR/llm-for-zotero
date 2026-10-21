@@ -22,6 +22,7 @@ import {
   openStandaloneSvgWindow,
 } from "./standaloneMermaidWindow";
 import { sanitizeText } from "../../utils/textSanitization";
+import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
 import {
   copySvgFigureAsPngToClipboard,
   isMermaidFigureFenceLanguage,
@@ -1372,6 +1373,28 @@ function openSvgViewer(
   themeKey: MermaidThemeKey,
   options: SvgViewerOptions,
 ): void {
+  const svg = createInlineSvgElement(
+    doc,
+    svgMarkup,
+    "llm-mermaid-viewer-svg",
+    options.ariaLabel,
+  );
+  if (!svg) return;
+  openPreviewViewer(doc, svg, fallbackMount, themeKey, options, true);
+}
+
+/**
+ * The full-window viewer shell shared by SVG, Mermaid, and HTML previews.
+ * `zoomable` adds the zoom controls, which scale the content's width.
+ */
+function openPreviewViewer(
+  doc: Document,
+  content: HTMLElement | SVGElement,
+  fallbackMount: HTMLElement,
+  themeKey: MermaidThemeKey,
+  options: SvgViewerOptions,
+  zoomable: boolean,
+): void {
   const viewer = doc.createElement("div");
   viewer.className = "llm-mermaid-viewer";
   viewer.tabIndex = -1;
@@ -1406,28 +1429,26 @@ function openSvgViewer(
     options.closeTitle,
   );
   close.classList.add("llm-mermaid-viewer-close");
-  toolbar.append(zoomOut, zoomIn, resetZoom, close);
+  if (zoomable) {
+    toolbar.append(zoomOut, zoomIn, resetZoom, close);
+  } else {
+    toolbar.append(close);
+  }
 
   const viewport = doc.createElement("div");
   viewport.className = "llm-mermaid-viewer-viewport";
 
-  const svg = createInlineSvgElement(
-    doc,
-    svgMarkup,
-    "llm-mermaid-viewer-svg",
-    options.ariaLabel,
-  );
-  if (!svg) return;
-  viewport.appendChild(svg);
+  viewport.appendChild(content);
   panel.append(toolbar, viewport);
   viewer.appendChild(panel);
 
   let scale = 1;
   const applyZoom = (nextScale: number) => {
+    if (!zoomable) return;
     scale = clampMermaidZoom(nextScale);
     const label = formatMermaidZoomLabel(scale);
     viewer.dataset.mermaidZoom = label;
-    svg.style.width = label;
+    content.style.width = label;
     zoomOut.disabled = scale <= MERMAID_ZOOM_MIN;
     zoomIn.disabled = scale >= MERMAID_ZOOM_MAX;
   };
@@ -1455,6 +1476,7 @@ function openSvgViewer(
     if (event.target === viewer) closeViewer();
   });
   viewport.addEventListener("wheel", (event: WheelEvent) => {
+    if (!zoomable) return;
     if (!event.metaKey && !event.ctrlKey) return;
     event.preventDefault();
     applyZoom(getMermaidWheelZoomScale(scale, event.deltaY));
@@ -1571,6 +1593,47 @@ function attachRenderedSvgPreviewButtons(
       }
     });
     preview.appendChild(openButton);
+  }
+}
+
+function attachRenderedHtmlPreviews(root: ParentNode, doc: Document): void {
+  const previews = Array.from(
+    root.querySelectorAll(".llm-html-preview[data-llm-html-source]"),
+  ) as HTMLElement[];
+  for (const preview of previews) {
+    if (preview.dataset.llmHtmlHydrated === "true") continue;
+    const source = preview.dataset.llmHtmlSource || "";
+    if (!source.trim()) continue;
+    preview.dataset.llmHtmlHydrated = "true";
+
+    const frame = createSandboxedHtmlFrame(doc, source);
+    const openButton = createMermaidZoomButton(
+      doc,
+      MERMAID_PREVIEW_OPEN_ICON,
+      "Open HTML preview viewer",
+    );
+    openButton.classList.add("llm-mermaid-open-btn", "llm-html-open-btn");
+    openButton.addEventListener("click", () => {
+      const viewerFrame = createSandboxedHtmlFrame(
+        doc,
+        source,
+        "llm-html-preview-viewer-frame",
+      );
+      openPreviewViewer(
+        doc,
+        viewerFrame,
+        preview,
+        getMermaidThemeKey(doc, preview),
+        {
+          ariaLabel: "HTML preview",
+          toolbarLabel: "HTML preview viewer controls",
+          zoomTargetLabel: "HTML preview",
+          closeTitle: "Close HTML preview viewer",
+        },
+        false,
+      );
+    });
+    preview.replaceChildren(frame, openButton);
   }
 }
 
@@ -2398,6 +2461,7 @@ export function renderRenderedMarkdownInto(
   attachRenderedCodeBlockControls(target, doc);
   attachRenderedCopyButtons(target, doc);
   attachRenderedSvgPreviewButtons(target, doc);
+  attachRenderedHtmlPreviews(target, doc);
   void renderMermaidBlocks(
     target,
     doc,

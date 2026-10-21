@@ -495,6 +495,34 @@ function isMermaidFenceLanguage(lang: string): boolean {
   return lang === "mermaid" || lang === "mmd";
 }
 
+function isHtmlFenceLanguage(lang: string): boolean {
+  return lang === "html" || lang === "htm";
+}
+
+/**
+ * Whether a fenced code block's raw source ends with its closing fence.
+ * Marked emits a code token for a fence that is still streaming (no closing
+ * line yet); its raw then ends inside the code instead of on a fence line.
+ */
+function isClosedCodeFence(raw: string): boolean {
+  const trimmed = raw.replace(/\s+$/, "");
+  const opener = trimmed.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+  if (!opener) return true;
+  const fence = opener[1];
+  const lastNewline = trimmed.lastIndexOf("\n");
+  if (lastNewline < 0) return false;
+  const closing = trimmed.slice(lastNewline + 1).trim();
+  return (
+    closing.length >= fence.length &&
+    closing.split("").every((char) => char === fence[0])
+  );
+}
+
+function renderHtmlPreview(code: string): string {
+  if (!code.trim()) return "";
+  return `<div class="llm-html-preview" data-llm-html-source="${escapeAttribute(code)}" aria-label="HTML preview"></div>`;
+}
+
 /**
  * Syntax highlighting is a pure function of `(language, trimmed code)` but it is
  * one of the most expensive steps in rendering a chat message. The chat panel
@@ -1826,11 +1854,16 @@ function renderCodeBlock(code: string, raw: string): string {
   const mermaidPreview = isMermaidFenceLanguage(lang)
     ? renderMermaidPreview(code)
     : "";
+  const htmlPreview =
+    isHtmlFenceLanguage(lang) && isClosedCodeFence(raw)
+      ? renderHtmlPreview(code)
+      : "";
   const html = [
     `<div class="llm-codeblock-shell" data-code-lang="${escapeAttribute(label)}">`,
     `<div class="llm-codeblock-header"><span class="llm-codeblock-lang">${escapeHtml(label)}</span></div>`,
     svgPreview,
     mermaidPreview,
+    htmlPreview,
     `<div class="llm-codeblock-body">${codeHtml}</div>`,
     `</div>`,
   ].join("");
