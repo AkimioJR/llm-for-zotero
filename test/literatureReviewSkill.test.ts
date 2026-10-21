@@ -85,6 +85,13 @@ describe("literature-review skill", function () {
       text,
       "With nothing attached, choose the papers from `library_retrieve` results without opening them with `paper_read`, then declare the digest part with their `targetIds`.",
     );
+    // With nothing attached and nothing relevant in the library, papers are
+    // found through the selection card, never reviewed from outside
+    // abstracts (user decision D2, 2026-10-20).
+    assert.include(
+      text,
+      "With nothing attached and nothing relevant in the library, find papers with `literature_search` `workflow:'review'` and the selection card; never write the review from outside abstracts.",
+    );
     // A paper with no text is named as not read: no retry, read or search.
     assert.include(
       text,
@@ -97,6 +104,10 @@ describe("literature-review skill", function () {
     );
     assert.notInclude(text, "a paper that still fails is named as not read");
     assert.include(text, "same `taskId` and no description");
+  });
+
+  it("ships as version 14", function () {
+    assert.equal(skill.version, 14);
   });
 
   it("asks the digest for the review question's per-paper result", function () {
@@ -137,7 +148,6 @@ describe("literature-review skill", function () {
       "name it by title with that reason in Scope and method, without a citation: a citation means the review uses the paper",
       "In Scope and method, name each paper you left out by title, with the reason and without a citation.",
       "In narrative and scoping reviews, include papers by their relevance to the question and name each excluded paper with its reason.",
-      "in other reviews, name each excluded paper with its reason",
     ]) {
       assert.include(text, rule, rule);
     }
@@ -146,6 +156,9 @@ describe("literature-review skill", function () {
       text,
       "exclusion accounting to systematic-review requests",
     );
+    // Scope and method owns the PRISMA and exclusion rule; Quality checks
+    // no longer repeats it (2026-10-20, to fit the skill body budget).
+    assert.notInclude(text, "in other reviews, name each excluded paper");
   });
 
   it("puts the per-paper summaries into the submitted document", function () {

@@ -4,6 +4,7 @@ import {
   AGENT_PERSONA_INSTRUCTIONS,
   AGENT_SEARCH_TOOL_ROUTES,
 } from "../src/agent/model/agentPersona";
+import { WHOLE_LIBRARY_SCOPE_RULE } from "../src/agent/context/turnContextEnvelope";
 import { BUILTIN_SKILL_FILES } from "../src/agent/skills";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
 
@@ -11,8 +12,8 @@ import { createBuiltInToolRegistry } from "../src/agent/tools";
  * Every behavioral prompt rule has one owner. An owner is one tool (its
  * description, model-facing description, and guidance together), the
  * persona (all its sections, the shared contracts it carries and the plugin
- * Agent's search-tool map), one shipped skill file, or the message
- * builder's hard-coded prompt sections. A marker phrase distinctive for a
+ * Agent's search-tool map), one shipped skill file, the message
+ * builder's hard-coded prompt sections, or the whole-library turn line. A marker phrase distinctive for a
  * rule must appear in exactly the expected owner.
  */
 function stubDependency(): never {
@@ -52,6 +53,9 @@ function collectOwnerTexts(): Map<string, string> {
   for (const [filename, content] of Object.entries(BUILTIN_SKILL_FILES)) {
     owners.set(`skill:${filename}`, content);
   }
+  // The nothing-attached turn line states the scope; routing stays in the
+  // persona's search routing contract.
+  owners.set("turnContext:wholeLibrary", WHOLE_LIBRARY_SCOPE_RULE);
   owners.set(
     "messageBuilder",
     readFileSync(
@@ -137,6 +141,26 @@ describe("prompt rules have a single owner", function () {
       owner: "persona",
     },
     {
+      rule: "with nothing attached, the library is searched in its own step",
+      marker: "search the library first, in a step of its own",
+      owner: "persona",
+    },
+    {
+      rule: "with nothing attached, relevant library papers answer, with an offer",
+      marker: "offer to search outside",
+      owner: "persona",
+    },
+    {
+      rule: "with nothing attached and none relevant, scholarly search runs unasked",
+      marker: "search outside without asking",
+      owner: "persona",
+    },
+    {
+      rule: "a review is never written from outside abstracts",
+      marker: "outside abstracts",
+      owner: "skill:literature-review.md",
+    },
+    {
       rule: "figure crops come only from paper_read figures mode",
       marker: "figure_crops",
       owner: "skill:analyze-figures.md",
@@ -162,6 +186,7 @@ describe("prompt rules have a single owner", function () {
     );
     assert.isTrue(owners.has("persona"));
     assert.isTrue(owners.has("messageBuilder"));
+    assert.isTrue(owners.has("turnContext:wholeLibrary"));
   });
 
   it("keeps no routing copy outside the search routing contract", function () {

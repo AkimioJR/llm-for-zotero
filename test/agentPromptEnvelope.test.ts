@@ -723,6 +723,26 @@ describe("agent prompt envelope paper scope", function () {
       WHOLE_LIBRARY_SCOPE_RULE,
       "only when the user explicitly asks for every paper in the library",
     );
+    // The line says what the scope is; a digest part is how chosen papers
+    // are read in depth, not a step every turn takes.
+    assert.include(
+      WHOLE_LIBRARY_SCOPE_RULE,
+      "Nothing is attached, so the turn's scope is the whole library and you choose its papers",
+    );
+    assert.include(
+      WHOLE_LIBRARY_SCOPE_RULE,
+      "to read the chosen papers in depth, declare a digest part",
+    );
+    // Routing (library first, then outside) has one owner, the search
+    // routing contract in the fixed prompt; the turn line does not repeat it.
+    for (const routing of [
+      "outside",
+      "literature_search",
+      "scholarly",
+      "offer",
+      "web",
+    ])
+      assert.notInclude(WHOLE_LIBRARY_SCOPE_RULE, routing, routing);
   });
 
   it("gives the whole-library rule only when nothing is attached", async function () {

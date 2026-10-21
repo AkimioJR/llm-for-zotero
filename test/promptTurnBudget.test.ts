@@ -64,12 +64,20 @@ import {
  * tool characters each for literature_search's description naming the find
  * path (workflow:'review' leads to the selection card) and that a review
  * search needs no gap, which replaced the card branch on every answer
- * result (2026-10-21), to 38,496, 37,229 and 38,594.
+ * result (2026-10-20), to 38,496, 37,229 and 38,594. Raised by 315 fixed
+ * prompt characters each for the search routing contract's nothing-attached
+ * rule: search the library in its own step before any outside search, then
+ * answer from relevant library papers with an offer to search outside, or
+ * search scholarly sources unasked when it holds none; several sources in one
+ * step only when something is attached (2026-10-20), to 38,811, 37,544 and
+ * 38,909. Reworded that rule and let the selection-card sentence also cover a
+ * review when the library holds no relevant papers (+24 net), to 38,835,
+ * 37,568 and 38,933.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 38_496,
-  paper: 37_229,
-  collection: 38_594,
+  global: 38_835,
+  paper: 37_568,
+  collection: 38_933,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

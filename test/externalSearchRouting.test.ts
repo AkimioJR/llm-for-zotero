@@ -61,6 +61,16 @@ function guidanceMatches(
 const NO_SHELL_RULE =
   "Read outside sources only with search and web-read tools, never with shell commands or scripts unless the user asks; if a text cannot be read, answer from what you have and say what was not read.";
 
+/**
+ * With nothing attached the library comes first, alone, and its results
+ * decide the next step: relevant papers are the answer, with an offer to
+ * search outside; none sends the request to scholarly sources unasked
+ * (user decisions 1b and 2a, 2026-10-20). Live evals had the library call
+ * and the first literature_search in the same round.
+ */
+const NOTHING_ATTACHED_RULE =
+  "With nothing attached, search the library first, in a step of its own, for any need it could hold, unless the user named an outside source or asked for papers not in the library. If it holds relevant papers, answer from them and offer to search outside; if it holds none, search outside without asking.";
+
 describe("external search guidance routing", function () {
   it("does not route absent semantic intent from English or multilingual words", function () {
     const { web, literature } = guidanceTools();
@@ -81,12 +91,23 @@ describe("external search guidance routing", function () {
       "use a source the user names",
       "use the nearest source that can hold it",
       "Skip a source that cannot hold the need",
+      // Several sources in one step only when something is attached: with
+      // nothing attached the library's results come first.
+      "when something is attached, check several in one step if the need is clear",
       "distinct needs use both",
-      "With nothing attached, look in the library first",
+      NOTHING_ATTACHED_RULE,
       "If a needed source is unavailable, say so",
       NO_SHELL_RULE,
     ])
       assert.include(SEARCH_ROUTING_CONTRACT, rule);
+    assert.notInclude(
+      SEARCH_ROUTING_CONTRACT,
+      "With nothing attached, look in the library first.",
+    );
+    assert.notInclude(
+      SEARCH_ROUTING_CONTRACT,
+      "and check several in one step when the need is clear",
+    );
     // The capability context's escape hatch stays for explicit or
     // unsupported work; outside reading has its own rule above.
     assert.include(
@@ -127,16 +148,19 @@ describe("external search guidance routing", function () {
     const fixedPrompt = rendered.inventory.fixedPrompt;
     assert.equal(count(fixedPrompt, SEARCH_ROUTING_CONTRACT), 1);
     assert.equal(count(fixedPrompt, NO_SHELL_RULE), 1);
+    assert.equal(count(fixedPrompt, NOTHING_ATTACHED_RULE), 1);
     assert.equal(count(fixedPrompt, AGENT_SEARCH_TOOL_ROUTES), 1);
     const turn = stringifyMessageContent(rendered.envelope.turnMessage.content);
     assert.notInclude(turn, "## Search routing");
     assert.notInclude(turn, NO_SHELL_RULE);
+    assert.notInclude(turn, NOTHING_ATTACHED_RULE);
     assert.notInclude(turn, cardRule);
 
     // Claude Code bridge: it sends the persona as its Agent-mode block.
     const bridgeBlock = AGENT_PERSONA_INSTRUCTIONS.join("\n\n");
     assert.equal(count(bridgeBlock, SEARCH_ROUTING_CONTRACT), 1);
     assert.equal(count(bridgeBlock, NO_SHELL_RULE), 1);
+    assert.equal(count(bridgeBlock, NOTHING_ATTACHED_RULE), 1);
     assert.notInclude(bridgeBlock, cardRule);
     assert.notInclude(bridgeBlock, "literature_review");
 
@@ -157,6 +181,7 @@ describe("external search guidance routing", function () {
       });
       assert.equal(count(manifest, SEARCH_ROUTING_CONTRACT), 1);
       assert.equal(count(manifest, NO_SHELL_RULE), 1);
+      assert.equal(count(manifest, NOTHING_ATTACHED_RULE), 1);
       assert.notInclude(manifest, cardRule);
       assert.notInclude(manifest, "literature_review");
     }

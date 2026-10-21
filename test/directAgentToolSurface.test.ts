@@ -74,11 +74,19 @@ describe("direct Agent model tool surface", function () {
     // (workflow:'review' leads to the selection card) and that a review
     // search needs no gap, which replaced the card branch on every answer
     // result, raised both caps by its measured 62 tool characters, to
-    // 25,252 and 34,851 (2026-10-21).
+    // 25,252 and 34,851 (2026-10-20). The search routing contract's
+    // nothing-attached rule (the library in its own step before any outside
+    // search, then a library answer with an offer to search outside, or
+    // scholarly search unasked when it holds nothing relevant; several
+    // sources in one step only when something is attached) raised the cap
+    // with the fixed prompt by its measured 315 characters, to 35,166
+    // (2026-10-20). Rewording that rule and extending the selection-card
+    // sentence to a review with no relevant library papers raised the cap by
+    // a net 24 characters, to 35,190.
     assert.isAtMost(serializedToolCharacters, 25_252);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      34_851,
+      35_190,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

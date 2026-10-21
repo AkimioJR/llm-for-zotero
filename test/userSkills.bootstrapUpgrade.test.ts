@@ -404,6 +404,7 @@ describe("user skill bootstrap upgrades", function () {
     ["evidence-based-qa", 12],
     ["literature-review", 11],
     ["literature-review", 12],
+    ["literature-review", 13],
   ] as const) {
     for (const mode of ["tracked", "untracked-native", "customized"] as const) {
       it(`preserves upgrade ownership for ${name} (${mode})`, async function () {
@@ -616,6 +617,7 @@ describe("user skill bootstrap upgrades", function () {
     "literature-review-v10",
     "literature-review-v11",
     "literature-review-v12",
+    "literature-review-v13",
     "library-analysis-v4",
     // The simplified texts main shipped at the same version numbers
     // (ad2c0fec) before the tool consolidation merged.

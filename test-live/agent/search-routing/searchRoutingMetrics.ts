@@ -142,6 +142,54 @@ export function statesAbsence(answer: string): boolean {
   return ABSENCE_PATTERNS.some((pattern) => pattern.test(answer));
 }
 
+/** Lowercase, with runs of whitespace and emphasis marks made one space. */
+function normalizeForMatch(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[*_`]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Approximate: whether the answer names one of the given paper titles. A
+ * title matches when its first 40 normalized characters appear in the
+ * answer; a paraphrased or translated title is missed.
+ */
+export function namesAnyTitle(answer: string, titles: string[]): boolean {
+  const text = normalizeForMatch(answer);
+  return titles.some((title) => {
+    const head = normalizeForMatch(title).slice(0, 40);
+    return head.length > 0 && text.includes(head);
+  });
+}
+
+/**
+ * Approximate: whether the answer offers to search outside the library. One
+ * sentence must hold an offer ("would you like", "do you want", "I can",
+ * "let me know if", "shall I", "want me to"), a search verb (search, look,
+ * find) and an outside or more-papers word (outside, beyond, external,
+ * online, web, scholarly, OpenAlex, databases, more, further, additional,
+ * new, other). English only; it misses other wordings and can fire on an
+ * offer that is not about outside sources.
+ */
+const OFFER_PATTERN =
+  /\b(?:would you like|do you want|want me to|shall i|should i|i can|i could|let me know if|if you(?:'d| would)? like|if you want)\b/i;
+const SEARCH_VERB_PATTERN = /\b(?:search|look|find)\w*/i;
+const OUTSIDE_WORD_PATTERN =
+  /\b(?:outside|beyond|external|online|web|scholarly|openalex|databases?|more|further|additional|new|other)\b/i;
+
+export function offersOutsideSearch(answer: string): boolean {
+  return answer
+    .split(/(?<=[.?!\u3002\uff1f\uff01])\s*|\n+/)
+    .some(
+      (sentence) =>
+        OFFER_PATTERN.test(sentence) &&
+        SEARCH_VERB_PATTERN.test(sentence) &&
+        OUTSIDE_WORD_PATTERN.test(sentence),
+    );
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -181,6 +229,12 @@ export type RoutingRepSummary = {
    * as, the first outside call. null when the rep made no outside call.
    */
   localBeforeOutside: boolean | null;
+  /**
+   * Whether a local call came in an earlier round than the first outside
+   * call, so its results were in before the model chose to go outside (a
+   * same-round call does not count). null when the rep made no outside call.
+   */
+  localResultBeforeOutside: boolean | null;
   /** Approximate: Outside searches that reached a provider, per family (the ledger's K). */
   outsideSearchesScholarly: number;
   outsideSearchesWeb: number;
@@ -253,6 +307,10 @@ export function summarizeRoutingRep(
       firstOutsideRound === null
         ? null
         : firstLocalRound !== null && firstLocalRound <= firstOutsideRound,
+    localResultBeforeOutside:
+      firstOutsideRound === null
+        ? null
+        : firstLocalRound !== null && firstLocalRound < firstOutsideRound,
     outsideSearchesScholarly: calls.filter(
       (call) => call.family === "scholarly" && reachedProvider(call),
     ).length,
@@ -306,6 +364,8 @@ export type SummaryRow = {
   card?: number;
   confirmations?: number;
   localBeforeOutside?: boolean | null;
+  /** A local call in an earlier round than the first outside call. */
+  localResultBeforeOutside?: boolean | null;
   /** Outside searches that reached a provider: scholarly and web. */
   searchesScholarly?: number;
   searchesWeb?: number;
@@ -316,6 +376,10 @@ export type SummaryRow = {
   latchRejections?: number;
   /** Approximate (statesAbsence). */
   absenceAnswer?: boolean;
+  /** Approximate (namesAnyTitle or a citation): the answer names library papers. */
+  namesLibraryPaper?: boolean;
+  /** Approximate (offersOutsideSearch). */
+  offersOutside?: boolean;
   reviewWorkflowCalls?: number;
   citesPaper?: boolean;
   answerChars?: number;
@@ -343,6 +407,17 @@ const SUMMARY_COLUMNS: Array<[string, (row: SummaryRow) => unknown]> = [
         : row.localBeforeOutside === null
           ? "n/a"
           : row.localBeforeOutside
+            ? "yes"
+            : "no",
+  ],
+  [
+    "local earlier",
+    (row) =>
+      row.localResultBeforeOutside === undefined
+        ? ""
+        : row.localResultBeforeOutside === null
+          ? "n/a"
+          : row.localResultBeforeOutside
             ? "yes"
             : "no",
   ],
@@ -375,6 +450,20 @@ const SUMMARY_COLUMNS: Array<[string, (row: SummaryRow) => unknown]> = [
     "absence~",
     (row) =>
       row.absenceAnswer === undefined ? "" : row.absenceAnswer ? "yes" : "no",
+  ],
+  [
+    "lib paper~",
+    (row) =>
+      row.namesLibraryPaper === undefined
+        ? ""
+        : row.namesLibraryPaper
+          ? "yes"
+          : "no",
+  ],
+  [
+    "offer~",
+    (row) =>
+      row.offersOutside === undefined ? "" : row.offersOutside ? "yes" : "no",
   ],
   ["review calls", (row) => row.reviewWorkflowCalls],
   [

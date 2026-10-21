@@ -36,7 +36,7 @@ export const OUTSIDE_SEARCH_STOP_NOTE =
   "If these results cover the need, stop searching and finish the request. Absence is also an answer: when two differently worded searches on the sources that index this field return no study that tests the claim, say so, name the searches, and give the closest studies as what was found. Search again only for one specific gap you can name.";
 
 /**
- * PROVISIONAL (2026-10-21, pending the user's decision): what a find or
+ * PROVISIONAL (2026-10-20, pending the user's decision): what a find or
  * recommend search (literature_search workflow:'review') must state.
  * "need": need is required, gap is not; "nothing": neither is required.
  * This one value is the switch; validation and the description follow it.

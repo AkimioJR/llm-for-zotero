@@ -302,6 +302,12 @@ const BUILTIN_BOOTSTRAP_RAW_HASHES: Partial<
     // shipped and as the canonical copy carrying its native `name:` line.
     "mujbgx",
     "18cssl2",
+    // v13 (v3.9.10 to v3.9.12), the text v14's nothing-relevant rule (find
+    // papers through the selection card, never review outside abstracts)
+    // extends, as shipped and as the canonical copy carrying its native
+    // `name:` line.
+    "15xumq",
+    "1rape47",
   ],
   "import-cited-reference.md": [
     "19bomz1",

@@ -18,8 +18,18 @@
  * each call's family (local, scholarly, web, card, other), the cards shown,
  * the model rounds, the wall time, and the answer's length and paper
  * citations. Hard checks are few and named per case (S1, S1-control, S1b,
- * S2, S10: no card; S1 family: the answer cites the paper; S4: the card
+ * S2, S8, S10: no card; S1 family: the answer cites the paper; S4: the card
  * still opens with five rows). Everything else is reported, not asserted.
+ *
+ * Nothing attached (S7, S8; user decisions 1b and 2a, 2026-10-20): the
+ * library is searched first and its results are in before any outside call
+ * ("local earlier": a local call in an earlier round than the first outside
+ * call). With relevant library papers (S8) the answer comes from them with
+ * an offer to search outside: no card (hard), and no outside call, library
+ * papers named or cited, and an offer (reported; the last two are
+ * approximate English heuristics, namesAnyTitle and offersOutsideSearch).
+ * With nothing relevant (S7) a find request goes to scholarly search and the
+ * card without asking.
  *
  * Baseline: on the unchanged code S1 is expected to fail its hard check.
  * With LLM_FOR_ZOTERO_ROUTING_BASELINE=1 every hard check is recorded as a
@@ -82,7 +92,9 @@ import {
 import {
   classifyTool,
   formatSummaryTable,
+  namesAnyTitle,
   observeToolResult,
+  offersOutsideSearch,
   redactSecrets,
   statesAbsence,
   summarizeRoutingRep,
@@ -217,6 +229,13 @@ type RepRecord = {
   citesPaper: boolean;
   /** Approximate: the answer says a search found no study (statesAbsence). */
   absenceAnswer: boolean;
+  /**
+   * Approximate: the answer cites a passage (every citable passage in this
+   * suite is a library paper's) or names a seeded paper's title.
+   */
+  namesLibraryPaper: boolean;
+  /** Approximate: the answer offers to search outside (offersOutsideSearch). */
+  offersOutside: boolean;
   hardFailures: string[];
   softResults: Record<string, boolean | null>;
 };
@@ -254,6 +273,11 @@ const CITES_PAPER = {
 const LOCAL_FIRST = {
   label: "local or library call before (or with) the first outside call",
   check: (rep: RepRecord) => rep.summary.localBeforeOutside,
+};
+/** Nothing attached: the library's results were in before going outside. */
+const LIBRARY_RESULT_FIRST = {
+  label: "library result before the first outside call (an earlier round)",
+  check: (rep: RepRecord) => rep.summary.localResultBeforeOutside,
 };
 
 const CASES: RoutingCase[] = [
@@ -427,6 +451,11 @@ const CASES: RoutingCase[] = [
     prompt: "search for papers on coral bleaching during marine heatwaves",
     soft: [
       LOCAL_FIRST,
+      LIBRARY_RESULT_FIRST,
+      {
+        label: "scholarly search used",
+        check: (rep) => rep.summary.familyCounts.scholarly > 0,
+      },
       {
         label: "card shown (a find request)",
         check: (rep) => rep.cards.length > 0,
@@ -438,8 +467,12 @@ const CASES: RoutingCase[] = [
     title: "nothing attached: papers on a topic present in the library",
     scope: "global",
     prompt: "search for papers on representational drift",
+    // The library holds relevant papers: answer from them, offer to search
+    // outside, no card (user decision 2a, 2026-10-20).
+    hard: [...NO_CARD],
     soft: [
       LOCAL_FIRST,
+      LIBRARY_RESULT_FIRST,
       {
         label: "library call made",
         check: (rep) => rep.summary.localCalls > 0,
@@ -447,6 +480,14 @@ const CASES: RoutingCase[] = [
       {
         label: "no outside call",
         check: (rep) => rep.summary.outsideCalls === 0,
+      },
+      {
+        label: "answer cites or names library papers (approximate)",
+        check: (rep) => rep.namesLibraryPaper,
+      },
+      {
+        label: "answer offers to search outside (approximate)",
+        check: (rep) => rep.offersOutside,
       },
     ],
   },
@@ -981,6 +1022,13 @@ describe("live: search routing and the evidence ladder", function () {
       paperCitationIdsUsed: paperUsed,
       citesPaper: paperUsed.length > 0,
       absenceAnswer: statesAbsence(answer),
+      namesLibraryPaper:
+        used.length > 0 ||
+        namesAnyTitle(
+          answer,
+          seeded.map((paper) => paper.title),
+        ),
+      offersOutside: offersOutsideSearch(answer),
       hardFailures: [],
       softResults: {},
     };
@@ -1200,6 +1248,7 @@ describe("live: search routing and the evidence ladder", function () {
           card: record.summary.familyCounts.card,
           confirmations: record.cards.length,
           localBeforeOutside: record.summary.localBeforeOutside,
+          localResultBeforeOutside: record.summary.localResultBeforeOutside,
           searchesScholarly: record.summary.outsideSearchesScholarly,
           searchesWeb: record.summary.outsideSearchesWeb,
           nudgeFired: record.summary.nudgeFired,
@@ -1208,6 +1257,8 @@ describe("live: search routing and the evidence ladder", function () {
           callsAfterLatch: record.summary.callsAfterLatch,
           latchRejections: record.summary.latchRejections,
           absenceAnswer: record.absenceAnswer,
+          namesLibraryPaper: record.namesLibraryPaper,
+          offersOutside: record.offersOutside,
           reviewWorkflowCalls: record.summary.reviewWorkflowCalls,
           citesPaper: record.citesPaper,
           answerChars: record.answerChars,

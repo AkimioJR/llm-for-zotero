@@ -40,7 +40,7 @@ describe("literature_search tool", function () {
     // owns that rule now; the description states mechanics only.
     assert.include(
       AGENT_SEARCH_TOOL_ROUTES,
-      "Show the paper selection card (literature_review) only when the user asks you to find or recommend papers.",
+      "Show the paper selection card (literature_review) only when the user asks you to find or recommend papers, or for a review when the library holds no relevant papers.",
     );
     assert.notInclude(tool.spec.description, "only when the user asks to find");
   });
