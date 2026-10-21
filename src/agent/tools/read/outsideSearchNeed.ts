@@ -36,18 +36,11 @@ export const OUTSIDE_SEARCH_STOP_NOTE =
   "If these results cover the need, stop searching and finish the request. Absence is also an answer: when two differently worded searches on the sources that index this field return no study that tests the claim, say so, name the searches, and give the closest studies as what was found. Search again only for one specific gap you can name.";
 
 /**
- * PROVISIONAL (2026-10-20, pending the user's decision): what a find or
- * recommend search (literature_search workflow:'review') must state.
- * "need": need is required, gap is not; "nothing": neither is required.
- * This one value is the switch; validation and the description follow it.
+ * A find-paper search (literature_search workflow:'review') states no
+ * reason: neither need nor gap (user decision 1a, 2026-10-20). Its results
+ * lead to the selection card, not to an answer. The description clause.
  */
-export const REVIEW_SEARCH_STATES = "need" as "need" | "nothing";
-
-/** The description clause for workflow:'review', from the switch above. */
-export const REVIEW_SEARCH_NEED_CLAUSE =
-  REVIEW_SEARCH_STATES === "need"
-    ? "workflow:'review' needs no gap"
-    : "workflow:'review' needs neither";
+export const REVIEW_SEARCH_NEED_CLAUSE = "workflow:'review' needs neither";
 
 export const OUTSIDE_SEARCH_NEED_MESSAGE =
   "Add need: not_in_scope_or_library (with gap: what the turn's papers and library lack), current_or_public_facts, or user_named_outside_source.";
@@ -66,24 +59,18 @@ function readGap(value: unknown): string | undefined {
 
 /**
  * The rejection for a call's need and gap, or null when they are valid.
- * A find or recommend search (workflow:'review') follows
- * REVIEW_SEARCH_STATES.
+ * A find-paper search (workflow:'review') states neither (user decision 1a).
  */
 export function outsideSearchNeedError(
   args: Record<string, unknown>,
   options: { review?: boolean } = {},
 ): string | null {
   const need = args.need;
-  if (need === HOST_ACTION_SEARCH_NEED) return null;
-  if (options.review && REVIEW_SEARCH_STATES === "nothing") return null;
+  if (need === HOST_ACTION_SEARCH_NEED || options.review) return null;
   if (!OUTSIDE_SEARCH_NEEDS.includes(need as OutsideSearchNeed)) {
     return OUTSIDE_SEARCH_NEED_MESSAGE;
   }
-  if (
-    need === "not_in_scope_or_library" &&
-    !options.review &&
-    !readGap(args.gap)
-  ) {
+  if (need === "not_in_scope_or_library" && !readGap(args.gap)) {
     return OUTSIDE_SEARCH_GAP_MESSAGE;
   }
   return null;

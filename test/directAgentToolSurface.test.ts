@@ -82,11 +82,18 @@ describe("direct Agent model tool surface", function () {
     // with the fixed prompt by its measured 315 characters, to 35,166
     // (2026-10-20). Rewording that rule and extending the selection-card
     // sentence to a review with no relevant library papers raised the cap by
-    // a net 24 characters, to 35,190.
-    assert.isAtMost(serializedToolCharacters, 25_252);
+    // a net 24 characters, to 35,190. literature_search's description
+    // making workflow:'answer' the default for every search that informs an
+    // answer, with workflow:'review' only for a request for papers
+    // themselves, lowered both caps by its measured 3 tool characters, to
+    // 25,249 and 35,187 (2026-10-20). Restoring "for any need it could hold" to
+    // the nothing-attached rule (+18 fixed) and dropping "only" and naming
+    // workflow:'review' in the metadata sentence (+10 tool net) raised the caps
+    // by the measured delta, to 25,259 and 35,215 (2026-10-20).
+    assert.isAtMost(serializedToolCharacters, 25_259);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      35_190,
+      35_215,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

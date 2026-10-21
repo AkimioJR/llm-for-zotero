@@ -312,13 +312,12 @@ describe("workflow: expandable ranked discovery", function () {
         `discovery-import-${stamp}`,
         "Find three papers relevant to this paper for me.",
       );
+      // A find-paper search states no reason (user decision 1a).
       const search = await run(discovery, "literature_search", {
         mode: "search",
         workflow: "review",
         query: "discovery import fixture",
         limit: 12,
-        need: "not_in_scope_or_library",
-        gap: "The library has no other papers on this topic.",
       });
       const found = search.content as {
         candidateSetId: string;

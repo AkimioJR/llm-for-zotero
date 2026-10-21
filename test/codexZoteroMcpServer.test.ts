@@ -1401,7 +1401,7 @@ describe("Zotero MCP server", function () {
     // In the plugin, a find or recommend search leads to the card.
     assert.include(
       literature.spec.description,
-      "its results lead to the selection card (literature_review)",
+      "it leads to the selection card (literature_review)",
     );
     registry.register(literature);
     registry.register(createLibraryRetrieveTool({} as never));

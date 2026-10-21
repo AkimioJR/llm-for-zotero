@@ -72,12 +72,17 @@ import {
  * step only when something is attached (2026-10-20), to 38,811, 37,544 and
  * 38,909. Reworded that rule and let the selection-card sentence also cover a
  * review when the library holds no relevant papers (+24 net), to 38,835,
- * 37,568 and 38,933.
+ * 37,568 and 38,933. Lowered by 3 each when literature_search's description
+ * made workflow:'answer' the default for every search that informs an
+ * answer and kept workflow:'review' for a request for papers themselves
+ * (2026-10-20), to 38,832, 37,565 and 38,930. Raised by 28 each (18 fixed
+ * prompt for "for any need it could hold" in the nothing-attached rule, 10 net
+ * tool characters) on 2026-10-20, to 38,860, 37,593 and 38,958.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 38_835,
-  paper: 37_568,
-  collection: 38_933,
+  global: 38_860,
+  paper: 37_593,
+  collection: 38_958,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

@@ -371,7 +371,10 @@ export async function identifyLiteratureCandidates(
  * ledger and stop note); MCP callers get the closing note alone. A
  * workflow:'review' search opened a discovery, whose candidates import only
  * through the card (discoveryImportRefusal), so its next step offers the
- * card alone.
+ * card alone. Only a Find more continuation (revision above 0) forbids prose
+ * outright; a first batch may end in an answer when the user did not ask for
+ * papers themselves, so an evidence question sent here by mistake is not
+ * forced to the card.
  */
 const ANSWER_ROUTE =
   "Unless the user asked to import papers or only to find or recommend them, answer the user's question from these results as supporting evidence; the turn's own papers remain the primary source.";
@@ -381,9 +384,9 @@ const CANDIDATE_ROUTE = `${ANSWER_ROUTE} ${IMPORT_ROUTE}`;
 
 function discoveryInstruction(record: AgentToolResultHandleRecord): string {
   const s = record.content as LiteratureDiscoverySession;
-  const select = `titles and abstracts and select ${s.request.batchSize} ${s.papers.length ? "additional " : ""}genuinely relevant papers in ranked order${s.papers.length ? "" : " (pass the number the user asked for as count when it differs)"}. Respect the user's topic and these constraints: ${JSON.stringify(s.request)}. Assess unused saved candidates first; search further if needed. A further search must set need. To expand a provider list, increase its retrieval limit rather than repeating the same bounded request.`;
+  const select = `titles and abstracts and select ${s.request.batchSize} ${s.papers.length ? "additional " : ""}genuinely relevant papers in ranked order${s.papers.length ? "" : " (pass the number the user asked for as count when it differs)"}. Respect the user's topic and these constraints: ${JSON.stringify(s.request)}. Assess unused saved candidates first; search further if needed. A further search uses workflow:'review'. To expand a provider list, increase its retrieval limit rather than repeating the same bounded request.`;
   const review = `literature_review with sessionId '${record.handle}', revision ${s.revision}, NEW candidateSetId/candidateIndex selections and evidence-based relevance reasons. Do not repeat displayed papers or dump the raw pool. If fewer qualify, explain shortfallReason; use outcome 'no_more' when no further relevant matches were found, or 'search_failed' for a retrieval failure. Empty selections with an explanation are allowed.`;
-  return `Assess ${select} Call ${review} Never import during discovery or finish with prose instead of the card.`;
+  return `Assess ${select} Call ${review} ${s.revision ? "Never import during discovery or finish with prose instead of the card." : "Never import during discovery. If the user asked for papers themselves, finish with the card, not prose; otherwise answer without it."}`;
 }
 
 export async function prepareLiteratureDiscoveryReview(

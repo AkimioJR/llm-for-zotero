@@ -98,8 +98,8 @@ describe("ranked literature discovery workflow", function () {
     extra: Record<string, unknown> = {},
   ) {
     const tool = createLiteratureSearchTool(gateway as never);
+    // A find-paper search states no reason (user decision 1a, 2026-10-20).
     const input = tool.validate({
-      ...OUTSIDE_NEED,
       mode: "search",
       workflow: "review",
       query: "population coding",
@@ -242,7 +242,58 @@ describe("ranked literature discovery workflow", function () {
     }
   });
 
-  it("does not accept prose as completed discovery while a shortlist review is still required", async function () {
+  it("lets the model choose the card or its answer when prose follows a paper-finding search", async function () {
+    // Live evals (2026-10-20): an evidence question opened a discovery with
+    // workflow:'review', and the gate replaced a full answer with an
+    // unrequested card. The correction offers both paths; the model, not a
+    // host reading of the user's words, picks one.
+    const context = makeContext();
+    const content = await search(context);
+    const controller = new AgentFinalAnswerController(context.request);
+    const records = [{ name: "literature_search", ok: true, content }];
+    const first = await controller.evaluate({
+      candidateText: "Two later studies found the same effect.",
+      canCorrect: true,
+      toolExecutionRecords: records,
+    });
+    assert.equal(first.kind, "correct");
+    if (first.kind === "correct") {
+      // Path (a): the user asked for papers themselves; the card, as before.
+      assert.include(
+        first.correction,
+        "If the user asked for papers themselves",
+      );
+      assert.include(
+        first.correction,
+        "Use the active discovery sessionId and revision",
+      );
+      assert.include(first.correction, "call literature_review");
+      assert.include(first.correction, "Do not import silently");
+      // Path (b): otherwise the answer is given again, without the card.
+      assert.include(
+        first.correction,
+        "Otherwise, do not call literature_review: give your answer again as the final answer",
+      );
+    }
+    // The model chose path (b): its answer is accepted, and the remaining
+    // gates still run.
+    const second = await controller.evaluate({
+      candidateText: "Two later studies found the same effect.",
+      canCorrect: true,
+      toolExecutionRecords: records,
+    });
+    assert.equal(second.kind, "accept");
+    // A third look (after a later gate's correction) still accepts.
+    const third = await controller.evaluate({
+      candidateText: "Two later studies found the same effect.",
+      canCorrect: true,
+      toolExecutionRecords: records,
+    });
+    assert.equal(third.kind, "accept");
+  });
+
+  it("closes a discovery when the model takes the card after the correction", async function () {
+    // Path (a): the user asked for papers, so the model shows the card.
     const context = makeContext();
     const content = await search(context);
     const controller = new AgentFinalAnswerController(context.request);
@@ -252,14 +303,73 @@ describe("ranked literature discovery workflow", function () {
       toolExecutionRecords: [{ name: "literature_search", ok: true, content }],
     });
     assert.equal(first.kind, "correct");
-    if (first.kind === "correct")
-      assert.include(first.correction, "literature_review");
     const second = await controller.evaluate({
-      candidateText: "Here are some papers.",
+      candidateText: "Choose the papers to import on the card.",
       canCorrect: true,
+      toolExecutionRecords: [
+        { name: "literature_search", ok: true, content },
+        {
+          name: "literature_review",
+          ok: true,
+          content: { reviewRequired: true, discoveryPhase: "review" },
+        },
+      ],
+    });
+    assert.equal(second.kind, "accept");
+  });
+
+  it("accepts first-batch prose when no correction can be given before the card", async function () {
+    const context = makeContext();
+    const content = await search(context);
+    const controller = new AgentFinalAnswerController(context.request);
+    const decision = await controller.evaluate({
+      candidateText: "Here are some papers.",
+      canCorrect: false,
       toolExecutionRecords: [{ name: "literature_search", ok: true, content }],
     });
-    assert.equal(second.kind, "fail");
+    // Finish-only step or last round: the card cannot follow, and failing
+    // would only lose the answer.
+    assert.equal(decision.kind, "accept");
+  });
+
+  it("keeps a Find more expansion card-only: prose is corrected once, then fails", async function () {
+    // The user clicked Find more on a card, so prose is never the answer.
+    const expanding = {
+      name: "literature_review",
+      ok: true,
+      content: {
+        reviewRequired: true,
+        discoveryPhase: "expanding",
+        sessionId: "trh_active",
+        revision: 1,
+        batchSize: 5,
+      },
+    };
+    // An expansion's own further search carries the new revision.
+    const expansionSearch = {
+      name: "literature_search",
+      ok: true,
+      content: { reviewRequired: true, sessionId: "trh_active", revision: 1 },
+    };
+    for (const records of [[expanding], [expanding, expansionSearch]]) {
+      const controller = new AgentFinalAnswerController(makeContext().request);
+      const first = await controller.evaluate({
+        candidateText: "Here are more papers.",
+        canCorrect: true,
+        toolExecutionRecords: records,
+      });
+      assert.equal(first.kind, "correct");
+      if (first.kind === "correct") {
+        assert.include(first.correction, "select only NEW papers");
+        assert.notInclude(first.correction, "give your answer again");
+      }
+      const second = await controller.evaluate({
+        candidateText: "Here are more papers.",
+        canCorrect: true,
+        toolExecutionRecords: records,
+      });
+      assert.equal(second.kind, "fail");
+    }
   });
 
   it("does not close a discovery with a direct import of its candidates", async function () {
@@ -285,12 +395,15 @@ describe("ranked literature discovery workflow", function () {
     assert.equal(first.kind, "correct");
     if (first.kind === "correct")
       assert.include(first.correction, "literature_review");
+    // discoveryImportRefusal (the host refusing the import before it runs)
+    // guards imports, not this gate: after the correction, a second prose
+    // answer is the model's choice and is accepted.
     const second = await controller.evaluate({
       candidateText: "Imported three papers into the new collection.",
       canCorrect: true,
       toolExecutionRecords,
     });
-    assert.equal(second.kind, "fail");
+    assert.equal(second.kind, "accept");
   });
 
   it("accepts an explicit import: an answer-workflow search, then library_import", async function () {
@@ -605,9 +718,13 @@ describe("ranked literature discovery workflow", function () {
     if (more.kind !== "deliver") throw new Error("Did not continue discovery");
     const continuation = more.toolMessageContent as any;
     assert.equal(continuation.batchSize, 3);
-    // Find more may search again; that search must state its need, or the
-    // tool rejects it.
-    assert.include(continuation.nextStep, "A further search must set need.");
+    // Find more may search again; that search stays a find-paper search,
+    // which states no reason (user decision 1a, 2026-10-20).
+    assert.include(
+      continuation.nextStep,
+      "A further search uses workflow:'review'.",
+    );
+    assert.notInclude(continuation.nextStep, "must set need");
     assert.notInclude(continuation.nextStep, OUTSIDE_SEARCH_STOP_NOTE);
     let error = "";
     try {
@@ -690,20 +807,21 @@ describe("ranked literature discovery workflow", function () {
     // what the model reads.
     const description = createLiteratureSearchTool(gateway as never).spec
       .description;
+    assert.include(description, "and explicit imports (then library_import)");
+    // Every search that informs an answer takes workflow:'answer', named
+    // for the question live evals sent to the card (2026-10-20).
     assert.include(
       description,
-      "explicit imports use workflow:'answer', then library_import",
+      "Use workflow:'answer' for any search that informs an answer, including whether other studies found or tested something",
     );
-    // A find or recommend request names its own workflow, which leads to
-    // the card; answer results no longer carry a card branch.
+    // Only a request for papers themselves takes workflow:'review', which
+    // leads to the card; answer results carry no card branch.
     assert.include(
       description,
-      "For a find or recommend request, use workflow:'review'; its results lead to the selection card (literature_review)",
+      "Use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers); it leads to the selection card (literature_review); discovery never imports silently.",
     );
-    assert.include(
-      description,
-      "workflow:'answer' returns evidence for an answer",
-    );
+    assert.notInclude(description, "For a find or recommend request");
+    assert.notInclude(description, "to choose from");
   });
 
   it("offers a discovery only the selection card in its next step", async function () {
@@ -718,10 +836,11 @@ describe("ranked literature discovery workflow", function () {
     assert.include(nextStep, content.sessionId);
     assert.include(
       nextStep,
-      "Never import during discovery or finish with prose instead of the card",
+      "Never import during discovery. If the user asked for papers themselves, finish with the card, not prose; otherwise answer without it.",
     );
+    assert.notInclude(nextStep, "finish with prose instead of the card");
     // A discovery ends with the card, not an answer: no stop note.
-    assert.include(nextStep, "A further search must set need.");
+    assert.include(nextStep, "A further search uses workflow:'review'.");
     assert.notInclude(nextStep, OUTSIDE_SEARCH_STOP_NOTE);
   });
 

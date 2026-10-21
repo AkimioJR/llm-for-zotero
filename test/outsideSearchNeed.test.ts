@@ -5,7 +5,6 @@ import {
   OUTSIDE_SEARCH_GAP_MESSAGE,
   OUTSIDE_SEARCH_NEED_MESSAGE,
   OUTSIDE_SEARCH_NEED_SENTENCE,
-  REVIEW_SEARCH_STATES,
 } from "../src/agent/tools/read/outsideSearchNeed";
 import { AgentToolRegistry } from "../src/agent/tools/registry";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
@@ -70,10 +69,10 @@ describe("outside search need", function () {
   describe("literature_search", function () {
     const tool = createLiteratureSearchTool({} as never);
 
-    it("rejects an evidence search without a need, in every workflow", function () {
+    it("rejects an answer search without a need", function () {
       for (const args of [
         { mode: "search", query: "place cells" },
-        { mode: "search", query: "place cells", workflow: "review" },
+        { mode: "search", query: "place cells", workflow: "answer" },
         { mode: "recommendations", itemId: 5 },
         { mode: "references", itemId: 5 },
         { mode: "citations", itemId: 5 },
@@ -120,29 +119,27 @@ describe("outside search need", function () {
       }
     });
 
-    it("requires need but not gap on a find or recommend search (provisional switch)", function () {
-      // REVIEW_SEARCH_STATES in outsideSearchNeed.ts is the switch; this
-      // pins its provisional value, "need".
-      assert.equal(REVIEW_SEARCH_STATES, "need");
-      assert.isTrue(
-        tool.validate({
+    it("requires neither need nor gap on a find-paper search (user decision 1a)", function () {
+      // A find or recommend search (workflow:'review') states no reason
+      // (user decision 1a, 2026-10-20); a live find request lost a round
+      // to a rejected review search without need.
+      for (const args of [
+        { mode: "search", query: "place cells", workflow: "review" },
+        { mode: "recommendations", itemId: 5, workflow: "review" },
+        {
           mode: "search",
           query: "place cells",
           workflow: "review",
           need: "not_in_scope_or_library",
-        }).ok,
+        },
+      ]) {
+        assert.isTrue(tool.validate(args).ok, JSON.stringify(args));
+      }
+      assert.include(tool.spec.description, "workflow:'review' needs neither");
+      assert.notInclude(
+        tool.spec.description,
+        "workflow:'review' needs no gap",
       );
-      assert.equal(
-        errorOf(
-          tool.validate({
-            mode: "search",
-            query: "place cells",
-            workflow: "review",
-          }),
-        ),
-        OUTSIDE_SEARCH_NEED_MESSAGE,
-      );
-      assert.include(tool.spec.description, "workflow:'review' needs no gap");
     });
 
     it("exempts metadata lookups and accepts the host-only value", function () {
