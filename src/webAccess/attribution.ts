@@ -12,6 +12,8 @@ const SOURCE_ID_PATTERN = /^web_[a-z0-9]+$/;
 const MARKER_BEFORE_PUNCTUATION_PATTERN =
   /[ \t]*<!--llm-web-source:[^<>]*?-->(?=[,.;:!?)\]，。；：！？）])/g;
 
+const TABLE_ROW_PATTERN = /^\s*\|/;
+
 function findStreamingMarkerStart(line: string): number {
   const completePrefixStart = line.indexOf(MARKER_PREFIX);
   if (completePrefixStart >= 0) return completePrefixStart;
@@ -224,6 +226,12 @@ function preserveDeclaredParagraphBoundaries(
     if (!after.startsWith("\n") || after.startsWith("\n\n")) continue;
     const nextLine = after.slice(1).split("\n", 1)[0] || "";
     if (!nextLine.trim()) continue;
+    // A blank line inside a table ends it and turns later rows into text.
+    if (TABLE_ROW_PATTERN.test(nextLine)) continue;
+    const lineStart = normalized.lastIndexOf("\n", marker.start - 1) + 1;
+    if (TABLE_ROW_PATTERN.test(normalized.slice(lineStart, marker.start))) {
+      continue;
+    }
     // A following list marker is already a CommonMark block boundary. Adding
     // a blank line would turn a compact list into a loose one.
     if (/^\s*(?:[-+*]|\d{1,9}[.)])\s+/.test(nextLine)) continue;
@@ -341,6 +349,9 @@ function repairMidLineMarkers(text: string): string {
 function repairLine(line: string): string {
   const matches = Array.from(line.matchAll(COMPLETE_MARKER_PATTERN));
   if (!matches.length) return line;
+  // Moving a marker out of a table cell would change the row; leave it for the
+  // validator to reject.
+  if (TABLE_ROW_PATTERN.test(line)) return line;
   const last = matches[matches.length - 1];
   if (
     matches.length === 1 &&
@@ -355,7 +366,14 @@ function repairLine(line: string): string {
   // punctuation that followed it ("page , while").
   const prose = line
     .replace(MARKER_BEFORE_PUNCTUATION_PATTERN, "")
-    .replace(COMPLETE_MARKER_PATTERN, "");
+    .replace(
+      /([ \t]*)<!--llm-web-source:[^<>]*?-->[ \t]*/g,
+      (found, indent: string, offset: number, whole: string) => {
+        // Keep a line's indentation; it can place the line inside a list.
+        if (!whole.slice(0, offset).trim()) return indent;
+        return whole.slice(offset + found.length).trim() ? " " : "";
+      },
+    );
   if (!prose.trim()) return line;
   const ids = Array.from(
     new Set(

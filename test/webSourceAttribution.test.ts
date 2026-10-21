@@ -207,8 +207,46 @@ describe("web source attribution", function () {
       const a = assessWebAttribution(`${M("web_abc1234")} Claim text.`, two);
       assert.equal(a.status, "valid");
       if (a.status !== "valid") return;
-      assert.equal(a.cleanText, " Claim text.");
+      assert.equal(a.cleanText, "Claim text.");
       assert.equal(a.anchors[0].offset, a.cleanText.length);
+    });
+
+    it("leaves one space where a mid-line marker sat between words", function () {
+      const a = assessWebAttribution(
+        `A ${M("web_abc1234")} B ${M("web_def5678")} C.`,
+        two,
+      );
+      assert.equal(a.status, "valid");
+      if (a.status !== "valid") return;
+      assert.equal(a.cleanText, "A B C.");
+      const nested = assessWebAttribution(
+        `- Item\n  ${M("web_abc1234")} continued text.`,
+        two,
+      );
+      assert.equal(nested.status, "valid");
+      if (nested.status !== "valid") return;
+      assert.equal(nested.cleanText, "- Item\n  continued text.");
+    });
+
+    it("rejects a marker inside a table row and leaves the row unchanged", function () {
+      const row = `| GPT-4 ${M("web_abc1234")} | 2023 |`;
+      const text = `| Model | Year |\n|---|---|\n${row}\n| Claude | 2024 |`;
+      assert.equal(assessWebAttribution(text, two).status, "invalid");
+      const header = `| Model ${M("web_abc1234")} | Year |\n|---|---|\n| A | 1 |`;
+      assert.equal(assessWebAttribution(header, two).status, "invalid");
+    });
+
+    it("inserts no blank line inside a table for an end-of-row marker", function () {
+      const a = assessWebAttribution(
+        `| Model | Year |\n|---|---|\n| GPT-4 | 2023 |${M("web_abc1234")}\n| Claude | 2024 |`,
+        two,
+      );
+      assert.equal(a.status, "valid");
+      if (a.status !== "valid") return;
+      assert.equal(
+        a.cleanText,
+        "| Model | Year |\n|---|---|\n| GPT-4 | 2023 |\n| Claude | 2024 |",
+      );
     });
 
     it("still rejects unrepairable lines and quotes the offending text", function () {
