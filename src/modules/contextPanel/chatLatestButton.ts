@@ -46,15 +46,20 @@ export function bindChatLatestButton({
     const key = getConversationKey();
     const remaining =
       chatBox.scrollHeight - chatBox.clientHeight - chatBox.scrollTop;
-    button.hidden =
+    const hidden =
       key === null ||
       chatBox.clientHeight <= 0 ||
       remaining <= AUTO_SCROLL_BOTTOM_THRESHOLD;
     const pending = key !== null && isRequestPending(key);
     const label = t(pending ? STREAMING_LABEL : LATEST_LABEL);
-    button.dataset.pending = String(pending);
-    button.title = label;
-    button.setAttribute("aria-label", label);
+    // Write only what changed: this runs on every scroll and resize, and
+    // each attribute write is a mutation other observers react to.
+    if (button.hidden !== hidden) button.hidden = hidden;
+    if (button.dataset.pending !== String(pending))
+      button.dataset.pending = String(pending);
+    if (button.title !== label) button.title = label;
+    if (button.getAttribute("aria-label") !== label)
+      button.setAttribute("aria-label", label);
   };
   const scheduler = createCoalescedFrameScheduler({
     getWindow: () => win,

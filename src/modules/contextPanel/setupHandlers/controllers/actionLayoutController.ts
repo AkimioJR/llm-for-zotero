@@ -13,6 +13,9 @@ import {
 type ActionLabelMode = "icon" | "full";
 type ModelLabelMode = "icon" | "full-single" | "full-wrap2";
 type ActionLayoutMode = "icon" | "half" | "full";
+/** Extra width a wider action-row state needs before it replaces a narrower one. */
+const ACTION_LAYOUT_GROW_MARGIN_PX = 4;
+
 type ActionRevealState = {
   send: ActionLabelMode;
   reasoning: ActionLabelMode;
@@ -112,6 +115,8 @@ export function createActionLayoutController(
     reasoningText: string | null;
     mode: string | undefined;
   } | null = null;
+  // The state the last pass applied, as "send/reasoning/model".
+  let appliedStateKey: string | null = null;
 
   const applyResponsiveActionButtonsLayout = () => {
     if (
@@ -357,9 +362,6 @@ export function createActionLayoutController(
       return leftRequiredWidth + rightRequiredWidth + rowGap;
     };
 
-    const doesStateFit = (state: ActionRevealState) =>
-      getAvailableRowWidth() + 1 >= getRequiredWidth(state);
-
     const getPanelLayoutMode = (state: ActionRevealState): ActionLayoutMode => {
       if (
         state.send === "full" &&
@@ -510,16 +512,34 @@ export function createActionLayoutController(
       candidateStates.splice(1, 0, { ...fullState, model: "full-wrap2" });
     }
 
-    applyMeasurementBaseline();
-    for (const state of candidateStates) {
-      if (!doesStateFit(state)) continue;
+    const stateKey = (state: ActionRevealState) =>
+      `${state.send}/${state.reasoning}/${state.model}`;
+    const appliedIndex = candidateStates.findIndex(
+      (state) => stateKey(state) === appliedStateKey,
+    );
+    const applyChosenState = (state: ActionRevealState) => {
       applyState(state);
+      appliedStateKey = stateKey(state);
       rememberLayout();
+    };
+
+    applyMeasurementBaseline();
+    for (const [index, state] of candidateStates.entries()) {
+      // A wider state than the applied one must fit with room to spare.
+      // Switching states can move the row's width by a pixel; with no margin
+      // the two states took turns on every frame, and each switch made the
+      // whole panel lay out and measure again.
+      const margin =
+        appliedIndex >= 0 && index < appliedIndex
+          ? ACTION_LAYOUT_GROW_MARGIN_PX
+          : 0;
+      if (getAvailableRowWidth() + 1 < getRequiredWidth(state) + margin)
+        continue;
+      applyChosenState(state);
       return;
     }
 
-    applyState(iconOnlyState);
-    rememberLayout();
+    applyChosenState(iconOnlyState);
   };
 
   return {
