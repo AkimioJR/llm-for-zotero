@@ -151,6 +151,15 @@ describe("prompt rules have a single owner", function () {
       owner: "persona",
     },
     {
+      // The card rule and the workflow:'review' sentence both carry it, so
+      // neither sends a nothing-attached find request past relevant library
+      // papers (user decision 2a, 2026-10-20).
+      rule: "with nothing attached, the card waits for an empty library or a request for outside papers",
+      marker:
+        "with nothing attached, only if the library holds none relevant or the user asks for papers outside it",
+      owner: ["persona", "tool:literature_search"],
+    },
+    {
       rule: "with nothing attached, the library is searched in its own step",
       marker: "search the library first, in a step of its own",
       owner: "persona",

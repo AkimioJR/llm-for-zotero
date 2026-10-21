@@ -14,7 +14,12 @@ import {
   tracksOutsideSearchTurn,
   webSearchUnavailableMessage,
 } from "../src/agent/tools/read/outsideSearchLedger";
-import { OUTSIDE_SEARCH_STOP_NOTE } from "../src/agent/tools/read/outsideSearchNeed";
+import {
+  OUTSIDE_SEARCH_NEED_MESSAGE,
+  OUTSIDE_SEARCH_STOP_NOTE,
+  REVIEW_WITHOUT_CARD_NEED_MESSAGE,
+} from "../src/agent/tools/read/outsideSearchNeed";
+import { EPHEMERAL_PAPER_CONVERSATION_KEY_BASE } from "../src/shared/conversationKeySpace";
 import { createLiteratureSearchTool } from "../src/agent/tools/read/literatureSearch";
 import { createWebSearchTool } from "../src/agent/tools/read/webSearch";
 import {
@@ -62,19 +67,12 @@ const NEED = {
 
 type FetchCall = string;
 
-function openAlexFetch(
-  calls: FetchCall[],
-  status = 200,
-  headers: Record<string, string> = {},
-): typeof fetch {
+function openAlexFetch(calls: FetchCall[], status = 200): typeof fetch {
   return (async (url: string | URL | Request) => {
     calls.push(String(url));
     return {
       ok: status >= 200 && status < 300,
       status,
-      headers: {
-        get: (name: string) => headers[name.toLowerCase()] ?? null,
-      },
       json: async () => ({
         results: [
           {
@@ -219,7 +217,7 @@ describe("literature_search outside-search discipline", function () {
 
   it("throws a typed rate-limit error from search mode instead of an empty result", async function () {
     const calls: FetchCall[] = [];
-    globalThis.fetch = openAlexFetch(calls, 429, { "retry-after": "30" });
+    globalThis.fetch = openAlexFetch(calls, 429);
     const service = new LiteratureSearchService(gateway as never);
     let caught: unknown;
     try {
@@ -234,7 +232,6 @@ describe("literature_search outside-search discipline", function () {
     const error = caught as LiteratureProviderHttpError;
     assert.equal(error.kind, "rate_limit");
     assert.equal(error.status, 429);
-    assert.equal(error.retryAfterMs, 30_000);
   });
 
   it("surfaces other OpenAlex search failures as errors", async function () {
@@ -340,11 +337,10 @@ describe("literature_search outside-search discipline", function () {
     globalThis.fetch = openAlexFetch(calls, 429);
     let message = "";
     try {
-      await run({
-        mode: "search",
-        query: "place cells",
-        need: "host_action",
-      });
+      await run(
+        { mode: "search", query: "place cells", need: "host_action" },
+        { ...makeContext(), hostAction: true },
+      );
     } catch (error) {
       message = String((error as Error).message);
     }
@@ -358,6 +354,60 @@ describe("literature_search outside-search discipline", function () {
     })) as unknown as typeof fetch;
     await run({ mode: "metadata", title: "A paper" });
     assert.equal(outsideSearchCount(RUN, "scholarly"), 0);
+  });
+
+  it("rejects the host-only need from a model call before any search", async function () {
+    // The schema enum hides host_action, but not every provider enforces
+    // enums; only the action executor marks a call as host-built.
+    const calls: FetchCall[] = [];
+    globalThis.fetch = openAlexFetch(calls);
+    let message = "";
+    try {
+      await run({ mode: "search", query: "place cells", need: "host_action" });
+    } catch (error) {
+      message = String((error as Error).message);
+    }
+    assert.equal(message, OUTSIDE_SEARCH_NEED_MESSAGE);
+    assert.lengthOf(calls, 0);
+    assert.equal(outsideSearchCount(RUN, "scholarly"), 0);
+  });
+
+  it("asks a find-paper search for a reason where no selection card can open", async function () {
+    // workflow:'review' skips the reason only because it leads to the card;
+    // a side chat or an MCP client without literature_review has no card.
+    const sideChat: AgentToolContext = {
+      ...makeContext(),
+      request: resolvedAgentRequest({
+        conversationKey: EPHEMERAL_PAPER_CONVERSATION_KEY_BASE,
+        mode: "agent",
+        userText: "Find papers on drift.",
+        libraryID: 1,
+      }),
+    };
+    const mcpWithoutCard: AgentToolContext = {
+      ...makeContext(),
+      isToolVisible: (spec) => spec.name !== "literature_review",
+    };
+    const calls: FetchCall[] = [];
+    globalThis.fetch = openAlexFetch(calls);
+    const review = { mode: "search", query: "drift", workflow: "review" };
+    for (const context of [sideChat, mcpWithoutCard]) {
+      let message = "";
+      try {
+        await run(review, context);
+      } catch (error) {
+        message = String((error as Error).message);
+      }
+      assert.equal(message, REVIEW_WITHOUT_CARD_NEED_MESSAGE);
+      assert.include(message, OUTSIDE_SEARCH_NEED_MESSAGE);
+    }
+    assert.lengthOf(calls, 0);
+    assert.equal(outsideSearchCount(RUN, "scholarly"), 0);
+    await run({ ...review, ...NEED }, sideChat);
+    assert.lengthOf(calls, 1);
+    // Where the card can open, the find-paper search still states no reason.
+    await run(review);
+    assert.lengthOf(calls, 2);
   });
 
   it("closes an answer result with the ledger and no card route", async function () {
@@ -522,6 +572,42 @@ describe("web_search outside-search discipline", function () {
     }
     assert.equal(message, "Tavily rate-limited the request. Try again later.");
     assert.isUndefined(outsideSearchLatch(RUN, "web"));
+  });
+
+  it("keeps no ledger or latch for a standalone MCP session run id", async function () {
+    const mcpRun = "mcp-run-1-1-abc";
+    const failure = new WebAccessError("Tavily failed.", "quota", 432);
+    let fail = true;
+    const tool = createWebSearchTool(
+      () =>
+        ({
+          search: async () => {
+            if (fail) throw failure;
+            return { provider: "tavily", query: "q", results: [] };
+          },
+        }) as never,
+    );
+    const input = {
+      query: "q",
+      depth: "basic",
+      topic: "general",
+      maxResults: 5,
+    };
+    let caught: unknown;
+    try {
+      await tool.execute(input as never, makeContext(mcpRun));
+    } catch (error) {
+      caught = error;
+    }
+    assert.equal(caught, failure);
+    assert.isUndefined(outsideSearchLatch(mcpRun, "web"));
+    fail = false;
+    const ok = (await tool.execute(
+      input as never,
+      makeContext(mcpRun),
+    )) as Record<string, unknown>;
+    assert.equal(ok.nextStep, OUTSIDE_SEARCH_STOP_NOTE);
+    assert.equal(outsideSearchCount(mcpRun, "web"), 0);
   });
 
   it("closes a web result with the web ledger", async function () {

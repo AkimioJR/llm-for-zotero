@@ -57,43 +57,17 @@ describe("direct Agent model tool surface", function () {
     // past_chat_search and past_chat_attach, the always-listed tools that
     // find an earlier chat and add it (24,904 tool characters, 2026-10-19);
     // the same two tools raised the cap with the fixed prompt to 34,000
-    // (33,723 characters). The search routing contract and the plugin
-    // Agent's search-tool map raised that cap by exactly their measured net
-    // growth, 519 characters, to 34,519 (34,300 characters, from 33,781;
-    // 24,926 tool characters, 2026-10-20), and by 29 more for the rule to use
-    // a source the user names, to 34,548. literature_search's required
-    // reason for an outside search (the need and gap fields and one
-    // sentence defining them) raised both caps by its measured 294 tool
-    // characters, to 25,220 and 34,623 (2026-10-20); dropping the source list from
-    // literature_search's description lowered both by 30, to 25,190 and 34,593.
-    // The search routing contract's rule to read outside sources only with
-    // search and web-read tools, never with shell commands, raised the cap
-    // with the fixed prompt by its measured 185 characters, to 34,778
-    // (2026-10-20); "or scripts" in that rule raised it by 11, to 34,789.
-    // literature_search's description naming the find path
-    // (workflow:'review' leads to the selection card) and that a review
-    // search needs no gap, which replaced the card branch on every answer
-    // result, raised both caps by its measured 62 tool characters, to
-    // 25,252 and 34,851 (2026-10-20). The search routing contract's
-    // nothing-attached rule (the library in its own step before any outside
-    // search, then a library answer with an offer to search outside, or
-    // scholarly search unasked when it holds nothing relevant; several
-    // sources in one step only when something is attached) raised the cap
-    // with the fixed prompt by its measured 315 characters, to 35,166
-    // (2026-10-20). Rewording that rule and extending the selection-card
-    // sentence to a review with no relevant library papers raised the cap by
-    // a net 24 characters, to 35,190. literature_search's description
-    // making workflow:'answer' the default for every search that informs an
-    // answer, with workflow:'review' only for a request for papers
-    // themselves, lowered both caps by its measured 3 tool characters, to
-    // 25,249 and 35,187 (2026-10-20). Restoring "for any need it could hold" to
-    // the nothing-attached rule (+18 fixed) and dropping "only" and naming
-    // workflow:'review' in the metadata sentence (+10 tool net) raised the caps
-    // by the measured delta, to 25,259 and 35,215 (2026-10-20).
-    assert.isAtMost(serializedToolCharacters, 25_259);
+    // (33,723 characters). The search-routing branch (the search routing
+    // contract with its nothing-attached rule, the plugin Agent's search-tool
+    // map with the selection-card rule, the reason every outside search
+    // states, and literature_search's find and answer workflow wording)
+    // raised both caps to the measured payload on 2026-10-20: 25,362 tool
+    // characters (400 more than 24,962 at a10986c0) and 35,380 with the
+    // fixed prompt (1,599 more than 33,781).
+    assert.isAtMost(serializedToolCharacters, 25_362);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      35_215,
+      35_380,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

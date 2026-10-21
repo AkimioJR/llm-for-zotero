@@ -3,7 +3,6 @@ import type { AgentToolContext } from "../types";
 import type { EditableArticleMetadataPatch } from "./zoteroGateway";
 import type { ZoteroGateway } from "./zoteroGateway";
 import { appLogger } from "../../core/logging";
-import { parseRetryAfterMs } from "../../utils/retryAfter";
 
 type SearchMode =
   | "recommendations"
@@ -73,7 +72,6 @@ type LiteratureSearchResult =
 type FetchJsonResponse = {
   ok: boolean;
   status: number;
-  headers?: { get?: (name: string) => string | null };
   json: () => Promise<unknown>;
 };
 
@@ -151,8 +149,6 @@ export class LiteratureProviderHttpError extends Error {
     readonly status: number,
     /** The provider's name (OpenAlex, CrossRef, Semantic Scholar) or host. */
     readonly provider: string,
-    /** The wait the provider asked for in Retry-After, when it named one. */
-    readonly retryAfterMs?: number,
   ) {
     super(
       kind === "rate_limit"
@@ -193,17 +189,10 @@ async function fetchJson(
   });
   if (!response.ok) {
     if (response.status === 429) {
-      let retryAfter: string | null | undefined;
-      try {
-        retryAfter = response.headers?.get?.("retry-after");
-      } catch {
-        retryAfter = undefined;
-      }
       throw new LiteratureProviderHttpError(
         "rate_limit",
         response.status,
         providerOf(url),
-        parseRetryAfterMs(retryAfter, Date.now()),
       );
     }
     throw new LiteratureProviderHttpError(

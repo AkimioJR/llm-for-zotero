@@ -20,11 +20,13 @@ import { neverSelected } from "../guidance";
 import {
   buildOutsideSearchReasonDetail,
   HOST_ACTION_SEARCH_NEED,
+  OUTSIDE_SEARCH_NEED_MESSAGE,
   OUTSIDE_SEARCH_NEED_PROPERTIES,
   OUTSIDE_SEARCH_NEED_SENTENCE,
   OUTSIDE_SEARCH_STOP_NOTE,
   outsideSearchNeedError,
   REVIEW_SEARCH_NEED_CLAUSE,
+  REVIEW_WITHOUT_CARD_NEED_MESSAGE,
 } from "./outsideSearchNeed";
 import {
   buildOutsideSearchNote,
@@ -75,11 +77,35 @@ type LiteratureSearchInput = {
   count?: number;
   libraryID?: number;
   /**
-   * A host action (Discover related) searched on the user's command: it is
-   * not one of the turn's outside searches and never latches a provider.
+   * The call claims need:'host_action': a host action (Discover related)
+   * searched on the user's command. Execution honors it only when the action
+   * executor built the call; then it is not one of the turn's outside
+   * searches and never latches a provider.
    */
   hostAction?: true;
+  /** A find-paper search's reason, checked where no card can open. */
+  need?: unknown;
+  gap?: unknown;
 };
+
+/**
+ * The need check that depends on the caller, which validation cannot see:
+ * only the action executor may claim host_action, and a find-paper search
+ * skips the reason only where it can lead to the selection card.
+ */
+function callerNeedError(
+  input: LiteratureSearchInput,
+  context: AgentToolContext,
+): string | null {
+  if (input.mode === "metadata") return null;
+  if (input.hostAction)
+    return context.hostAction ? null : OUTSIDE_SEARCH_NEED_MESSAGE;
+  if (input.workflow !== "review" || canShowLiteratureReview(context))
+    return null;
+  return outsideSearchNeedError({ need: input.need, gap: input.gap })
+    ? REVIEW_WITHOUT_CARD_NEED_MESSAGE
+    : null;
+}
 
 /** How the turn's outside-search ledger names a call. */
 function literatureQueryLabel(input: LiteratureSearchInput): string {
@@ -226,7 +252,7 @@ export function createLiteratureSearchTool(
     spec: {
       name: "literature_search",
       description:
-        "Search scholarly sources outside the library. Use workflow:'answer' for any search that informs an answer, including whether other studies found or tested something, and explicit imports (then library_import). Use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers); it leads to the selection card (literature_review); discovery never imports silently. workflow:'review' with mode:'metadata' proposes changes to approve; use it only when the user asks to check or fix an item's metadata. " +
+        "Search scholarly sources outside the library. Use workflow:'answer' for any search that informs an answer, including whether other studies found or tested something, and explicit imports (then library_import). Use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers; with nothing attached, only if the library holds none relevant or the user asks for papers outside it); it leads to the selection card (literature_review); discovery never imports silently. workflow:'review' with mode:'metadata' proposes changes to approve; use it only when the user asks to check or fix an item's metadata. " +
         OUTSIDE_SEARCH_NEED_SENTENCE +
         `; ${REVIEW_SEARCH_NEED_CLAUSE}; mode:'metadata' needs none.`,
       inputSchema: {
@@ -405,10 +431,14 @@ export function createLiteratureSearchTool(
         );
       // A metadata lookup identifies a known item; every other mode brings
       // outside evidence and states why the turn and library cannot hold it.
+      // Execution checks the two exemptions against the caller.
       const needError =
         mode === "metadata"
           ? null
-          : outsideSearchNeedError(args, { review: workflow === "review" });
+          : outsideSearchNeedError(args, {
+              review: workflow === "review",
+              acceptsHostAction: true,
+            });
       if (needError) return fail(needError);
 
       return ok<LiteratureSearchInput>({
@@ -428,6 +458,9 @@ export function createLiteratureSearchTool(
         ...(args.need === HOST_ACTION_SEARCH_NEED
           ? { hostAction: true as const }
           : {}),
+        ...(workflow === "review" && mode !== "metadata"
+          ? { need: args.need, gap: args.gap }
+          : {}),
       });
     },
     planInvocation: (input) =>
@@ -439,6 +472,8 @@ export function createLiteratureSearchTool(
           "The literature provider receives the query and returns public metadata without changing Zotero.",
       }),
     execute: async (input, context) => {
+      const needError = callerNeedError(input, context);
+      if (needError) throw new Error(needError);
       // The turn's outside searches: not a metadata lookup or a host action.
       const turn =
         input.mode === "metadata" ||

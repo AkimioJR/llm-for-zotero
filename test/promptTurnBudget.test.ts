@@ -43,49 +43,20 @@ import {
  * again by past_chat_search and past_chat_attach, the always-listed tools
  * that find an earlier chat and add it to the user's message (733
  * characters each, 2026-10-19). Raised again by note_write's removeEmbeds field
- * (58 characters, 2026-10-19). Raised again by the search routing contract,
- * the one owner of when to search which source, and the plugin Agent's map
- * from source families to its tools with the selection-card rule: 555 fixed
- * prompt characters after removing the persona and capability-context
- * routing copies they replace, less 36 tool characters (literature_search,
- * paper_read) and 22 or 6 turn characters (paper_read guidance, single-paper
- * line), for net growth of 497, 513 and 497 characters (2026-10-20). Raised by 30
- * each (29 fixed prompt characters for the rule to use a source the user
- * names, and one turn character), to 37,974, 36,707 and 38,072. Raised by
- * 294 tool characters each for literature_search's required reason for an
- * outside search: the need and gap fields and one sentence defining them
- * (2026-10-20), to 38,268, 37,001 and 38,366. Lowered by 30 each by dropping the source
- * list from literature_search's description (2026-10-20), to 38,238, 36,971
- * and 38,336. Raised by 185 fixed prompt characters each for the search
- * routing contract's rule to read outside sources only with search and
- * web-read tools, never with shell commands (2026-10-20), to 38,423, 37,156
- * and 38,521. Raised by 11 fixed prompt characters each for "or scripts"
- * in that rule (2026-10-20), to 38,434, 37,167 and 38,532. Raised by 62
- * tool characters each for literature_search's description naming the find
- * path (workflow:'review' leads to the selection card) and that a review
- * search needs no gap, which replaced the card branch on every answer
- * result (2026-10-20), to 38,496, 37,229 and 38,594. Raised by 315 fixed
- * prompt characters each for the search routing contract's nothing-attached
- * rule: search the library in its own step before any outside search, then
- * answer from relevant library papers with an offer to search outside, or
- * search scholarly sources unasked when it holds none; several sources in one
- * step only when something is attached (2026-10-20), to 38,811, 37,544 and
- * 38,909. Reworded that rule and let the selection-card sentence also cover a
- * review when the library holds no relevant papers (+24 net), to 38,835,
- * 37,568 and 38,933. Lowered by 3 each when literature_search's description
- * made workflow:'answer' the default for every search that informs an
- * answer and kept workflow:'review' for a request for papers themselves
- * (2026-10-20), to 38,832, 37,565 and 38,930. Raised by 28 each (18 fixed
- * prompt for "for any need it could hold" in the nothing-attached rule, 10 net
- * tool characters) on 2026-10-20, to 38,860, 37,593 and 38,958. Lowered by
- * 42 each when the nothing-attached rule dropped its exception for a request
- * for papers themselves, so library papers answer it (user decision 2a,
- * 2026-10-20), to 38,818, 37,551 and 38,916.
+ * (58 characters, 2026-10-19). Raised on 2026-10-20 by the search-routing
+ * branch: the search routing contract, the one owner of when to search
+ * which source, with its nothing-attached rule; the plugin Agent's map from
+ * source families to its tools, with the selection-card rule; the reason
+ * (need and gap) every outside search states; and literature_search's
+ * wording of the find (workflow:'review') and answer (workflow:'answer')
+ * workflows. Measured against a10986c0, that is 1,199 more fixed prompt and
+ * 400 more tool characters, less 21, 5 and 21 turn characters: net growth
+ * of 1,578, 1,594 and 1,578, to 39,025, 37,758 and 39,123.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 38_818,
-  paper: 37_551,
-  collection: 38_916,
+  global: 39_025,
+  paper: 37_758,
+  collection: 39_123,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

@@ -15,9 +15,10 @@ export const OUTSIDE_SEARCH_NEEDS = [
 export type OutsideSearchNeed = (typeof OUTSIDE_SEARCH_NEEDS)[number];
 
 /**
- * A host action (Discover related, Complete metadata, Audit library) searches
- * on the user's explicit command. Validation accepts this value; the model
- * schema never lists it.
+ * A host action (Discover related) searches on the user's explicit command.
+ * literature_search validation accepts this value; the model schema never
+ * lists it, and execution honors it only when the action executor built the
+ * call (AgentToolContext.hostAction).
  */
 export const HOST_ACTION_SEARCH_NEED = "host_action";
 
@@ -45,6 +46,12 @@ export const REVIEW_SEARCH_NEED_CLAUSE = "workflow:'review' needs neither";
 export const OUTSIDE_SEARCH_NEED_MESSAGE =
   "Add need: not_in_scope_or_library (with gap: what the turn's papers and library lack), current_or_public_facts, or user_named_outside_source.";
 
+/**
+ * The rejection for a find-paper search where the selection card cannot
+ * open (a side chat, an MCP client): it is then a plain outside search.
+ */
+export const REVIEW_WITHOUT_CARD_NEED_MESSAGE = `The paper selection card is not available here, so workflow:'review' needs a reason too. ${OUTSIDE_SEARCH_NEED_MESSAGE}`;
+
 export const OUTSIDE_SEARCH_GAP_MESSAGE =
   "need not_in_scope_or_library requires gap: what the turn's papers and library lack.";
 
@@ -60,13 +67,17 @@ function readGap(value: unknown): string | undefined {
 /**
  * The rejection for a call's need and gap, or null when they are valid.
  * A find-paper search (workflow:'review') states neither (user decision 1a).
+ * Only a tool that host actions call accepts host_action, and it checks the
+ * caller before it searches.
  */
 export function outsideSearchNeedError(
   args: Record<string, unknown>,
-  options: { review?: boolean } = {},
+  options: { review?: boolean; acceptsHostAction?: boolean } = {},
 ): string | null {
   const need = args.need;
-  if (need === HOST_ACTION_SEARCH_NEED || options.review) return null;
+  if (options.review) return null;
+  if (options.acceptsHostAction && need === HOST_ACTION_SEARCH_NEED)
+    return null;
   if (!OUTSIDE_SEARCH_NEEDS.includes(need as OutsideSearchNeed)) {
     return OUTSIDE_SEARCH_NEED_MESSAGE;
   }

@@ -20,6 +20,7 @@ import {
   buildOutsideSearchReasonDetail,
   OUTSIDE_SEARCH_NEED_PROPERTIES,
   OUTSIDE_SEARCH_NEED_SENTENCE,
+  OUTSIDE_SEARCH_STOP_NOTE,
   outsideSearchNeedError,
 } from "./outsideSearchNeed";
 import {
@@ -365,9 +366,11 @@ export function createWebSearchTool(
       // after the model received its schema. Never drop unsupported fields.
       const validated = validateWebSearchInput(input);
       if (!validated.ok) throw new Error(validated.error);
-      const latched = tracksOutsideSearchTurn(context.runId)
-        ? outsideSearchLatch(context.runId, "web")
+      // The turn's outside-search ledger; untracked run ids keep no state.
+      const turn = tracksOutsideSearchTurn(context.runId)
+        ? context.runId
         : undefined;
+      const latched = turn ? outsideSearchLatch(turn, "web") : undefined;
       if (latched)
         return {
           provider: webProviderLabel(),
@@ -379,7 +382,7 @@ export function createWebSearchTool(
           nextStep: latched,
         };
       const provider = providerFactory();
-      recordOutsideSearch(context.runId, "web", validated.value.query);
+      if (turn) recordOutsideSearch(turn, "web", validated.value.query);
       let result: WebSearchResponse;
       try {
         result = await provider.search({
@@ -388,9 +391,9 @@ export function createWebSearchTool(
         });
       } catch (error) {
         const reason = webSearchLatchReason(error);
-        if (!reason) throw error;
+        if (!turn || !reason) throw error;
         const message = webSearchUnavailableMessage(webProviderLabel(), reason);
-        latchOutsideSearch(context.runId, "web", message);
+        latchOutsideSearch(turn, "web", message);
         // The model reads the latch message; the code and status stay.
         const failure = error as WebAccessError;
         throw new WebAccessError(message, failure.code, failure.status);
@@ -402,7 +405,9 @@ export function createWebSearchTool(
         citation: webCitationInstruction(
           results.map((source) => source.sourceId),
         ),
-        nextStep: buildOutsideSearchNote(context.runId, "web"),
+        nextStep: turn
+          ? buildOutsideSearchNote(turn, "web")
+          : OUTSIDE_SEARCH_STOP_NOTE,
       };
     },
   };

@@ -273,6 +273,13 @@ describe("outside search need", function () {
         ),
         OUTSIDE_SEARCH_GAP_MESSAGE,
       );
+      // No host action runs web_search, so the host-only value is no reason.
+      assert.equal(
+        errorOf(
+          tool.validate({ query: "x", depth: "basic", need: "host_action" }),
+        ),
+        OUTSIDE_SEARCH_NEED_MESSAGE,
+      );
       const valid = tool.validate({
         query: "x",
         depth: "basic",
