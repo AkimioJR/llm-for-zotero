@@ -15,6 +15,8 @@ import {
   setTavilyApiKey,
 } from "../src/webAccess/prefs";
 import type { WebAccessProvider } from "../src/webAccess/types";
+import { OUTSIDE_SEARCH_STOP_NOTE } from "../src/agent/tools/read/outsideSearchNeed";
+import { clearOutsideSearchTurn } from "../src/agent/tools/read/outsideSearchLedger";
 import type { AgentToolContext } from "../src/agent/types";
 
 describe("web access agent tools", function () {
@@ -22,6 +24,7 @@ describe("web access agent tools", function () {
 
   afterEach(function () {
     clearWebSourcesForRun("run-web-tools");
+    clearOutsideSearchTurn("run-web-tools");
     (globalThis as typeof globalThis & { Zotero?: typeof Zotero }).Zotero =
       originalZotero;
   });
@@ -256,6 +259,13 @@ describe("web access agent tools", function () {
     const sourceId = searchResult.results[0].sourceId;
     assert.match(sourceId, /^web_[a-z0-9]+$/);
     assert.deepEqual(searchResult.citation.availableSourceIds, [sourceId]);
+    // Every outside search result closes with the turn's web ledger and
+    // the stop note, as its last field.
+    assert.equal(
+      searchResult.nextStep,
+      `Outside searches this turn: 1 web (queries: current topic). ${OUTSIDE_SEARCH_STOP_NOTE}`,
+    );
+    assert.equal(Object.keys(searchResult).at(-1), "nextStep");
 
     const readResult = await read.execute(
       {

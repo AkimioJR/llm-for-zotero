@@ -1,15 +1,23 @@
 import { assert } from "chai";
 import { readFileSync } from "node:fs";
-import { AGENT_PERSONA_INSTRUCTIONS } from "../src/agent/model/agentPersona";
+import {
+  AGENT_PERSONA_INSTRUCTIONS,
+  AGENT_SEARCH_TOOL_ROUTES,
+} from "../src/agent/model/agentPersona";
+import { WHOLE_LIBRARY_SCOPE_RULE } from "../src/agent/context/turnContextEnvelope";
 import { BUILTIN_SKILL_FILES } from "../src/agent/skills";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
+import { CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES } from "../src/agent/externalBackendBridge";
+import { CODEX_SEARCH_TOOL_ROUTES } from "../src/codexAppServer/nativeClient";
 
 /**
  * Every behavioral prompt rule has one owner. An owner is one tool (its
  * description, model-facing description, and guidance together), the
- * persona (all its sections), one shipped skill file, or the message
- * builder's hard-coded prompt sections. A marker phrase distinctive for a
- * rule must appear in exactly the expected owner.
+ * persona (all its sections, the shared contracts it carries and the plugin
+ * Agent's search-tool map), one shipped skill file, the message
+ * builder's hard-coded prompt sections, the whole-library turn line, or
+ * the Claude Code bridge's or Codex's search-tool line. A marker phrase
+ * distinctive for a rule must appear in exactly the expected owners.
  */
 function stubDependency(): never {
   const stub: unknown = new Proxy(function () {}, {
@@ -31,7 +39,10 @@ function collectOwnerTexts(): Map<string, string> {
     registry.listTools().map((spec) => [spec.name, spec.description]),
   );
   const owners = new Map<string, string>();
-  owners.set("persona", AGENT_PERSONA_INSTRUCTIONS.join("\n"));
+  owners.set(
+    "persona",
+    [...AGENT_PERSONA_INSTRUCTIONS, AGENT_SEARCH_TOOL_ROUTES].join("\n"),
+  );
   for (const tool of registry.listToolDefinitions()) {
     owners.set(
       `tool:${tool.spec.name}`,
@@ -45,6 +56,12 @@ function collectOwnerTexts(): Map<string, string> {
   for (const [filename, content] of Object.entries(BUILTIN_SKILL_FILES)) {
     owners.set(`skill:${filename}`, content);
   }
+  // The nothing-attached turn line states the scope; routing stays in the
+  // persona's search routing contract.
+  owners.set("turnContext:wholeLibrary", WHOLE_LIBRARY_SCOPE_RULE);
+  // Each external runtime maps the search families to its own tools.
+  owners.set("runtime:claudeBridge", CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES);
+  owners.set("runtime:codex", CODEX_SEARCH_TOOL_ROUTES);
   owners.set(
     "messageBuilder",
     readFileSync(
@@ -63,7 +80,11 @@ function ownersOf(owners: Map<string, string>, marker: string): string[] {
 }
 
 describe("prompt rules have a single owner", function () {
-  const rules: Array<{ rule: string; marker: string; owner: string }> = [
+  const rules: Array<{
+    rule: string;
+    marker: string;
+    owner: string | string[];
+  }> = [
     {
       rule: "paper_read mode selection",
       marker: "mode:'overview'",
@@ -95,6 +116,85 @@ describe("prompt rules have a single owner", function () {
       owner: "tool:literature_search",
     },
     {
+      rule: "search names an action, not a source",
+      marker: "name an action, not a source",
+      owner: "persona",
+    },
+    {
+      rule: "a source the user names is used",
+      marker: "use a source the user names",
+      owner: "persona",
+    },
+    {
+      rule: "the nearest source that can hold a need comes first",
+      marker: "nearest source that can hold it",
+      owner: "persona",
+    },
+    {
+      rule: "scholarly and public-fact needs map to search families",
+      marker: "distinct needs use both",
+      owner: "persona",
+    },
+    {
+      rule: "outside sources are never read with shell commands",
+      marker: "never with shell commands",
+      owner: "persona",
+    },
+    {
+      rule: "an unreadable outside text is named, not worked around",
+      marker: "say what was not read",
+      owner: "persona",
+    },
+    {
+      rule: "the selection card answers only a find or recommend request",
+      marker: "only when the user asks you to find or recommend papers",
+      owner: "persona",
+    },
+    {
+      // The card rule and the workflow:'review' sentence both carry it, so
+      // neither sends a nothing-attached find request past relevant library
+      // papers (user decision 2a, 2026-10-20).
+      rule: "with nothing attached, the card waits for an empty library or a request for outside papers",
+      marker:
+        "with nothing attached, only if the library holds no relevant papers or the user asks for papers outside it",
+      owner: ["persona", "tool:literature_search"],
+    },
+    {
+      rule: "with nothing attached, the library is searched in its own step",
+      marker: "search the library first, in a step of its own",
+      owner: "persona",
+    },
+    {
+      rule: "with nothing attached, relevant library papers answer, with an offer",
+      marker: "offer to search outside",
+      owner: "persona",
+    },
+    {
+      rule: "with nothing attached and none relevant, scholarly search runs unasked",
+      marker: "search outside without asking",
+      owner: "persona",
+    },
+    {
+      rule: "a review is never written from outside abstracts",
+      marker: "outside abstracts",
+      owner: "skill:literature-review.md",
+    },
+    {
+      rule: "the Claude Code bridge searches the web with its own tools",
+      marker: "Claude Code's WebSearch and WebFetch",
+      owner: "runtime:claudeBridge",
+    },
+    {
+      rule: "Codex web search follows the user's Codex configuration",
+      marker: "when it is in your tool list",
+      owner: "runtime:codex",
+    },
+    {
+      rule: "native web search queries default to the user's language",
+      marker: "web search queries in the user's language",
+      owner: ["runtime:claudeBridge", "runtime:codex"],
+    },
+    {
       rule: "figure crops come only from paper_read figures mode",
       marker: "figure_crops",
       owner: "skill:analyze-figures.md",
@@ -120,11 +220,27 @@ describe("prompt rules have a single owner", function () {
     );
     assert.isTrue(owners.has("persona"));
     assert.isTrue(owners.has("messageBuilder"));
+    assert.isTrue(owners.has("turnContext:wholeLibrary"));
+    assert.isTrue(owners.has("runtime:claudeBridge"));
+    assert.isTrue(owners.has("runtime:codex"));
+  });
+
+  it("keeps no routing copy outside the search routing contract", function () {
+    for (const marker of [
+      "Use external search",
+      "both source families",
+      "for scholarly discovery",
+      "A mixed request may also use",
+      "only when the user asks to find, recommend",
+      "current or general public evidence",
+    ])
+      assert.deepEqual(ownersOf(owners, marker), [], marker);
   });
 
   for (const { rule, marker, owner } of rules) {
-    it(`${rule} lives only in ${owner}`, function () {
-      assert.deepEqual(ownersOf(owners, marker), [owner], marker);
+    const expected = (Array.isArray(owner) ? [...owner] : [owner]).sort();
+    it(`${rule} lives only in ${expected.join(" and ")}`, function () {
+      assert.deepEqual(ownersOf(owners, marker), expected, marker);
     });
   }
 });

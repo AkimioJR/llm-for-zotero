@@ -11,7 +11,10 @@ import type {
   AgentToolDefinition,
   AgentUserMessage,
 } from "../types";
-import { AGENT_PERSONA_INSTRUCTIONS } from "./agentPersona";
+import {
+  AGENT_PERSONA_INSTRUCTIONS,
+  AGENT_SEARCH_TOOL_ROUTES,
+} from "./agentPersona";
 import {
   AGENT_MEMORY_QUESTION_EXCERPT_LENGTH,
   formatAgentMemoryBlock,
@@ -626,7 +629,7 @@ export async function renderAgentPromptEnvelope(
   );
   const dynamicGuidanceInstructions = [
     isSinglePaperConversation(request)
-      ? "Single-paper chat: answer directly using the supplied paper context; questions about the paper need no skill, so do not load evidence-based-qa for them. You may freely choose additional snippet, section, full, figure, or search reads when useful. For whole-paper explanations, consider the argument, methods, results, and limitations throughout the available source."
+      ? "Single-paper chat: answer directly using the supplied paper context; questions about the paper need no skill, so do not load evidence-based-qa for them. You may freely choose additional snippet, section, full, figure, or targeted reads of this paper when useful. For whole-paper explanations, consider the argument, methods, results, and limitations throughout the available source."
       : "",
     request.workingDirectory
       ? `Command working directory retained from this conversation: ${request.workingDirectory}. run_command uses it when cwd is omitted; pass cwd explicitly to change it. This directory does not confer filesystem permission.`
@@ -655,6 +658,10 @@ export async function renderAgentPromptEnvelope(
     {
       id: "persona",
       lines: AGENT_PERSONA_INSTRUCTIONS,
+    },
+    {
+      id: "search-tools",
+      lines: [AGENT_SEARCH_TOOL_ROUTES],
     },
     {
       id: "direct-agent-workflow",

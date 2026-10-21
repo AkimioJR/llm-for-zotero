@@ -41,6 +41,17 @@ export type AgentFinalAnswerDecision =
       userMessage: string;
     };
 
+const DISCOVERY_INCOMPLETE =
+  "The relevant-paper shortlist was not presented for review, so discovery is not complete.";
+/** How the model presents a discovery's papers on the selection card. */
+const DISCOVERY_CARD_STEPS =
+  "Use the active discovery sessionId and revision; select only NEW papers for an expansion. Rank genuinely relevant candidates from the saved literature_search results and call literature_review with the requested number, their candidateSetId/candidateIndex references, relevance reasons and destination. Search further if needed; disclose any genuine shortfall. Do not import silently or finish with recommendations in prose.";
+/**
+ * The correction for prose after a first batch's paper-finding search: the
+ * model, which read the user's request, chooses the card or its answer.
+ */
+const DISCOVERY_CHOICE = `Your answer was not shown: this turn ran a paper-finding search (workflow:'review'), which leads to the selection card. If the user asked for papers themselves (find, recommend, suggest or list papers; with nothing attached, only if the library holds no relevant papers or the user asks for papers outside it), show them on the card: ${DISCOVERY_CARD_STEPS} Otherwise, do not call literature_review: give your answer again as the final answer; the paper-finding search then closes without a card.`;
+
 /**
  * Applies every runtime-owned final-answer gate through one typed decision.
  * Provider continuation remains outside this class; a correction is an
@@ -112,30 +123,46 @@ export class AgentFinalAnswerController {
             ?.reviewRequired,
         ),
     );
-    // Only the selection card closes a discovery: the host refuses a direct
-    // import of its candidates before it runs (discoveryImportRefusal). An
-    // explicit import searches with workflow:'answer', opens no discovery and
-    // needs no card.
+    // A discovery ends with the selection card: the host refuses a direct
+    // import of its candidates before it runs (discoveryImportRefusal), and
+    // a Find more expansion ends only with the card. A first batch may also
+    // end with the answer the model chooses after one correction: a
+    // paper-finding search on an evidence question must not cost the user
+    // the answer. An explicit import searches with workflow:'answer', opens
+    // no discovery and needs no card.
     if (
       lastDiscovery >= 0 &&
       !params.toolExecutionRecords
         .slice(lastDiscovery + 1)
         .some((record) => record.ok && record.name === "literature_review")
     ) {
-      const failure =
-        "The relevant-paper shortlist was not presented for review, so discovery is not complete.";
-      const pending = params.toolExecutionRecords[lastDiscovery].content as
+      const discovery = params.toolExecutionRecords[lastDiscovery];
+      const pending = discovery.content as
         | { sessionId?: string; revision?: number }
         | undefined;
       const correctionKey = `${pending?.sessionId || "discovery"}:${pending?.revision || 0}`;
-      if (canCorrect && !this.literatureReviewCorrections.has(correctionKey)) {
-        this.literatureReviewCorrections.add(correctionKey);
-        return {
-          kind: "correct",
-          correction: `${failure} Use the active discovery sessionId and revision; select only NEW papers for an expansion. Rank genuinely relevant candidates from the saved literature_search results and call literature_review with the requested number, their candidateSetId/candidateIndex references, relevance reasons and destination. Search further if needed; disclose any genuine shortfall. Do not import silently or finish with recommendations in prose.`,
-        };
+      // The user clicked Find more on a card: the last record is that card's
+      // expanding result, or a further search at the revision it started.
+      const expanding =
+        discovery.name === "literature_review" || (pending?.revision || 0) > 0;
+      const corrected = this.literatureReviewCorrections.has(correctionKey);
+      // Find more is card-only. On a first batch, prose after the correction
+      // (or when no correction can be given, so the card cannot follow either)
+      // is the model's choice of the answer: it closes without a card.
+      if (expanding) {
+        if (canCorrect && !corrected) {
+          this.literatureReviewCorrections.add(correctionKey);
+          return {
+            kind: "correct",
+            correction: `${DISCOVERY_INCOMPLETE} ${DISCOVERY_CARD_STEPS}`,
+          };
+        }
+        return { kind: "fail", userMessage: DISCOVERY_INCOMPLETE };
       }
-      return { kind: "fail", userMessage: failure };
+      if (canCorrect && !corrected) {
+        this.literatureReviewCorrections.add(correctionKey);
+        return { kind: "correct", correction: DISCOVERY_CHOICE };
+      }
     }
 
     const webAttribution = assessWebAttribution(

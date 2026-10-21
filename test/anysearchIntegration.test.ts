@@ -18,6 +18,8 @@ import {
 } from "../src/agent/tools/read/webAccessShared";
 import { createWebSearchTool } from "../src/agent/tools/read/webSearch";
 import { createWebReadTool } from "../src/agent/tools/read/webRead";
+import { OUTSIDE_SEARCH_STOP_NOTE } from "../src/agent/tools/read/outsideSearchNeed";
+import { clearOutsideSearchTurn } from "../src/agent/tools/read/outsideSearchLedger";
 import { registerWebAccessPreferences } from "../src/modules/preferences/webAccessPanel";
 import { AgentToolRegistry } from "../src/agent/tools/registry";
 import {
@@ -114,6 +116,7 @@ describe("AnySearch native integration (offline)", function () {
     globalThis.fetch = originalFetch;
     globalThis.AbortController = originalAbortController;
     clearWebSourcesForRun(context.runId!);
+    clearOutsideSearchTurn(context.runId!);
   });
 
   it("keeps Tavily default and dispatches using persisted AnySearch selection, including blank key", function () {
@@ -204,8 +207,10 @@ describe("AnySearch native integration (offline)", function () {
       status: 402,
       code: 402,
       errorCode: "quota",
+      // An exhausted quota latches web search for the turn; the model reads
+      // the latch message, not the provider's.
       errorMessage:
-        "AnySearch quota exhausted. No credentials were adopted and no retry was made.",
+        "Web search is unavailable for the rest of this turn (AnySearch quota exhausted). Do not retry or fetch pages with shell commands; answer from other sources and say which part could not be checked online.",
     },
     {
       name: "HTTP 200 / business 429",
@@ -294,7 +299,10 @@ describe("AnySearch native integration (offline)", function () {
         },
       });
       const search = createWebSearchTool();
-      const validated = search.validate({ query });
+      const validated = search.validate({
+        query,
+        need: "current_or_public_facts",
+      });
       assert.deepEqual(validated, {
         ok: true,
         value: { query, maxResults: 5 },
@@ -380,14 +388,20 @@ describe("AnySearch native integration (offline)", function () {
       required: string[];
       properties: object;
     };
-    assert.deepEqual(schema.required, ["query"]);
-    assert.deepEqual(Object.keys(schema.properties), ["query", "maxResults"]);
+    assert.deepEqual(schema.required, ["query", "need"]);
+    assert.deepEqual(Object.keys(schema.properties), [
+      "query",
+      "maxResults",
+      "need",
+      "gap",
+    ]);
     assert.notInclude(JSON.stringify(specs), "costs 1 credit");
     assert.notInclude(search.guidance!.instruction, "explicitly choose basic");
     assert.isFalse(
       search.guidance!.matches(context.request, { matchedSkillIds: [] }),
     );
-    assert.isTrue(search.validate({ query: "hello" }).ok);
+    const need = "current_or_public_facts";
+    assert.isTrue(search.validate({ query: "hello", need }).ok);
     for (const key of [
       "depth",
       "topic",
@@ -400,7 +414,7 @@ describe("AnySearch native integration (offline)", function () {
       "zone",
     ]) {
       assert.isFalse(
-        search.validate({ query: "hello", [key]: "unsupported" }).ok,
+        search.validate({ query: "hello", need, [key]: "unsupported" }).ok,
         key,
       );
     }
@@ -412,7 +426,7 @@ describe("AnySearch native integration (offline)", function () {
       );
     }
     setWebAccessProvider("tavily");
-    assert.isFalse(search.validate({ query: "hello" }).ok);
+    assert.isFalse(search.validate({ query: "hello", need }).ok);
     assert.include(JSON.stringify(search.spec.inputSchema), "advanced");
     assert.isFalse(
       search.guidance!.matches(context.request, { matchedSkillIds: [] }),
@@ -452,6 +466,11 @@ describe("AnySearch native integration (offline)", function () {
       context,
     );
     assert.equal(result.results[0].sourceId, extracted.pages[0].sourceId);
+    assert.equal(
+      result.nextStep,
+      `Outside searches this turn: 1 web (queries: public). ${OUTSIDE_SEARCH_STOP_NOTE}`,
+    );
+    assert.notProperty(extracted, "nextStep");
     assert.deepEqual(extracted.citation.availableSourceIds, [
       result.results[0].sourceId,
     ]);

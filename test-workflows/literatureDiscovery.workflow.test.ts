@@ -78,6 +78,8 @@ describe("workflow: expandable ranked discovery", function () {
         query: "discovery fixture",
         workflow: "answer",
         limit: 12,
+        need: "not_in_scope_or_library",
+        gap: "The library has no other papers on this topic.",
       });
       if (!searchInput.ok) throw new Error(searchInput.error);
       const candidates = (await search.execute(
@@ -310,6 +312,7 @@ describe("workflow: expandable ranked discovery", function () {
         `discovery-import-${stamp}`,
         "Find three papers relevant to this paper for me.",
       );
+      // A find-paper search states no reason (user decision 1a).
       const search = await run(discovery, "literature_search", {
         mode: "search",
         workflow: "review",
@@ -439,6 +442,8 @@ describe("workflow: expandable ranked discovery", function () {
         workflow: "answer",
         query: "discovery import fixture",
         limit: 12,
+        need: "not_in_scope_or_library",
+        gap: "The library has no other papers on this topic.",
       });
       assert.isFalse(
         (answer.content as { reviewRequired?: boolean }).reviewRequired,

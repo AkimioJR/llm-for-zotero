@@ -31,6 +31,10 @@ import type {
 import { createPaperReadTool } from "../src/agent/tools/read/paperRead";
 import { createLibraryRetrieveTool } from "../src/agent/tools/read/libraryRetrieve";
 import { createLiteratureSearchTool } from "../src/agent/tools/read/literatureSearch";
+import {
+  OUTSIDE_SEARCH_NEED_SENTENCE,
+  OUTSIDE_SEARCH_STOP_NOTE,
+} from "../src/agent/tools/read/outsideSearchNeed";
 import { createFileIOTool } from "../src/agent/tools/write/fileIO";
 import { ChangeJournalTestDb } from "./helpers/changeJournalTestDb";
 import {
@@ -1260,6 +1264,11 @@ describe("Zotero MCP server", function () {
     const queryTool = payload.result.tools.find(
       (tool: { name: string }) => tool.name === "library_search",
     );
+    assert.notInclude(queryTool.description, "review-card");
+    assert.include(
+      queryTool.description,
+      "proposes metadata changes for the user to approve",
+    );
     assert.deepEqual(queryTool.annotations, {
       readOnlyHint: true,
       openWorldHint: false,
@@ -1389,8 +1398,13 @@ describe("Zotero MCP server", function () {
   it("does not send MCP clients to literature_review, which MCP does not expose", async function () {
     const registry = new AgentToolRegistry();
     const literature = createLiteratureSearchTool({} as never);
-    assert.include(literature.spec.description, "call literature_review");
+    // In the plugin, a find or recommend search leads to the card.
+    assert.include(
+      literature.spec.description,
+      "it leads to the selection card (literature_review)",
+    );
     registry.register(literature);
+    registry.register(createLibraryRetrieveTool({} as never));
     registerMcpServer({ toolRegistry: registry, zoteroGateway: {} as never });
     const response = await invokeMcpEndpoint({
       token: getOrCreateZoteroMcpBearerToken(),
@@ -1399,6 +1413,7 @@ describe("Zotero MCP server", function () {
     const tools = JSON.parse(response[2]).result.tools as Array<{
       name: string;
       description: string;
+      inputSchema: unknown;
     }>;
     const names = tools.map((entry) => entry.name);
     assert.include(names, "literature_search");
@@ -1410,6 +1425,31 @@ describe("Zotero MCP server", function () {
     assert.include(description, "not available over MCP");
     assert.include(description, "library_import");
     assert.include(description, "mode:'metadata'");
+    // The server has no web search, but a client may: Claude Code and Codex
+    // map the web family to their own tools (user decision 2a).
+    assert.include(
+      description,
+      "For web pages or current facts, use your client's own web search if it has one.",
+    );
+    const searchDescription = tools.find(
+      (entry) => entry.name === "library_retrieve",
+    )!.description;
+    assert.notInclude(searchDescription, "your client's own web search");
+    assert.include(
+      searchDescription,
+      "No general web-search MCP tool is available.",
+    );
+    // An outside search states its need over MCP too; the host-only value
+    // stays out of the schema a client sees.
+    assert.include(description, OUTSIDE_SEARCH_NEED_SENTENCE);
+    const schema = tools.find((entry) => entry.name === "literature_search")!
+      .inputSchema as { properties: Record<string, { enum?: string[] }> };
+    assert.deepEqual(schema.properties.need.enum, [
+      "not_in_scope_or_library",
+      "current_or_public_facts",
+      "user_named_outside_source",
+    ]);
+    assert.property(schema.properties, "gap");
   });
 
   it("returns MCP literature_search results without a literature_review route", async function () {
@@ -1455,7 +1495,12 @@ describe("Zotero MCP server", function () {
           method: "tools/call",
           params: {
             name: "literature_search",
-            arguments: { mode: "search", query: "hippocampal replay" },
+            arguments: {
+              mode: "search",
+              query: "hippocampal replay",
+              need: "not_in_scope_or_library",
+              gap: "The library has no replay studies.",
+            },
           },
         },
       });
@@ -1464,8 +1509,12 @@ describe("Zotero MCP server", function () {
       const text = payload.result.content[0].text as string;
       const body = JSON.parse(text).result;
       assert.isString(body.candidateSetId, text);
-      assert.isUndefined(body.nextStep, text);
+      // A standalone MCP session keeps no ledger: the stop note only, never
+      // card or import routing.
+      assert.isTrue(body.nextStep.endsWith(OUTSIDE_SEARCH_STOP_NOTE), text);
+      assert.notInclude(body.nextStep, "library_import");
       assert.notInclude(text, "literature_review");
+      assert.notInclude(text, "selection card");
     } finally {
       scope.clear();
       globalThis.fetch = originalFetch;

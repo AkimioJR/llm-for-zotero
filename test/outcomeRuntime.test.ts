@@ -2119,7 +2119,9 @@ describe("resuming a long job in runtime turns", function () {
     selectedCollectionContexts: [
       { collectionId: 9, name: "Drift", libraryID: 1 },
     ],
-    advanced: { inputTokenCap: 30_000 },
+    // 30,500 since 2026-10-20: the fixed prompt grew with the search-routing
+    // contract; these tests check long-job resume, not prompt size.
+    advanced: { inputTokenCap: 30_500 },
   } as Partial<AgentRuntimeRequestInput>;
 
   beforeEach(async function () {

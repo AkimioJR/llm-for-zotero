@@ -4,16 +4,39 @@ import type {
   AgentToolDefinition,
   AgentTraceDetail,
 } from "../../types";
-import { LiteratureSearchService } from "../../services/literatureSearchService";
+import {
+  isOpenAlexRateLimit,
+  LiteratureSearchService,
+} from "../../services/literatureSearchService";
 import {
   identifyLiteratureCandidates,
   MAX_DISCOVERY_COUNT,
   parseDiscoveryCount,
 } from "../../services/literatureDiscovery";
+import { ToolInputRejection } from "../execution/failure";
 import { canShowLiteratureReview } from "./reviewLiterature";
 import type { ZoteroGateway } from "../../services/zoteroGateway";
 import { readOnlyInvocationPlan } from "../../authorization/invocationPlan";
 import { neverSelected } from "../guidance";
+import {
+  buildOutsideSearchReasonDetail,
+  HOST_ACTION_SEARCH_NEED,
+  OUTSIDE_SEARCH_NEED_MESSAGE,
+  OUTSIDE_SEARCH_NEED_PROPERTIES,
+  OUTSIDE_SEARCH_NEED_SENTENCE,
+  OUTSIDE_SEARCH_STOP_NOTE,
+  outsideSearchNeedError,
+  REVIEW_SEARCH_NEED_CLAUSE,
+  REVIEW_WITHOUT_CARD_NEED_MESSAGE,
+} from "./outsideSearchNeed";
+import {
+  buildOutsideSearchNote,
+  latchOutsideSearch,
+  tracksOutsideSearchTurn,
+  OPENALEX_RATE_LIMIT_MESSAGE,
+  outsideSearchLatch,
+  recordOutsideSearch,
+} from "./outsideSearchLedger";
 import {
   createSearchLiteratureReviewAction,
   resolveSearchLiteratureReview,
@@ -37,7 +60,7 @@ type LiteratureSearchMode =
 type LiteratureSearchWorkflow = "answer" | "review";
 
 export const LITERATURE_WORKFLOW_GUIDANCE =
-  "Use literature_search to retrieve scholarly candidates, not to present a raw result pool. When the user only asks to find/recommend relevant papers, read the current paper, search and assess titles/abstracts, then call literature_review with the requested number (five when unspecified) of ranked candidate references and short evidence-based relevance reasons. Search further if results are weak; never pad a shortlist. Respect explicit references/citations/source constraints. A Find more continuation requests another batch of the original size: assess unused saved candidates first, then search further as needed, and submit only new candidates with the provided sessionId and revision. The paper-only import-selection card is required in Safe, Auto and YOLO, and discovery never imports silently. Explicit import requests instead use workflow:'answer' to gather and rank candidates, skip existing duplicates, then call library_import for exactly the requested number and destination. Central mutation authorization handles Safe confirmation and direct Auto/YOLO execution. Do not substitute a discovery card for an explicit import. Use workflow:'answer' for evidence supporting an answer/review document; only metadata review continues to use workflow:'review', mode:'metadata': it proposes changes to an existing item that the user must approve, so use it only when the user asks to check or fix that item's metadata, never to read a paper's abstract or details.";
+  "Use literature_search to retrieve scholarly candidates, not to present a raw result pool. When the user only asks to find/recommend relevant papers, read the current paper, search and assess titles/abstracts, then call literature_review with the requested number (five when unspecified) of ranked candidate references and short evidence-based relevance reasons. Search further if results are weak; never pad a shortlist. Respect explicit references/citations/source constraints. A Find more continuation requests another batch of the original size: assess unused saved candidates first, then search further as needed, and submit only new candidates with the provided sessionId and revision. The paper-only import-selection card is required in Safe, Auto and YOLO, and discovery never imports silently. Explicit import requests instead use workflow:'answer' to gather and rank candidates, skip existing duplicates, then call library_import for exactly the requested number and destination. Central mutation authorization handles Safe confirmation and direct Auto/YOLO execution. Do not substitute a discovery card for an explicit import. Use workflow:'answer' for every search that informs an answer or review document, including whether other studies found or tested something; use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers). workflow:'review' with mode:'metadata' proposes changes to an existing item that the user must approve, so use it only when the user asks to check or fix that item's metadata, never to read a paper's abstract or details.";
 
 type LiteratureSearchInput = {
   workflow: LiteratureSearchWorkflow;
@@ -54,7 +77,54 @@ type LiteratureSearchInput = {
   /** Discovery: the number of papers the user asked for. */
   count?: number;
   libraryID?: number;
+  /**
+   * The call claims need:'host_action': a host action (Discover related)
+   * searched on the user's command. Execution honors it only when the action
+   * executor built the call; then it is not one of the turn's outside
+   * searches and never latches a provider.
+   */
+  hostAction?: true;
+  /** A find-paper search's reason, checked where no card can open. */
+  need?: unknown;
+  gap?: unknown;
 };
+
+/**
+ * The need check that depends on the caller, which validation cannot see:
+ * only the action executor may claim host_action, and a find-paper search
+ * skips the reason only where it can lead to the selection card.
+ */
+function callerNeedError(
+  input: LiteratureSearchInput,
+  context: AgentToolContext,
+): string | null {
+  if (input.mode === "metadata") return null;
+  if (input.hostAction)
+    return context.hostAction ? null : OUTSIDE_SEARCH_NEED_MESSAGE;
+  if (input.workflow !== "review" || canShowLiteratureReview(context))
+    return null;
+  return outsideSearchNeedError({ need: input.need, gap: input.gap })
+    ? REVIEW_WITHOUT_CARD_NEED_MESSAGE
+    : null;
+}
+
+/** How the turn's outside-search ledger names a call. */
+function literatureQueryLabel(input: LiteratureSearchInput): string {
+  const source =
+    input.source && input.source !== "openalex" ? ` [${input.source}]` : "";
+  if (input.mode === "search") {
+    const query = input.query || input.title || "";
+    const author = input.author ? `author:${input.author}` : "";
+    return `${[query, author].filter(Boolean).join(" ")}${source}`;
+  }
+  const seed =
+    input.doi ||
+    input.title ||
+    input.arxivId ||
+    input.query ||
+    (input.itemId ? `item ${input.itemId}` : "the turn's paper");
+  return `${input.mode} for ${seed}${source}`;
+}
 
 export const LITERATURE_SEARCH_GUIDANCE: NonNullable<
   AgentToolDefinition["guidance"]
@@ -144,6 +214,8 @@ function buildLiteratureTraceDetails(
     readTraceString(input.title) ||
     readTraceString(input.author);
   if (query) details.push({ label: "Query", value: query });
+  const reason = buildOutsideSearchReasonDetail(input);
+  if (reason) details.push(reason);
 
   const results = Array.isArray(result.results) ? result.results : [];
   for (const entry of results) {
@@ -181,7 +253,9 @@ export function createLiteratureSearchTool(
     spec: {
       name: "literature_search",
       description:
-        "Search scholarly sources outside the library, only when the user asks to find, recommend or import papers, or to fix metadata; never for work on papers already in the turn's scope (summaries, reviews, comparisons). For discovery or recommendations, call literature_review to show the selection card; discovery never imports silently. Explicit imports use workflow:'answer', then library_import; To read a paper's abstract or details, use workflow:'answer'; workflow:'review' with mode:'metadata' proposes metadata changes the user must approve, so use it only when the user asks to check or fix an item's metadata.",
+        "Search scholarly sources outside the library. Use workflow:'answer' for any search that informs an answer, including whether other studies found or tested something, and explicit imports (then library_import). Use workflow:'review' when the user asks for papers themselves (find, recommend, suggest or list papers; with nothing attached, only if the library holds no relevant papers or the user asks for papers outside it); it leads to the selection card (literature_review); discovery never imports silently. workflow:'review' with mode:'metadata' proposes changes to approve; use it only when the user asks to check or fix an item's metadata. " +
+        OUTSIDE_SEARCH_NEED_SENTENCE +
+        `; ${REVIEW_SEARCH_NEED_CLAUSE}; mode:'metadata' needs none.`,
       inputSchema: {
         type: "object",
         required: ["mode"],
@@ -229,6 +303,7 @@ export function createLiteratureSearchTool(
               "workflow:'review': papers the user asked for, five when unspecified.",
           },
           libraryID: { type: "number" },
+          ...OUTSIDE_SEARCH_NEED_PROPERTIES,
         },
       },
       executionClass: "read",
@@ -261,6 +336,9 @@ export function createLiteratureSearchTool(
             Array.isArray((content as { results?: unknown[] }).results)
               ? (content as { results: unknown[] }).results
               : [];
+          const unavailable = (content as { unavailable?: unknown } | undefined)
+            ?.unavailable;
+          if (unavailable) return "Online search unavailable this turn";
           return results.length > 0
             ? `Found ${results.length} online result${results.length === 1 ? "" : "s"}`
             : "No online results found";
@@ -326,7 +404,9 @@ export function createLiteratureSearchTool(
           ? args.author.trim()
           : undefined;
       if (mode === "search" && !query && !title && !author) {
-        return fail("search mode requires query, title, or author");
+        return fail(
+          "search mode requires query, title, or author; to read one paper's abstract, search with its title",
+        );
       }
       // Only OpenAlex supports recommendations, references, and citations.
       // Auto-correct source for these modes to prevent silent degradation.
@@ -350,6 +430,17 @@ export function createLiteratureSearchTool(
         return fail(
           `count must be an integer from 1 to ${MAX_DISCOVERY_COUNT}.`,
         );
+      // A metadata lookup identifies a known item; every other mode brings
+      // outside evidence and states why the turn and library cannot hold it.
+      // Execution checks the two exemptions against the caller.
+      const needError =
+        mode === "metadata"
+          ? null
+          : outsideSearchNeedError(args, {
+              review: workflow === "review",
+              acceptsHostAction: true,
+            });
+      if (needError) return fail(needError);
 
       return ok<LiteratureSearchInput>({
         workflow,
@@ -365,18 +456,60 @@ export function createLiteratureSearchTool(
         limit: normalizePositiveInt(args.limit),
         count,
         libraryID: normalizePositiveInt(args.libraryID),
+        ...(args.need === HOST_ACTION_SEARCH_NEED
+          ? { hostAction: true as const }
+          : {}),
+        ...(workflow === "review" && mode !== "metadata"
+          ? { need: args.need, gap: args.gap }
+          : {}),
       });
     },
-    planInvocation: (input) =>
-      readOnlyInvocationPlan({
+    planInvocation: (input, context) => {
+      // Nothing has run yet, so a refused need is an input rejection, not a
+      // failing tool; it is checked before authorization and receipts.
+      const needError = callerNeedError(input, context);
+      if (needError) throw new ToolInputRejection(needError);
+      return readOnlyInvocationPlan({
         domains: ["network"],
         effects: ["read", "egress"],
         targets: input.query ? [input.query] : [],
         reason:
           "The literature provider receives the query and returns public metadata without changing Zotero.",
-      }),
+      });
+    },
     execute: async (input, context) => {
-      const results = await service.execute(input, context);
+      // The turn's outside searches: not a metadata lookup or a host action.
+      const turn =
+        input.mode === "metadata" ||
+        input.hostAction ||
+        !tracksOutsideSearchTurn(context.runId)
+          ? undefined
+          : context.runId;
+      const usesOpenAlex = (input.source ?? "openalex") === "openalex";
+      const latched =
+        turn && usesOpenAlex ? outsideSearchLatch(turn, "openalex") : undefined;
+      if (latched)
+        return {
+          workflow: "answer",
+          mode: input.mode,
+          results: [],
+          source: "OpenAlex",
+          unavailable: "rate_limited",
+          message: latched,
+          nextStep: latched,
+        };
+      if (turn)
+        recordOutsideSearch(turn, "scholarly", literatureQueryLabel(input));
+      let results: Awaited<ReturnType<LiteratureSearchService["execute"]>>;
+      try {
+        results = await service.execute(input, context);
+      } catch (error) {
+        if (turn && isOpenAlexRateLimit(error)) {
+          latchOutsideSearch(turn, "openalex", OPENALEX_RATE_LIMIT_MESSAGE);
+          throw new Error(OPENALEX_RATE_LIMIT_MESSAGE);
+        }
+        throw error;
+      }
       const content = {
         workflow: input.mode === "metadata" ? input.workflow : "answer",
         mode: input.mode,
@@ -390,9 +523,12 @@ export function createLiteratureSearchTool(
       return identifyLiteratureCandidates(
         content,
         context,
-        input.workflow === "review",
+        input.workflow === "review" && canShowLiteratureReview(context),
         canShowLiteratureReview(context),
         input.count,
+        turn
+          ? buildOutsideSearchNote(turn, "scholarly")
+          : OUTSIDE_SEARCH_STOP_NOTE,
       );
     },
     createResultReviewAction: (input, result, context) =>

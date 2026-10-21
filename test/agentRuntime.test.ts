@@ -104,6 +104,11 @@ import { createTaskUpdateTool } from "../src/agent/tools/control/taskUpdate";
 import { OUTCOME_REASONS } from "../src/agent/loop/outcomes";
 import { ExecutionCheckpointFold } from "../src/agent/execution/checkpointEvents";
 import { isTruncatedToolResultContent } from "../src/agent/store/traceStore";
+import { createLiteratureSearchTool } from "../src/agent/tools/read/literatureSearch";
+import {
+  outsideSearchCount,
+  outsideSearchLatch,
+} from "../src/agent/tools/read/outsideSearchLedger";
 
 function registerZeroEffectLibraryUpdate(registry: AgentToolRegistry): void {
   registry.register({
@@ -8059,7 +8064,11 @@ describe("web attribution runtime guard", function () {
       {
         id: "web-call-1",
         name: "web_search",
-        arguments: { query: "current fact", depth: "basic" },
+        arguments: {
+          query: "current fact",
+          depth: "basic",
+          need: "current_or_public_facts",
+        },
       },
     ],
     assistantMessage: {
@@ -8069,7 +8078,11 @@ describe("web attribution runtime guard", function () {
         {
           id: "web-call-1",
           name: "web_search",
-          arguments: { query: "current fact", depth: "basic" },
+          arguments: {
+            query: "current fact",
+            depth: "basic",
+            need: "current_or_public_facts",
+          },
         },
       ],
     },
@@ -8116,7 +8129,10 @@ describe("web attribution runtime guard", function () {
                   {
                     id: "web-call-missing-depth",
                     name: "web_search",
-                    arguments: { query: "current fact" },
+                    arguments: {
+                      query: "current fact",
+                      need: "current_or_public_facts",
+                    },
                   },
                 ],
                 assistantMessage: {
@@ -8126,7 +8142,10 @@ describe("web attribution runtime guard", function () {
                     {
                       id: "web-call-missing-depth",
                       name: "web_search",
-                      arguments: { query: "current fact" },
+                      arguments: {
+                        query: "current fact",
+                        need: "current_or_public_facts",
+                      },
                     },
                   ],
                 },
@@ -8144,7 +8163,11 @@ describe("web attribution runtime guard", function () {
                   {
                     id: "web-call-corrected",
                     name: "web_search",
-                    arguments: { query: "current fact", depth: "basic" },
+                    arguments: {
+                      query: "current fact",
+                      depth: "basic",
+                      need: "current_or_public_facts",
+                    },
                   },
                 ],
                 assistantMessage: {
@@ -8154,7 +8177,11 @@ describe("web attribution runtime guard", function () {
                     {
                       id: "web-call-corrected",
                       name: "web_search",
-                      arguments: { query: "current fact", depth: "basic" },
+                      arguments: {
+                        query: "current fact",
+                        depth: "basic",
+                        need: "current_or_public_facts",
+                      },
                     },
                   ],
                 },
@@ -11157,6 +11184,126 @@ describe("run event payloads", function () {
         (JSON.parse(String(finals[0].payloadJson)) as { text?: string }).text,
         "The answer.",
       );
+    } finally {
+      restoreDb();
+    }
+  });
+});
+
+describe("outside-search ledger across runs", function () {
+  const originalFetch = globalThis.fetch;
+  beforeEach(function () {
+    clearAgentReadLedger();
+    clearAgentCoverageLedger();
+    clearAgentTranscriptStore();
+    clearAgentToolResultHandleStore();
+  });
+  afterEach(function () {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("ends a run's OpenAlex latch with the run, so the next run's first OpenAlex call reaches the provider", async function () {
+    const restoreDb = installMockDb();
+    const fetched: string[] = [];
+    let status = 429;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      fetched.push(String(url));
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => ({ results: [] }),
+      } as unknown as Response;
+    }) as typeof fetch;
+    try {
+      const registry = new AgentToolRegistry();
+      const literature = createLiteratureSearchTool({
+        resolveMetadataItem: () => null,
+        getEditableArticleMetadata: () => null,
+        fetchMetadataByIdentifier: async () => null,
+      } as never);
+      const runIds: string[] = [];
+      registry.register({
+        ...literature,
+        execute: (input, context) => {
+          runIds.push(String(context.runId));
+          return literature.execute(input, context);
+        },
+      });
+      const searchCall = (id: string) => ({
+        id,
+        name: "literature_search",
+        arguments: {
+          mode: "search",
+          query: "place cell drift",
+          need: "not_in_scope_or_library",
+          gap: "The library holds no replications.",
+        },
+      });
+      const runSearches = async (conversationKey: number, ids: string[]) => {
+        const steps: AgentModelStep[] = [
+          ...ids.map((id): AgentModelStep => {
+            const call = searchCall(id);
+            return {
+              kind: "tool_calls",
+              calls: [call],
+              assistantMessage: {
+                role: "assistant",
+                content: "",
+                tool_calls: [call],
+              },
+            };
+          }),
+          {
+            kind: "final",
+            text: "Done.",
+            assistantMessage: { role: "assistant", content: "Done." },
+          },
+        ];
+        let step = 0;
+        const runtime = new AgentRuntime({
+          registry,
+          adapterFactory: () => ({
+            getCapabilities: () => ({
+              streaming: false,
+              toolCalls: true,
+              multimodal: false,
+            }),
+            supportsTools: () => true,
+            async runStep(): Promise<AgentModelStep> {
+              return steps[step++];
+            },
+          }),
+        });
+        return runtime.runTurn({
+          request: {
+            conversationKey,
+            mode: "agent",
+            libraryID: 1,
+            userText: "Did other studies replicate place cell drift?",
+            model: "test",
+            apiKey: "test",
+            apiBase: "https://example.invalid",
+          },
+          onEvent: () => undefined,
+        });
+      };
+
+      // Run A: the first OpenAlex call is rate-limited and latches; the
+      // second call in the same run never reaches OpenAlex.
+      await runSearches(991_301, ["call-a1", "call-a2"]);
+      assert.lengthOf(runIds, 2);
+      assert.equal(runIds[0], runIds[1]);
+      assert.lengthOf(fetched, 1);
+      // The runtime clears the run's ledger and latch when the run ends.
+      assert.isUndefined(outsideSearchLatch(runIds[0], "openalex"));
+      assert.equal(outsideSearchCount(runIds[0], "scholarly"), 0);
+
+      // Run B: OpenAlex answers again, and its first call reaches it.
+      status = 200;
+      await runSearches(991_302, ["call-b1"]);
+      assert.lengthOf(runIds, 3);
+      assert.notEqual(runIds[2], runIds[0]);
+      assert.lengthOf(fetched, 2);
     } finally {
       restoreDb();
     }

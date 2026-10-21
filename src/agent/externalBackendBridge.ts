@@ -696,6 +696,20 @@ function buildAgentPermissionMetadata(): {
   return { permissionMode };
 }
 
+/**
+ * The Claude Code bridge's map from the search-routing source families
+ * (SEARCH_ROUTING_CONTRACT) to its own tools: the Zotero MCP tools for the
+ * turn's papers, the library and scholarly sources, and Claude Code's
+ * WebSearch and WebFetch for the web (user decision 2a, 2026-10-20). The
+ * bridge allows WebFetch and WebSearch by default (start-bridge-server.ts
+ * --default-allowed-tools), but extra bridge arguments, the user's Claude
+ * settings or the model provider can remove them, so the line says "when
+ * available". Native web search has no tool description that carries the
+ * query-language rule, so the line states it.
+ */
+export const CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES =
+  "Search tools: the Zotero MCP tools, when listed, read the turn's papers (paper_read), search the library (library_retrieve, library_search) and search scholarly sources (literature_search); Claude Code's WebSearch and WebFetch search and read the web when available. Write web search queries in the user's language by default.";
+
 function buildOriginalAgentModeInstructionBlock(): string {
   return [
     "## Original agent-mode Zotero behavior",
@@ -727,6 +741,7 @@ function buildClaudeBridgeCustomInstruction(
     options.rawPdfMode
       ? "Claude Code receives Zotero MCP access for metadata and write operations. For raw-PDF identities, use the exact current-turn local paths instead of Zotero paper-content retrieval."
       : "Claude Code receives Zotero access through the scoped MCP tools for this turn. When those tools are available, use library_search, library_retrieve, library_read, and paper_read for Zotero library or paper-content questions before relying on filesystem exploration or conversation-visible snippets. Use zotero_script for Zotero-native API inspection or scripted library operations only when the semantic Zotero tools cannot cover the request.",
+    CLAUDE_BRIDGE_SEARCH_TOOL_ROUTES,
     'If the turn includes selected collection or tag scopes, resolve phrases like "this folder", "this collection", "inside this folder", and "this tag" against those selected Zotero scopes. Do not ask the user which folder or tag they mean unless no selected scope is present or multiple selected scopes make the reference genuinely ambiguous.',
     // Unconditional on purpose: where notes belong is a property of Zotero, not
     // of whether this user happens to have configured a notes directory. The

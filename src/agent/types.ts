@@ -1316,6 +1316,11 @@ export type AgentToolContext = {
   reviewAction?: import("./authorization/types").ActionReviewer;
   /** Host-owned authority; never decoded from model or MCP tool arguments. */
   authorization?: { kind: "external_runtime"; standalone: boolean };
+  /**
+   * Set by the action executor: an action's code (Discover related), not the
+   * model, built this call's arguments. Never decoded from tool arguments.
+   */
+  hostAction?: true;
   /** Retain native-verified child results when a prepared workflow coordinates tools. */
   recordChildExecution?: (result: AgentToolResult) => void;
   /** Host-only execution lifetime carried into child action invocations. */

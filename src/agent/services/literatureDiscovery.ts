@@ -12,6 +12,7 @@ import {
 } from "../../shared/conversationWriteFence";
 import { isConversationKeyRetiredInMemory } from "../../shared/conversationKeyLedger";
 import { normalizeArxivId, normalizeDoi } from "./paperWorkIdentity";
+import { OUTSIDE_SEARCH_STOP_NOTE } from "../tools/read/outsideSearchNeed";
 
 export type LiteratureDiscoveryRequest = {
   batchSize: number;
@@ -300,6 +301,8 @@ export async function identifyLiteratureCandidates(
   reviewRequired: boolean,
   routeImports = false,
   count?: number,
+  /** The closing note: the turn's outside-search ledger and stop note. */
+  closingNote: string = OUTSIDE_SEARCH_STOP_NOTE,
 ): Promise<Record<string, unknown>> {
   const results = Array.isArray(content.results) ? content.results : [];
   const discovery = reviewRequired
@@ -320,7 +323,12 @@ export async function identifyLiteratureCandidates(
     resourceSignature: context.resourceSignature,
     content: set,
   });
-  if (!record) return { ...content, reviewRequired: false };
+  if (!record)
+    return {
+      ...content,
+      reviewRequired: false,
+      nextStep: closingNote,
+    };
   await upsertAgentToolResultHandles([record]);
   if (discovery) {
     if (!discovery.session.candidateSetIds.includes(record.handle))
@@ -344,28 +352,41 @@ export async function identifyLiteratureCandidates(
           revision: discovery.session.revision,
           nextStep: discoveryInstruction(discovery.record),
         }
-      : routeImports
-        ? { nextStep: CANDIDATE_ROUTE }
-        : {}),
+      : {
+          nextStep: routeImports
+            ? `${CANDIDATE_ROUTE} ${closingNote}`
+            : closingNote,
+        }),
   };
 }
 
 /**
  * A workflow:'answer' search opens no discovery, so its result routes by the
- * user's request, read when the model picks its next tool: for callers that
- * can open the card, the explicit-import branch first. A workflow:'review'
- * search opened a discovery, whose candidates import only through the card
- * (discoveryImportRefusal), so its next step offers the card alone.
+ * user's request, read when the model picks its next tool. Answering is the
+ * default; for callers that can import, the explicit-import branch follows.
+ * An answer result never names the selection card: a find or recommend
+ * request takes workflow:'review' (the tool description says so), and a
+ * card branch on every evidence result led evidence questions to the card.
+ * Every answer result ends with the closing note (the turn's outside-search
+ * ledger and stop note); MCP callers get the closing note alone. A
+ * workflow:'review' search opened a discovery, whose candidates import only
+ * through the card (discoveryImportRefusal), so its next step offers the
+ * card alone. Only a Find more continuation (revision above 0) forbids prose
+ * outright; a first batch may end in an answer when the user did not ask for
+ * papers themselves, so an evidence question sent here by mistake is not
+ * forced to the card.
  */
+const ANSWER_ROUTE =
+  "Unless the user asked to import papers or only to find or recommend them, answer the user's question from these results as supporting evidence; the turn's own papers remain the primary source.";
 const IMPORT_ROUTE =
   "If the user asked to import or add papers to Zotero without asking to choose them first, skip the selection card: rank these candidates, skip papers already in the library, then call library_import with the DOI or arXiv identifiers of exactly the number the user requested and the requested destination (targetCollectionId; create the collection first only when the user named a new one).";
-const CANDIDATE_ROUTE = `${IMPORT_ROUTE} If they only asked to find or recommend papers, call literature_review with the number they asked for as count (five when unspecified) and that many ranked candidateSetId/candidateIndex selections. Otherwise answer from these results.`;
+const CANDIDATE_ROUTE = `${ANSWER_ROUTE} ${IMPORT_ROUTE}`;
 
 function discoveryInstruction(record: AgentToolResultHandleRecord): string {
   const s = record.content as LiteratureDiscoverySession;
-  const select = `titles and abstracts and select ${s.request.batchSize} ${s.papers.length ? "additional " : ""}genuinely relevant papers in ranked order${s.papers.length ? "" : " (pass the number the user asked for as count when it differs)"}. Respect the user's topic and these constraints: ${JSON.stringify(s.request)}. Assess unused saved candidates first; search further if needed. To expand a provider list, increase its retrieval limit rather than repeating the same bounded request.`;
+  const select = `titles and abstracts and select ${s.request.batchSize} ${s.papers.length ? "additional " : ""}genuinely relevant papers in ranked order${s.papers.length ? "" : " (pass the number the user asked for as count when it differs)"}. Respect the user's topic and these constraints: ${JSON.stringify(s.request)}. Assess unused saved candidates first; search further if needed. A further search uses workflow:'review'. To expand a provider list, increase its retrieval limit rather than repeating the same bounded request.`;
   const review = `literature_review with sessionId '${record.handle}', revision ${s.revision}, NEW candidateSetId/candidateIndex selections and evidence-based relevance reasons. Do not repeat displayed papers or dump the raw pool. If fewer qualify, explain shortfallReason; use outcome 'no_more' when no further relevant matches were found, or 'search_failed' for a retrieval failure. Empty selections with an explanation are allowed.`;
-  return `Assess ${select} Call ${review} Never import during discovery or finish with prose instead of the card.`;
+  return `Assess ${select} Call ${review} ${s.revision ? "Never import during discovery or finish with prose instead of the card." : "Never import during discovery. If the user asked for papers themselves, finish with the card, not prose; otherwise answer without it."}`;
 }
 
 export async function prepareLiteratureDiscoveryReview(

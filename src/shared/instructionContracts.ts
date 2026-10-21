@@ -31,7 +31,17 @@ export const AGENT_ACTION_CONTRACT = [
 /** Stable relationship between route context and model-visible tool schemas. */
 export const RUNTIME_CAPABILITY_CONTEXT = [
   "## Runtime capabilities",
-  "Treat current tool schemas, results, and limitation notices as authoritative. Active, selected, and pinned resources are workspace facts, not the entire standing write boundary. Use supplied identities directly when they match the request, and search when another target is named. Prefer concrete Zotero tools; use shell, file, or script escape hatches only for explicit or unsupported work. After shell or file actions, inspect the actual result and verify required output before claiming success. Use external search when requested or when needed current/public evidence is absent; route scholarly needs to literature search, general needs to web search, and mixed needs to both.",
+  "Treat current tool schemas, results, and limitation notices as authoritative. Active, selected, and pinned resources are workspace facts, not the entire standing write boundary. Use supplied identities directly when they match the request, and look up any other named target. Prefer concrete Zotero tools; use shell, file, or script escape hatches only for explicit or unsupported work. After shell or file actions, inspect the actual result and verify required output before claiming success.",
+].join("\n");
+
+/**
+ * The single owner of search routing. Tool descriptions and runtime lines
+ * describe mechanics and map source families to tools; they do not restate
+ * when to search.
+ */
+export const SEARCH_ROUTING_CONTRACT = [
+  "## Search routing",
+  "'Search', 'find', 'check' and 'look up' name an action, not a source; use a source the user names. Decide what the answer needs, then use the nearest source that can hold it: the turn's text, more reading of the turn's papers, the library, and only then outside sources. Skip a source that cannot hold the need, and, when something is attached, check several in one step if the need is clear. Scholarly needs (other or newer studies, citations, papers not in the library) go to literature search; current or non-scholarly public facts go to web search; distinct needs use both. With nothing attached, search the library first, in a step of its own, for any need it could hold, unless the user named an outside source or papers not in it; then answer from its relevant papers and offer to search outside, or, if it holds none, search outside without asking. If a needed source is unavailable, say so. Read outside sources only with search and web-read tools, never with shell commands or scripts unless the user asks; if a text cannot be read, answer from what you have and say what was not read.",
 ].join("\n");
 
 export const RESEARCH_RESPONSE_FORMAT_GUIDANCE = [

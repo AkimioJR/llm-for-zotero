@@ -1,7 +1,7 @@
 ---
 id: literature-review
 description: Structured scientific review with thematic synthesis and citations
-version: 13
+version: 14
 contexts: paper-set,library-corpus
 activation: auto
 ---
@@ -16,6 +16,7 @@ A review is an argument about a body of work, not a catalog of it: a faithful ac
 1. **Scope.** The host states the turn's papers or collection in the context.
    If only a collection or a search is named, list its papers once with `library_search` and work from that list.
    A selected folder, tag or paper set is the source boundary: each paper in it is a candidate, and none is relevant only because it is there.
+   With nothing attached and nothing relevant in the library, find papers with `literature_search` `workflow:'review'` and the selection card; never write the review from outside abstracts.
 2. **Parts.** In your first step, declare the parts with `task_update`.
    When the user asked for something per paper (summaries, each paper's method, a table with a row per paper), or when the review must account for more than four papers, declare a digest part: `{ taskId:'papers', description:'For the review question "<question>": summarize each paper and judge how it bears on the question', expectedEffect:'digest', scope:true }` (or explicit `targetIds`), and do not also declare a read part over the same papers.
    With nothing attached, choose the papers from `library_retrieve` results without opening them with `paper_read`, then declare the digest part with their `targetIds`.
@@ -30,7 +31,7 @@ A review is an argument about a body of work, not a catalog of it: a faithful ac
    Then a paper whose digest failed twice may be read with an overview `paper_read` instead; name it as not read only if that read fails too.
    If the part is still open after a Stop and the user says continue, call `task_update` again with the same `taskId` and no description to finish the remaining papers.
    Without a digest part, read the scope's papers with `paper_read`, passing them as `targets` and grouping related papers in one call.
-   The host fits each paper's text to the remaining context, and each result reports which papers came back complete, sampled, abstract only, or metadata only.
+   Each result reports which papers came back complete, sampled, abstract only, or metadata only.
    When papers come back sampled, read fewer at a time or read their missing sections rather than moving on.
    As you go, note each paper's main claims, methods, and evidence, and its role in the argument: central, supporting, contradictory, theoretical, methodological, or context.
    Use `paper_read({ mode:'targeted', query:'...' })` only to check a decisive claim, test an apparent contradiction against both papers, or find a precise location.
@@ -65,7 +66,6 @@ A review is an argument about a body of work, not a catalog of it: a faithful ac
 
 - Apply SANRA-style narrative-review checks: explain importance and aims, describe the reviewed scope, support key claims with references, reason from the strength and type of evidence, and present outcome data accurately.
 - For scoping reviews, map the breadth, concepts, evidence types, and gaps in line with JBI's purpose for scoping evidence synthesis.
-- Keep PRISMA-style eligibility screening to systematic-review requests; in other reviews, name each excluded paper with its reason.
 
 ### Document
 

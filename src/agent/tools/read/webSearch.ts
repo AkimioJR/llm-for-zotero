@@ -15,6 +15,22 @@ import { getWebAccessProvider } from "../../../webAccess/prefs";
 import { readOnlyInvocationPlan } from "../../authorization/invocationPlan";
 import { neverSelected } from "../guidance";
 import { fail, ok, validateObject } from "../shared";
+import { WebAccessError } from "../../../webAccess/errors";
+import {
+  buildOutsideSearchReasonDetail,
+  OUTSIDE_SEARCH_NEED_PROPERTIES,
+  OUTSIDE_SEARCH_NEED_SENTENCE,
+  OUTSIDE_SEARCH_STOP_NOTE,
+  outsideSearchNeedError,
+} from "./outsideSearchNeed";
+import {
+  buildOutsideSearchNote,
+  latchOutsideSearch,
+  outsideSearchLatch,
+  recordOutsideSearch,
+  tracksOutsideSearchTurn,
+  webSearchUnavailableMessage,
+} from "./outsideSearchLedger";
 import {
   createConfiguredWebAccessProvider,
   isWebAccessToolAvailable,
@@ -36,7 +52,32 @@ export type WebSearchInput = {
 
 export type WebSearchToolResult = WebSearchResponse & {
   citation: ReturnType<typeof webCitationInstruction>;
+  /**
+   * The turn's web-search ledger and stop note; last, so the model reads
+   * it after the results.
+   */
+  nextStep: string;
+  /** Set when the web latch refused the call; no provider was reached. */
+  unavailable?: "latched";
+  message?: string;
 };
+
+/**
+ * Why web search cannot work again this turn, or undefined: an exhausted
+ * quota or a rejected key does not recover by retrying. A rate limit or a
+ * service failure may, so it does not latch.
+ */
+function webSearchLatchReason(error: unknown): string | undefined {
+  if (!(error instanceof WebAccessError)) return undefined;
+  if (error.code === "quota" || error.code === "plan_limit")
+    return "quota exhausted";
+  if (error.code === "authentication") return "authentication rejected";
+  return undefined;
+}
+
+function webProviderLabel(): string {
+  return getWebAccessProvider() === "anysearch" ? "AnySearch" : "Tavily";
+}
 
 function normalizeTopic(value: unknown): WebSearchTopic {
   return value === "news" || value === "finance" ? value : "general";
@@ -103,7 +144,8 @@ export function validateWebSearchInput(
     if (
       Object.keys(args).some(
         (key) =>
-          !["query", "maxResults"].includes(key) && args[key] !== undefined,
+          !["query", "maxResults", "need", "gap"].includes(key) &&
+          args[key] !== undefined,
       )
     ) {
       return fail(
@@ -176,6 +218,20 @@ export function validateWebSearchInput(
   });
 }
 
+/**
+ * The model's call: the search parameters plus the need that sends it
+ * outside the turn's papers and the library. The need stays out of the
+ * validated input, so the provider never receives it.
+ */
+export function validateWebSearchCall(
+  args: unknown,
+): AgentToolInputValidation<WebSearchInput> {
+  const validated = validateWebSearchInput(args);
+  if (!validated.ok) return validated;
+  const needError = outsideSearchNeedError(args as Record<string, unknown>);
+  return needError ? fail(needError) : validated;
+}
+
 function buildSearchTraceDetails(
   args: unknown,
   content: unknown,
@@ -189,6 +245,8 @@ function buildSearchTraceDetails(
   if (input.ok) {
     details.push({ label: "Query", value: input.value.query });
   }
+  const reason = buildOutsideSearchReasonDetail(args);
+  if (reason) details.push(reason);
   for (const source of result.results || []) {
     details.push({
       label: "URL",
@@ -211,10 +269,12 @@ export function createWebSearchTool(
     spec: {
       name: "web_search",
       description:
-        "Search the current public web with Tavily when the answer materially needs current facts or concrete general-web evidence. Use literature_search for scholarly discovery; a request may use both for distinct evidence needs.",
+        "Search the current public web with Tavily; write the query in the user's language by default. Returns ranked results with snippets; web_read reads a result's page text. " +
+        OUTSIDE_SEARCH_NEED_SENTENCE +
+        ".",
       inputSchema: {
         type: "object",
-        required: ["query", "depth"],
+        required: ["query", "depth", "need"],
         additionalProperties: false,
         properties: {
           query: {
@@ -248,6 +308,7 @@ export function createWebSearchTool(
             maxItems: 10,
             items: { type: "string" },
           },
+          ...OUTSIDE_SEARCH_NEED_PROPERTIES,
         },
       },
       executionClass: "read",
@@ -258,7 +319,7 @@ export function createWebSearchTool(
     guidance: {
       matches: neverSelected,
       instruction:
-        "Use web_search when the request needs current or general public evidence. A mixed request may also use literature_search for distinct scholarly evidence. Preserve the user's language by default, explicitly choose basic or advanced from the current retrieval need, and use web_read when search snippets are insufficient. Every final-answer paragraph that uses web results must end with the exact hidden source marker described in the tool result, using only returned sourceId values. Do not add a references footer.",
+        "Always explicitly choose basic or advanced from the current retrieval need, and use web_read when search snippets are insufficient. Every final-answer paragraph that uses web results must end with the exact hidden source marker described in the tool result, using only returned sourceId values. Do not add a references footer.",
     },
     presentation: {
       label: "Search Web",
@@ -279,13 +340,16 @@ export function createWebSearchTool(
             : "Searching the web";
         },
         onSuccess: "Web search complete",
-        onEmpty: "No web results found",
+        onEmpty: ({ content }) =>
+          (content as { unavailable?: unknown } | undefined)?.unavailable
+            ? "Web search unavailable this turn"
+            : "No web results found",
         onError: "Web search failed",
       },
       buildTraceDetails: ({ args, content }) =>
         buildSearchTraceDetails(args, content),
     },
-    validate: validateWebSearchInput,
+    validate: validateWebSearchCall,
     planInvocation: (input) =>
       readOnlyInvocationPlan({
         domains: ["network"],
@@ -302,10 +366,38 @@ export function createWebSearchTool(
       // after the model received its schema. Never drop unsupported fields.
       const validated = validateWebSearchInput(input);
       if (!validated.ok) throw new Error(validated.error);
-      const result = await providerFactory().search({
-        ...validated.value,
-        signal: context.signal,
-      });
+      // The turn's outside-search ledger; untracked run ids keep no state.
+      const turn = tracksOutsideSearchTurn(context.runId)
+        ? context.runId
+        : undefined;
+      const latched = turn ? outsideSearchLatch(turn, "web") : undefined;
+      if (latched)
+        return {
+          provider: webProviderLabel(),
+          query: validated.value.query,
+          results: [],
+          citation: webCitationInstruction([]),
+          unavailable: "latched",
+          message: latched,
+          nextStep: latched,
+        };
+      const provider = providerFactory();
+      if (turn) recordOutsideSearch(turn, "web", validated.value.query);
+      let result: WebSearchResponse;
+      try {
+        result = await provider.search({
+          ...validated.value,
+          signal: context.signal,
+        });
+      } catch (error) {
+        const reason = webSearchLatchReason(error);
+        if (!turn || !reason) throw error;
+        const message = webSearchUnavailableMessage(webProviderLabel(), reason);
+        latchOutsideSearch(turn, "web", message);
+        // The model reads the latch message; the code and status stay.
+        const failure = error as WebAccessError;
+        throw new WebAccessError(message, failure.code, failure.status);
+      }
       const results = registerWebSearchSources(context.runId, result.results);
       return {
         ...result,
@@ -313,6 +405,9 @@ export function createWebSearchTool(
         citation: webCitationInstruction(
           results.map((source) => source.sourceId),
         ),
+        nextStep: turn
+          ? buildOutsideSearchNote(turn, "web")
+          : OUTSIDE_SEARCH_STOP_NOTE,
       };
     },
   };
@@ -323,14 +418,17 @@ export function createWebSearchTool(
       return {
         ...tool.spec,
         description:
-          "Search the public web with AnySearch. Supports query and result count only, not depth, topic, date/domain filters or vertical selection. Use literature_search for scholarly discovery and web_read for page text.",
+          "Search the public web with AnySearch. Supports query and result count only, not depth, topic, date/domain filters or vertical selection. Write the query in the user's language by default; use web_read for page text. " +
+          OUTSIDE_SEARCH_NEED_SENTENCE +
+          ".",
         inputSchema: {
           type: "object",
-          required: ["query"],
+          required: ["query", "need"],
           additionalProperties: false,
           properties: {
             query: { type: "string", minLength: 1, maxLength: 2000 },
             maxResults: { type: "integer", minimum: 1, maximum: 10 },
+            ...OUTSIDE_SEARCH_NEED_PROPERTIES,
           },
         },
       };
@@ -340,7 +438,7 @@ export function createWebSearchTool(
       return {
         matches: neverSelected,
         instruction:
-          "Use web_search for current or general public evidence. AnySearch accepts query and maxResults only; do not invent depth, topic, date/domain filters or vertical options. Use web_read with searched URLs only when snippets are insufficient. Every final-answer paragraph using web information must end with the hidden source marker described in the result, using only returned sourceId values. Do not add a references footer.",
+          "AnySearch accepts query and maxResults only; do not invent depth, topic, date/domain filters or vertical options. Use web_read with searched URLs only when snippets are insufficient. Every final-answer paragraph using web information must end with the hidden source marker described in the result, using only returned sourceId values. Do not add a references footer.",
       };
     },
   };

@@ -43,12 +43,20 @@ import {
  * again by past_chat_search and past_chat_attach, the always-listed tools
  * that find an earlier chat and add it to the user's message (733
  * characters each, 2026-10-19). Raised again by note_write's removeEmbeds field
- * (58 characters, 2026-10-19).
+ * (58 characters, 2026-10-19). Raised on 2026-10-20 by the search-routing
+ * branch: the search routing contract, the one owner of when to search
+ * which source, with its nothing-attached rule; the plugin Agent's map from
+ * source families to its tools, with the selection-card rule; the reason
+ * (need and gap) every outside search states; and literature_search's
+ * wording of the find (workflow:'review') and answer (workflow:'answer')
+ * workflows. Measured against a10986c0, that is 1,204 more fixed prompt and
+ * 405 more tool characters, less 21, 5 and 21 turn characters: net growth
+ * of 1,588, 1,604 and 1,588, to 39,035, 37,768 and 39,133.
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 37_447,
-  paper: 36_164,
-  collection: 37_545,
+  global: 39_035,
+  paper: 37_768,
+  collection: 39_133,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

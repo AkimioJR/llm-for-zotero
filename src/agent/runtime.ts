@@ -21,6 +21,10 @@ import {
 import type { WebAttributionAssessment } from "../webAccess/attribution";
 import { clearWebSourcesForRun } from "../webAccess/runSources";
 import {
+  clearOutsideSearchTurn,
+  resetOutsideSearchLedger,
+} from "./tools/read/outsideSearchLedger";
+import {
   buildAgentContextBudgetState,
   resolveAgentContextBudgetPolicy,
 } from "./context/budgetPolicy";
@@ -2007,6 +2011,8 @@ export class AgentRuntime {
         settledTargets: settledTargetCount(request.executionCheckpoint),
         limits: this.turnLimits,
         retryBackoffMs: this.modelRetryBackoffMs,
+        // A settled paper restarts the outside-search counts with the rest.
+        onSettled: () => resetOutsideSearchLedger(runId),
       });
       const searchScope = searchScopeLabel(request.turnPaperScope);
       /** How many of the turn's declared parts are done, for a stop text. */
@@ -3926,7 +3932,10 @@ export class AgentRuntime {
       // usage row for this turn. It never throws, and it is not awaited so a
       // slow database cannot delay the turn's teardown.
       void usageRecorder.flush(params.signal?.aborted ? "abort" : "complete");
-      if (webSourceRunId) clearWebSourcesForRun(webSourceRunId);
+      if (webSourceRunId) {
+        clearWebSourcesForRun(webSourceRunId);
+        clearOutsideSearchTurn(webSourceRunId);
+      }
       pathLease.release();
     }
   }
