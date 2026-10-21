@@ -176,6 +176,16 @@ export function attachAssistantSelectionPopup(
     promptInput.style.overflowY = "";
   };
   const hideSelectionPopup = () => {
+    // Every chat scroll calls this; a hidden, collapsed popup has nothing
+    // to reset, and rewriting it is a mutation other observers react to.
+    if (
+      !promptExpanded &&
+      !selectionPopup.classList.contains("is-visible") &&
+      !selectionPopup.classList.contains("is-expanded")
+    ) {
+      selectionPopupText = "";
+      return;
+    }
     collapsePrompt();
     selectionPopup.classList.remove("is-visible");
     selectionPopupText = "";
