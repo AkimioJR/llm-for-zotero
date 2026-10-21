@@ -551,10 +551,13 @@ export function stripWebSourceMarkersForDisplay(text: string): string {
       output += lineWithBreak;
       continue;
     }
-    const markerStart = findStreamingMarkerStart(line);
-    let cleanLine = line;
-    if (markerStart >= 0) cleanLine = line.slice(0, markerStart);
-    cleanLine = cleanLine.replace(COMPLETE_MARKER_PATTERN, "");
+    // Remove complete markers wherever they sit; only an unfinished marker,
+    // which can only be the end of the streamed text, cuts the line.
+    let cleanLine = line
+      .replace(MARKER_BEFORE_PUNCTUATION_PATTERN, "")
+      .replace(COMPLETE_MARKER_PATTERN, "");
+    const markerStart = findStreamingMarkerStart(cleanLine);
+    if (markerStart >= 0) cleanLine = cleanLine.slice(0, markerStart);
     output += cleanLine + (hasBreak ? "\n" : "");
   }
   return output;
