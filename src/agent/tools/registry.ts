@@ -172,14 +172,16 @@ function modelToolSpec(spec: ToolSpec): ToolSpec {
  * A temporary side chat (an ephemeral conversation key) never writes durable
  * rows. Every tool that can change the library or reach past it
  * (external_effect: library writes, note writes, batches, undo, scripts,
- * commands) is withheld from such a request.
+ * commands) is withheld from such a request, and so is the paper selection
+ * card (literature_review): it reads, but its Import button writes.
  */
 export function isToolWithheldForEphemeralRequest(
   tool: Pick<AgentToolDefinition<any, any>, "spec">,
   request: Pick<AgentRuntimeRequest, "conversationKey">,
 ): boolean {
   return (
-    tool.spec.executionClass === "external_effect" &&
+    (tool.spec.executionClass === "external_effect" ||
+      tool.spec.name === "literature_review") &&
     isEphemeralConversationKey(request.conversationKey)
   );
 }

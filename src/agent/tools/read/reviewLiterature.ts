@@ -1,3 +1,4 @@
+import { isEphemeralConversationKey } from "../../../shared/conversationKeySpace";
 import { readOnlyInvocationPlan } from "../../authorization/invocationPlan";
 import {
   createSearchLiteratureReviewAction,
@@ -98,11 +99,13 @@ const LITERATURE_REVIEW_SPEC: ToolSpec = {
 
 /**
  * Whether this caller can show the paper selection card. MCP never offers
- * literature_review, so its clients present candidates themselves.
+ * literature_review, so its clients present candidates themselves; a
+ * temporary side chat is read-only, so it never gets the card either.
  */
 export function canShowLiteratureReview(context: AgentToolContext): boolean {
   return (
-    !context.isToolVisible || context.isToolVisible(LITERATURE_REVIEW_SPEC)
+    !isEphemeralConversationKey(context.request.conversationKey) &&
+    (!context.isToolVisible || context.isToolVisible(LITERATURE_REVIEW_SPEC))
   );
 }
 
