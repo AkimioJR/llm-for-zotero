@@ -22,8 +22,10 @@ import {
 declare const Zotero: any;
 declare const IOUtils: any;
 
-const SHOT_DIR =
-  "/Users/yat-lok/workspace/llm-for-zotero/docs/side-panel-misc-shots";
+const SHOT_DIR = PathUtils.join(
+  PathUtils.tempDir,
+  "llm-for-zotero-side-panel-misc-shots",
+);
 
 const MERMAID_FENCE = "```mermaid\nflowchart LR\n  A[Start] --> B[Finish]\n```";
 const SVG_FENCE =
