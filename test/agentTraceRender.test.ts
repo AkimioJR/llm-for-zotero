@@ -6023,6 +6023,36 @@ describe("agentTrace render", function () {
     assert.isEmpty(trace.findAllByClass("llm-assistant-generated-image"));
   });
 
+  it("opens a clicked chat image in the shared full-view window", function () {
+    const dialogs: unknown[][] = [];
+    const fakeWindow = {
+      closed: false,
+      addEventListener: () => undefined,
+      setTimeout: () => 0,
+    };
+    const doc = {
+      createElement: (tagName: string) => new FakeElement(tagName),
+      createElementNS: (_ns: string, tagName: string) =>
+        new FakeElement(tagName),
+      defaultView: {
+        openDialog: (...args: unknown[]) => {
+          dialogs.push(args);
+          return fakeWindow;
+        },
+      },
+    } as unknown as Document;
+    const container = doc.createElement("div") as unknown as FakeElement;
+    renderAssistantGeneratedImagesInto(
+      container as unknown as HTMLElement,
+      [{ id: "img-w", label: "result.png", path: "/tmp/result.png" }],
+      doc,
+    );
+    const img = container.findByClass("llm-assistant-generated-image")!;
+    img.dispatchFakeEvent("click");
+    assert.lengthOf(dialogs, 1);
+    assert.include(String(dialogs[0][0]), "standaloneMermaid.xhtml");
+  });
+
   it("renders generated assistant images outside user screenshot UI", function () {
     const savedPathContainer = fakeDocument.createElement("div") as unknown as
       | HTMLElement

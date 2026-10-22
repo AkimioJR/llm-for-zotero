@@ -12,6 +12,7 @@ import { toFileUrl } from "../../utils/localPath";
 import { revealLocalPath } from "../../utils/revealLocalPath";
 import { copyTextToClipboard } from "./clipboard";
 import { mountFigureTabZoom, openFigureViewer } from "./figureViewer";
+import { openStandaloneViewerWindow } from "./standaloneMermaidWindow";
 import { openReaderForItem } from "./quoteNavigator";
 import {
   SIDE_ITEM_KIND_ATTRIBUTE,
@@ -562,10 +563,31 @@ export function createGeneratedImageFrame(
     img.addEventListener("click", (event: Event) => {
       event.preventDefault();
       event.stopPropagation();
+      const viewerCaption = buildGeneratedImageCaption(image);
+      // The window builds the buttons with its own document; the handlers
+      // still act on this chat through the closures. The window has no side
+      // panel host, so the move button is left out there.
+      const opened = openStandaloneViewerWindow(doc, {
+        kind: "image",
+        src,
+        alt: img.alt,
+        caption: viewerCaption,
+        appendActions: (parent, targetDoc) => {
+          appendGeneratedImageActions(
+            parent,
+            container,
+            image,
+            figure,
+            targetDoc,
+            options,
+          );
+        },
+      });
+      if (opened) return;
       openFigureViewer(figure, {
         src,
         alt: img.alt,
-        caption: buildGeneratedImageCaption(image),
+        caption: viewerCaption,
         appendActions: (parent) => {
           appendGeneratedImageActions(
             parent,

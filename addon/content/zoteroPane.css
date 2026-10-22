@@ -10277,6 +10277,39 @@ label.llm-search-results-item:hover {
   opacity: 0.45;
 }
 
+/* Figure actions (copy, save, folder, jump) in the full-view toolbar look
+   like the other toolbar buttons. */
+.llm-mermaid-window-toolbar .llm-generated-image-action {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--llm-mermaid-button-bg);
+  color: var(--llm-mermaid-button-text);
+  opacity: 0.82;
+}
+
+.llm-mermaid-window-toolbar .llm-generated-image-action:hover:not(:disabled),
+.llm-mermaid-window-toolbar .llm-generated-image-action:focus-visible {
+  background: var(--llm-mermaid-button-hover-bg);
+  color: var(--llm-mermaid-button-text);
+  opacity: 1;
+}
+
+.llm-mermaid-window-caption {
+  position: fixed;
+  left: 24px;
+  right: 24px;
+  bottom: 14px;
+  pointer-events: none;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--llm-mermaid-button-text);
+  opacity: 0.8;
+}
+
 .llm-mermaid-window-viewport {
   box-sizing: border-box;
   width: 100%;

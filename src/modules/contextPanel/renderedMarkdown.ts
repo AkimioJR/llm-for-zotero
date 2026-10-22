@@ -20,6 +20,7 @@ import {
 import {
   openStandaloneMermaidWindow,
   openStandaloneSvgWindow,
+  openStandaloneViewerWindow,
 } from "./standaloneMermaidWindow";
 import { sanitizeText } from "../../utils/textSanitization";
 import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
@@ -1656,7 +1657,13 @@ function attachRenderedHtmlPreviews(root: ParentNode, doc: Document): void {
     );
     openButton.classList.add("llm-mermaid-open-btn", "llm-html-open-btn");
     openButton.addEventListener("click", () => {
-      openHtmlPreviewViewer(doc, source, preview);
+      const opened = openStandaloneViewerWindow(doc, {
+        kind: "html",
+        source,
+        title: t("HTML preview"),
+        themeKey: getMermaidThemeKey(doc, preview),
+      });
+      if (!opened) openHtmlPreviewViewer(doc, source, preview);
     });
     preview.replaceChildren(frame, openButton);
     attachSideItemMoveButton(doc, preview, "html", source);

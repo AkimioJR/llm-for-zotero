@@ -31,7 +31,14 @@ export type StandaloneViewerPayload =
       src: string;
       title?: string;
       alt?: string;
+      /** Shown as the window title and as a line under the picture. */
+      caption?: string;
       themeKey?: MermaidThemeKey;
+      /**
+       * Adds buttons to the toolbar before the close button. They must build
+       * with the target document they are given.
+       */
+      appendActions?: (parent: HTMLElement, targetDoc: Document) => void;
     }
   | {
       kind: "html";
@@ -158,6 +165,7 @@ function buildZoomContent(
   root: HTMLElement,
   media: HTMLElement | SVGElement,
   zoomTargetLabel: string,
+  extras: { caption?: string; actions?: HTMLElement[] } = {},
 ): ViewerContent {
   const zoomOut = createButton(doc, "−", `Zoom out ${zoomTargetLabel}`);
   const zoomIn = createButton(doc, "+", `Zoom in ${zoomTargetLabel}`);
@@ -169,6 +177,12 @@ function buildZoomContent(
   stage.className = "llm-mermaid-window-stage";
   stage.appendChild(media);
   viewport.appendChild(stage);
+  if (extras.caption) {
+    const caption = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
+    caption.className = "llm-mermaid-window-caption";
+    caption.textContent = extras.caption;
+    viewport.appendChild(caption);
+  }
 
   let scale = 1;
   let baseFitWidth = 0;
@@ -213,7 +227,7 @@ function buildZoomContent(
   targetWin.addEventListener("resize", () => applyZoom(scale));
 
   return {
-    buttons: [zoomOut, zoomIn, fit],
+    buttons: [zoomOut, zoomIn, fit, ...(extras.actions || [])],
     body: viewport,
     afterMount: (css) => {
       css.addEventListener("load", () => applyZoom(scale), { once: true });
@@ -246,10 +260,15 @@ function buildViewerContent(
   if (payload.kind === "image") {
     const img = doc.createElementNS(HTML_NS, "img") as HTMLImageElement;
     img.className = "llm-mermaid-window-svg";
-    img.alt = payload.alt || payload.title || "";
+    img.alt = payload.alt || payload.title || payload.caption || "";
     img.src = payload.src;
+    const actionHost = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
+    payload.appendActions?.(actionHost, doc);
     return {
-      content: buildZoomContent(doc, targetWin, root, img, "picture"),
+      content: buildZoomContent(doc, targetWin, root, img, "picture", {
+        caption: payload.caption,
+        actions: Array.from(actionHost.children) as HTMLElement[],
+      }),
       label: "picture",
     };
   }
@@ -283,7 +302,10 @@ function initializeStandaloneViewerWindow(
 
   const themeKey =
     ("themeKey" in payload && payload.themeKey) || detectThemeKey(sourceDoc);
-  doc.title = payload.title || DEFAULT_TITLES[payload.kind];
+  doc.title =
+    payload.title ||
+    (payload.kind === "image" && payload.caption) ||
+    DEFAULT_TITLES[payload.kind];
   doc.documentElement?.setAttribute(
     "minwidth",
     `${MERMAID_WINDOW_MIN_WIDTH_PX}`,
