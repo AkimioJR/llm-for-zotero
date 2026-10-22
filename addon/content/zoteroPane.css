@@ -10242,6 +10242,187 @@ label.llm-search-results-item:hover {
   outline-offset: 1px;
 }
 
+/* Diagrams, drawings and web pages: no header, no box. The caption sits
+ * under the content and the source folds away until "Show code". */
+.llm-content-flat .llm-content-caption-kind {
+  text-transform: uppercase;
+}
+
+.llm-content-flat .llm-copyable.llm-copyable-flat-preview {
+  position: relative;
+  margin: 6px 0 22px;
+}
+
+.llm-content-flat .llm-copyable-flat-preview .llm-codeblock-flat-preview {
+  position: static;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-header {
+  display: none;
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-source {
+  --llm-content-bar-icon: url("icons/action-source-code.svg");
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-save {
+  --llm-content-bar-icon: url("icons/action-save.svg");
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-fullview {
+  --llm-content-bar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7'/%3E%3C/svg%3E");
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+.llm-content-flat
+  .llm-content-bar
+  > .llm-content-bar-save[data-save-state="saved"] {
+  color: #7dd3a8;
+}
+
+.llm-content-flat
+  .llm-content-bar
+  > .llm-content-bar-save[data-save-state="failed"] {
+  color: #f87171;
+}
+
+/* Diagram and drawing: centered, at most 520px wide (less in the sidebar). */
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-mermaid-preview,
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-svg-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-mermaid-preview[data-mermaid-state="error"] {
+  justify-content: flex-start;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-mermaid-preview
+  .llm-mermaid-static-viewport {
+  width: 100%;
+  max-width: 520px;
+  min-height: 0;
+  max-height: none;
+  margin: 0 auto;
+  padding: 0;
+  overflow: visible;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-svg-preview
+  img {
+  max-width: min(100%, 520px);
+  max-height: 420px;
+}
+
+/* Web page: the top of the page in a 300px frame; a pill shows all of it. */
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview {
+  position: relative;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 75%, transparent);
+  border-radius: 10px;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview
+  iframe {
+  height: 300px;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview[data-expanded="true"]
+  iframe {
+  height: 520px;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview[data-expanded="false"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  height: 64px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--llm-mermaid-canvas-bg, #fff)
+  );
+  pointer-events: none;
+}
+
+/* The source, when shown: one quiet surface under the caption. */
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-body {
+  margin-top: 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(
+    --llm-flat-surface,
+    color-mix(in srgb, var(--fill-primary, #111827) 4%, transparent)
+  );
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-body
+  pre {
+  padding: 14px 22px 14px 14px;
+}
+
 .llm-rendered-markdown .llm-svg-preview {
   position: relative;
   display: flex;

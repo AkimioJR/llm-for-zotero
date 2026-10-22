@@ -253,7 +253,7 @@ async function resolveGeneratedImageFilePickerResult(
   return path ? { status: "selected", path } : { status: "unavailable" };
 }
 
-async function pickGeneratedImageSavePath(
+export async function pickGeneratedImageSavePath(
   doc: Document,
   fileName: string,
 ): Promise<GeneratedImageSavePathResult> {

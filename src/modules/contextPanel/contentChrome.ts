@@ -125,3 +125,72 @@ export function appendContentCaption(
   block.appendChild(caption);
   return caption;
 }
+
+const CAPTION_TEXT_MAX_CHARS = 80;
+
+function decodeBasicEntities(text: string): string {
+  return text
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&");
+}
+
+/** Tags stripped, entities decoded, white space folded, cut to caption size. */
+export function cleanCaptionText(raw: string): string {
+  const text = decodeBasicEntities(
+    raw
+      .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, " ")
+      .replace(/<[^>]*>/g, " "),
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(["'])(.*)\1$/, "$2")
+    .trim();
+  if (text.length <= CAPTION_TEXT_MAX_CHARS) return text;
+  return `${text.slice(0, CAPTION_TEXT_MAX_CHARS - 1).trimEnd()}…`;
+}
+
+/**
+ * A diagram's own title: the front-matter `title:`, then `accTitle:`, then a
+ * `title` line (gantt, journey, timeline) or `pie ... title X`.
+ */
+export function parseMermaidTitle(source: string): string {
+  const text = (source || "").replace(/\r\n?/g, "\n");
+  const frontMatter = text.match(
+    /^\s*---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/,
+  );
+  if (frontMatter) {
+    const title = frontMatter[1].match(/^[ \t]*title[ \t]*:[ \t]*(.+)$/m);
+    if (title) return cleanCaptionText(title[1]);
+  }
+  const body = frontMatter ? text.slice(frontMatter[0].length) : text;
+  const accTitle = body.match(/^[ \t]*accTitle[ \t]*:[ \t]*(.+)$/m);
+  if (accTitle) return cleanCaptionText(accTitle[1]);
+  const titleLine = body.match(
+    /^[ \t]*(?:pie\b[^\n]*?[ \t])?title[ \t]+(.+)$/m,
+  );
+  return titleLine ? cleanCaptionText(titleLine[1]) : "";
+}
+
+/** The text of an SVG drawing's `<title>` element. */
+export function parseSvgTitle(svgSource: string): string {
+  const match = (svgSource || "").match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+  return match ? cleanCaptionText(match[1]) : "";
+}
+
+/** A page's `<title>`, or else the text of its first `<h1>`. */
+export function parseHtmlTitle(html: string): string {
+  const source = html || "";
+  for (const pattern of [
+    /<title\b[^>]*>([\s\S]*?)<\/title>/i,
+    /<h1\b[^>]*>([\s\S]*?)<\/h1>/i,
+  ]) {
+    const match = source.match(pattern);
+    const text = match ? cleanCaptionText(match[1]) : "";
+    if (text) return text;
+  }
+  return "";
+}
