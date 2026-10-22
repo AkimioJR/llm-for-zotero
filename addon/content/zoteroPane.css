@@ -212,6 +212,7 @@
     var(--stroke-secondary, rgba(120, 120, 120, 0.3)) 86%,
     transparent
   );
+  --llm-flat-surface: color-mix(in srgb, #000 3.5%, transparent);
   --llm-codeblock-header-text: var(--fill-secondary, #4b5563);
   --llm-codeblock-copy: var(--fill-secondary, #4b5563);
   --llm-codeblock-copy-hover: var(--fill-primary, #111827);
@@ -283,6 +284,7 @@
 :root[sizemode][lwtheme-brighttext] .llm-standalone-side-panel-item-rendered {
   --llm-codeblock-bg: #202020;
   --llm-codeblock-border: color-mix(in srgb, #fff 8%, transparent);
+  --llm-flat-surface: color-mix(in srgb, #fff 4.5%, transparent);
   --llm-codeblock-header-text: #d4d4d8;
   --llm-codeblock-copy: #d4d4d8;
   --llm-codeblock-copy-hover: #ffffff;
@@ -9962,6 +9964,282 @@ label.llm-search-results-item:hover {
 .llm-rendered-markdown .llm-codeblock-body .hljs-section,
 .llm-rendered-markdown .llm-codeblock-body .hljs-deletion {
   color: var(--llm-codeblock-meta);
+}
+
+/* ------------------------------------------------------------------ *
+ * Flat answer style: rich content in chat answers has no container, a
+ * caption line under it, and one floating hover bar. `.llm-content-flat`
+ * marks the answer text root; the side panel item tabs, the agent trace and
+ * the document windows do not carry it and keep their framed look.
+ * ------------------------------------------------------------------ */
+
+/* The hover bar (shared by every kind of content). The block must be
+ * position: relative. */
+.llm-content-flat .llm-content-bar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 75%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--material-background) 80%, transparent);
+  box-shadow: 0 2px 10px color-mix(in srgb, #000 16%, transparent);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.llm-content-flat :hover > .llm-content-bar,
+.llm-content-flat :focus-within > .llm-content-bar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.llm-content-flat .llm-content-bar:empty {
+  display: none;
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn {
+  appearance: none;
+  -moz-appearance: none;
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  color: var(--fill-secondary);
+  font-size: 0;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 1;
+  transform: none;
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn::before {
+  content: "";
+  display: block;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  mask-image: var(--llm-content-bar-icon, none);
+  -webkit-mask-image: var(--llm-content-bar-icon, none);
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+}
+
+.llm-content-flat .llm-content-bar > .llm-codeblock-wrap-toggle {
+  --llm-content-bar-icon: url("icons/action-word-wrap.svg");
+}
+
+.llm-content-flat .llm-content-bar > .llm-render-code-copy-btn {
+  --llm-content-bar-icon: url("icons/action-copy.svg");
+}
+
+.llm-content-flat .llm-content-bar > .llm-side-move-btn {
+  --llm-content-bar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h13M11 6l6 6-6 6M21 5v14'/%3E%3C/svg%3E");
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:hover,
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:focus-visible {
+  background: color-mix(in srgb, var(--fill-primary) 9%, transparent);
+  color: var(--fill-primary);
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 0;
+}
+
+/* A toggle that is on shows the accent colour. */
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn[aria-pressed="true"] {
+  color: var(--color-accent, var(--accent-blue, #4072e5));
+}
+
+.llm-content-flat
+  .llm-copyable[data-copy-feedback="copied"]
+  .llm-render-code-copy-btn {
+  color: #7dd3a8;
+}
+
+/* Hover label under each bar button, right-aligned (same pattern as the
+ * figure buttons; the standalone window shows no native title tooltips). */
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn::after {
+  content: attr(aria-label);
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 4;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--fill-primary);
+  color: var(--material-background);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:hover::after,
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:focus-visible::after {
+  opacity: 1;
+  transition-delay: 250ms;
+}
+
+/* Caption line under a block: kind label, text, accent link. */
+.llm-content-flat .llm-content-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 6px 2px 0;
+  color: var(--fill-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.llm-content-flat .llm-content-caption-kind {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.llm-content-flat .llm-content-caption-link {
+  appearance: none;
+  -moz-appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent, var(--accent-blue, #4072e5));
+  font: inherit;
+  cursor: pointer;
+}
+
+.llm-content-flat .llm-content-caption-link:hover {
+  text-decoration: underline;
+}
+
+/* Plain code blocks: faint surface, no border, no header. */
+.llm-content-flat .llm-copyable.llm-copyable-plain-code {
+  position: relative;
+  margin: 6px 0 22px;
+  border-radius: 8px;
+}
+
+.llm-content-flat .llm-codeblock-plain {
+  position: relative;
+  border: 0;
+  border-radius: 8px;
+  background: var(
+    --llm-flat-surface,
+    color-mix(in srgb, var(--fill-primary, #111827) 4%, transparent)
+  );
+}
+
+/* The header (language, source toggle) is replaced by the corner label and
+ * the hover bar. */
+.llm-content-flat .llm-codeblock-plain > .llm-codeblock-header {
+  display: none;
+}
+
+.llm-content-flat .llm-codeblock-plain::before {
+  content: attr(data-code-lang);
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  z-index: 1;
+  color: var(--fill-secondary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.llm-content-flat .llm-codeblock-plain > .llm-codeblock-body pre {
+  padding: 28px 22px 16px 12px;
+}
+
+/* Long blocks: clipped with a fade, a pill expands them. */
+.llm-content-flat .llm-codeblock-plain[data-fold="folded"] {
+  max-height: 230px;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 64px), transparent);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - 64px),
+    transparent
+  );
+}
+
+.llm-content-flat
+  .llm-codeblock-plain[data-fold="expanded"]
+  > .llm-codeblock-body
+  pre {
+  padding-bottom: 44px;
+}
+
+.llm-content-flat .llm-content-fold-btn {
+  appearance: none;
+  -moz-appearance: none;
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  z-index: 2;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 75%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--material-background) 88%, transparent);
+  color: var(--fill-secondary);
+  font-size: 11.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 1px 6px color-mix(in srgb, #000 14%, transparent);
+}
+
+.llm-content-flat .llm-content-fold-btn:hover,
+.llm-content-flat .llm-content-fold-btn:focus-visible {
+  color: var(--fill-primary);
+  background: color-mix(
+    in srgb,
+    var(--material-background) 80%,
+    var(--fill-primary) 10%
+  );
+}
+
+.llm-content-flat .llm-content-fold-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .llm-rendered-markdown .llm-svg-preview {

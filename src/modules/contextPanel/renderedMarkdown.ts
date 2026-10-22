@@ -26,11 +26,18 @@ import { sanitizeText } from "../../utils/textSanitization";
 import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
 import { t } from "../../utils/i18n";
 import {
+  adoptContentBarButton,
+  ensureContentBar,
+  isInFlatContentScope,
+} from "./contentChrome";
+import {
   NO_SIDE_ITEMS_ATTRIBUTE,
   SIDE_ITEM_KIND_ATTRIBUTE,
   appendMoveToSidePanelButton,
   getSidePanelItemHost,
+  getSideItemRequestBuilder,
   isOutsideAnswerContent,
+  registerSideItemRequest,
   splitCodeFence,
 } from "./sidePanelItems";
 import {
@@ -2284,7 +2291,13 @@ function setCodeBlockWordWrap(
 ): void {
   shell.dataset.wordWrap = enabled ? "true" : "false";
   button.setAttribute("aria-pressed", enabled ? "true" : "false");
-  const ariaLabel = enabled ? "Disable word wrap" : "Enable word wrap";
+  // A toggle in the flat style's hover bar shows its state by colour, so the
+  // label names the action and stays the same.
+  const ariaLabel = isInFlatContentScope(shell)
+    ? t("Wrap long lines")
+    : enabled
+      ? "Disable word wrap"
+      : "Enable word wrap";
   button.textContent = "";
   button.title = ariaLabel;
   button.setAttribute("aria-label", ariaLabel);
@@ -2380,6 +2393,125 @@ function attachCodeBlockFigureCopyButton(
   syncFigureCopyButtonStateForShell(shell);
 }
 
+/** A button the flat style moved into the hover bar of `scope`'s block. */
+function findFlatBarButton(
+  scope: HTMLElement,
+  className: string,
+): HTMLElement | null {
+  const block = scope.classList.contains("llm-copyable")
+    ? scope
+    : (scope.parentElement as HTMLElement | null);
+  const bar = block ? getDirectChildWithClass(block, "llm-content-bar") : null;
+  return bar ? getDirectChildWithClass(bar, className) : null;
+}
+
+const FLAT_CODE_FOLD_MIN_LINES = 16;
+
+function countCodeLines(text: string): number {
+  const trimmed = text.replace(/\n+$/, "");
+  return trimmed ? trimmed.split("\n").length : 0;
+}
+
+function setFlatCodeFolded(
+  shell: HTMLElement,
+  button: HTMLButtonElement,
+  lineCount: number,
+  folded: boolean,
+): void {
+  shell.dataset.fold = folded ? "folded" : "expanded";
+  button.setAttribute("aria-expanded", folded ? "false" : "true");
+  button.textContent = folded
+    ? t("Show all {count} lines").replace("{count}", String(lineCount))
+    : t("Show fewer lines");
+}
+
+/**
+ * The flat answer style for plain code blocks: the copy, wrap and move
+ * buttons go into one hover bar, and a long block is folded behind a
+ * "Show all N lines" pill. Runs once per block, after the header controls
+ * exist; blocks outside a flat scope are left as they are.
+ */
+export function attachFlatCodeBlockChrome(
+  root: ParentNode,
+  doc: Document,
+): void {
+  const shells = Array.from(
+    root.querySelectorAll(".llm-codeblock-shell"),
+  ) as HTMLElement[];
+  for (const shell of shells) {
+    if (shell.dataset.flatChrome === "true") continue;
+    if (!isInFlatContentScope(shell)) continue;
+    if (
+      getVisualCodeBlockPreview(shell) ||
+      getDirectChildWithClass(shell, "llm-html-preview")
+    ) {
+      continue;
+    }
+    const block = shell.parentElement as HTMLElement | null;
+    const header = getDirectChildWithClass(shell, "llm-codeblock-header");
+    const body = getDirectChildWithClass(shell, "llm-codeblock-body");
+    if (!block || !block.classList.contains("llm-copyable")) continue;
+    if (!header || !body) continue;
+    shell.dataset.flatChrome = "true";
+    shell.classList.add("llm-codeblock-plain");
+
+    const bar = ensureContentBar(block, doc);
+    const wrapButton = getDirectChildWithClass(
+      header,
+      "llm-codeblock-wrap-toggle",
+    ) as HTMLButtonElement | null;
+    if (wrapButton) {
+      adoptContentBarButton(bar, wrapButton);
+      setCodeBlockWordWrap(
+        shell,
+        wrapButton,
+        shell.dataset.wordWrap === "true",
+      );
+    }
+    const copyButton = getDirectChildWithClass(
+      header,
+      "llm-render-copy-btn",
+    ) as HTMLButtonElement | null;
+    if (copyButton) {
+      copyButton.textContent = "";
+      const label = t("Copy code");
+      copyButton.title = label;
+      copyButton.setAttribute("aria-label", label);
+      adoptContentBarButton(bar, copyButton);
+    }
+    const moveButton = getDirectChildWithClass(
+      header,
+      "llm-side-move-btn",
+    ) as HTMLButtonElement | null;
+    if (moveButton) {
+      // collectMadeItems looks for the builder on the marked element's own
+      // button; the button now sits outside the shell, so register it there.
+      const build = getSideItemRequestBuilder(moveButton);
+      if (build) registerSideItemRequest(shell, build);
+      adoptContentBarButton(bar, moveButton);
+    }
+
+    const lineCount = countCodeLines(body.textContent || "");
+    if (lineCount >= FLAT_CODE_FOLD_MIN_LINES) {
+      const foldButton = doc.createElement("button") as HTMLButtonElement;
+      foldButton.type = "button";
+      foldButton.className = "llm-content-fold-btn";
+      foldButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setFlatCodeFolded(
+          shell,
+          foldButton,
+          lineCount,
+          shell.dataset.fold !== "folded",
+        );
+      });
+      block.appendChild(foldButton);
+      setFlatCodeFolded(shell, foldButton, lineCount, true);
+    }
+  }
+}
+
 export function attachRenderedCodeBlockControls(
   root: ParentNode,
   doc: Document,
@@ -2428,10 +2560,14 @@ export function attachRenderedCodeBlockControls(
     button.setAttribute("aria-controls", body.id);
     setCodeBlockSourceCollapsed(shell, body, button, initialCollapsed);
 
-    let wrapButton = getDirectChildWithClass(
+    let wrapButton = (getDirectChildWithClass(
       header,
       "llm-codeblock-wrap-toggle",
-    ) as HTMLButtonElement | null;
+    ) ||
+      findFlatBarButton(
+        shell,
+        "llm-codeblock-wrap-toggle",
+      )) as HTMLButtonElement | null;
     const initialWordWrap =
       shell.dataset.wordWrap === undefined
         ? shouldDefaultCodeBlockWordWrap(shell)
@@ -2485,6 +2621,7 @@ export function attachRenderedCopyButtons(
       ":scope > .llm-render-copy-btn",
     ) as HTMLButtonElement | null;
     if (existing) continue;
+    if (findFlatBarButton(copyable, "llm-render-copy-btn")) continue;
     const codeShell = copyable.querySelector(
       ":scope .llm-codeblock-shell",
     ) as HTMLElement | null;
@@ -2556,6 +2693,7 @@ export function renderRenderedMarkdownInto(
   attachRenderedCodeBlockControls(target, doc);
   attachRenderedCopyButtons(target, doc);
   attachRenderedCodeBlockMoveButtons(target, doc);
+  attachFlatCodeBlockChrome(target, doc);
   attachRenderedSvgPreviewButtons(target, doc);
   attachRenderedHtmlPreviews(target, doc);
   void renderMermaidBlocks(

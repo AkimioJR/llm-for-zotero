@@ -394,6 +394,13 @@ export function collectMadeItems(container: ParentNode): MadeItem[] {
   return items.reverse();
 }
 
+/** The request builder behind a →| button, for a caller that re-homes it. */
+export function getSideItemRequestBuilder(
+  button: Element,
+): (() => SidePanelItemRequest | null) | undefined {
+  return requestBuilders.get(button);
+}
+
 /**
  * Registers what opening `element` in the side panel means, for an item
  * that opens itself on click instead of having a →| button (a file card).

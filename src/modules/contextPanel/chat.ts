@@ -416,6 +416,7 @@ import {
   openHtmlPreviewViewer,
   renderRenderedMarkdownInto,
 } from "./renderedMarkdown";
+import { CONTENT_FLAT_SCOPE_CLASS } from "./contentChrome";
 import {
   buildTurnWindow,
   mountSavedFileCards,
@@ -10601,7 +10602,7 @@ function updateMountedAssistantViews(
       const expandedQuoteCards = collectExpandedQuoteCardKeys(view.answer);
       if (!view.answer) {
         view.answer = box.ownerDocument.createElement("div");
-        view.answer.className = "llm-assistant-answer";
+        view.answer.className = `llm-assistant-answer ${CONTENT_FLAT_SCOPE_CLASS}`;
         view.bubble.insertBefore(
           view.answer,
           view.actionSummaryHost.parentElement === view.bubble
@@ -12078,7 +12079,7 @@ function renderChatForPanel(
           webSourceAnchors,
         );
         answerHost = doc.createElement("div");
-        answerHost.className = "llm-assistant-answer";
+        answerHost.className = `llm-assistant-answer ${CONTENT_FLAT_SCOPE_CLASS}`;
         bubble.appendChild(answerHost);
         if (msg.streaming) bubble.classList.add("streaming");
         if (msg.compactMarker) {

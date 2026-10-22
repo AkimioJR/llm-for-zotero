@@ -1561,6 +1561,10 @@ const zhCN: Record<string, string> = {
   "Show less of the selected text": "收起选中文字",
   // Side panel items, Miscellaneous tab, HTML preview.
   "Move to side panel": "移到侧边面板",
+  "Wrap long lines": "长行自动换行",
+  "Copy code": "复制代码",
+  "Show all {count} lines": "显示全部 {count} 行",
+  "Show fewer lines": "收起",
   "Mermaid diagram": "Mermaid 图表",
   "Back to Miscellaneous": "返回杂项",
   "Back to History": "返回历史记录",
