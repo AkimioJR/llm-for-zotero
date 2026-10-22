@@ -181,7 +181,10 @@ describe("Saved file cards", function () {
       { kind: "paper", itemId: 10 },
     );
     assert.deepEqual(
-      resolveAgentFilesTargetForPanelItem({ id: 10, isAttachment: () => false }),
+      resolveAgentFilesTargetForPanelItem({
+        id: 10,
+        isAttachment: () => false,
+      }),
       { kind: "paper", itemId: 10 },
     );
     assert.isNull(resolveAgentFilesTargetForPanelItem(null));
