@@ -513,9 +513,14 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
 
     // Miscellaneous: items newest first with kind chips.
     (rows[2] as HTMLElement).click();
+    const miscLoading = () =>
+      qa(".llm-standalone-search-empty").some((el) =>
+        (el.textContent || "").includes("Looking through the other chats"),
+      );
     await until(
-      () => qa("[data-made-kind]").length === 4,
-      () => `misc rows: ${qa("[data-made-kind]").length}`,
+      () => !miscLoading() && qa("[data-made-kind]").length === 4,
+      () =>
+        `misc rows: ${qa("[data-made-kind]").length}, loading: ${miscLoading()}`,
     );
     const miscRows = qa("[data-made-kind]");
     assert.deepEqual(
@@ -523,6 +528,31 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
       ["code", "html", "svg", "mermaid"],
       "newest first",
     );
+    // Every item belongs to the new chat the window shows, never the past one.
+    const openKey = miscRows[0].dataset.madeConversationKey;
+    assert.notEqual(
+      miscRows[0].dataset.madeConversationKey,
+      String(past.conversationKey),
+      "no row stamped with the past chat",
+    );
+    for (const row of miscRows) {
+      assert.notEqual(
+        row.dataset.madeConversationKey,
+        String(past.conversationKey),
+        "row is not the past chat",
+      );
+      assert.include(
+        row.querySelector(".llm-standalone-side-panel-misc-here")
+          ?.textContent || "",
+        "open now",
+        "row marks the open chat",
+      );
+      assert.equal(
+        row.dataset.madeConversationKey,
+        openKey,
+        "every row carries the same (open) chat key",
+      );
+    }
     for (const row of miscRows) {
       const chip = row.querySelector(".llm-standalone-search-label");
       assert.isOk(chip, "kind chip");
@@ -546,8 +576,9 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
         height: rect.height,
       };
     };
-    const miscMetrics = metrics(miscRows[0]);
-    const miscClass = miscRows[0].className;
+    const freshMiscRow = qa("[data-made-kind]")[0];
+    const miscMetrics = metrics(freshMiscRow);
+    const miscClass = freshMiscRow.className;
     // A New tab tab -> History row in a second tab.
     await api.clickStandaloneSidePanelControl("new-tab");
     await api.clickStandaloneSidePanelControl("new-history");

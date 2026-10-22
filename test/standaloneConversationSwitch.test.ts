@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import {
+  decidePanelIdentityAdoption,
   resolveStandaloneConversationSwitch,
   type ConversationSwitchScope,
   type StandaloneConversationSwitchInput,
@@ -103,5 +104,14 @@ describe("standaloneConversationSwitch", function () {
       ),
       { inPlace: false, reason: "webchat" },
     );
+  });
+});
+
+describe("decidePanelIdentityAdoption", function () {
+  it("ignores the window's own switches and adopts the panel's own", function () {
+    assert.equal(decidePanelIdentityAdoption(5, 5), "ignore");
+    assert.equal(decidePanelIdentityAdoption(5, 9), "adopt");
+    assert.equal(decidePanelIdentityAdoption(5, 0), "ignore");
+    assert.equal(decidePanelIdentityAdoption(5, Number.NaN), "ignore");
   });
 });

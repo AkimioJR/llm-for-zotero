@@ -93,3 +93,20 @@ export function resolveStandaloneConversationSwitch(
   }
   return { inPlace: true };
 }
+
+/**
+ * What the window does when its panel reports a conversation change. The
+ * window's own switches set `activeConversationKey` before the panel moves,
+ * so the same key means nothing to do. Another key is a switch the panel
+ * made by itself, and the window adopts it.
+ */
+export function decidePanelIdentityAdoption(
+  activeConversationKey: number,
+  panelConversationKey: number,
+): "adopt" | "ignore" {
+  const panelKey = Math.floor(Number(panelConversationKey));
+  if (!Number.isFinite(panelKey) || panelKey <= 0) return "ignore";
+  return panelKey === Math.floor(Number(activeConversationKey))
+    ? "ignore"
+    : "adopt";
+}

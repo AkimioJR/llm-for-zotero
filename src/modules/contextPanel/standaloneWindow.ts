@@ -125,6 +125,7 @@ import { createHistorySearchPopupController } from "./setupHandlers/controllers/
 import { primeHistoryNavigationMode } from "./historyNavigationModeSync";
 import { resolveStandalonePaperTabLabel } from "./standaloneTabLabel";
 import { resolveFreshConversationDraft } from "./freshConversationDraft";
+import { decidePanelIdentityAdoption } from "./standaloneConversationSwitch";
 import { collapseDuplicateReusableConversationDrafts } from "./standaloneConversationResolution";
 import {
   createRuntimeSystemControls,
@@ -1810,6 +1811,47 @@ export function openStandaloneChat(options?: {
             onConversationHistoryChanged: () => {
               if (cancelled) return;
               scheduleStandaloneSidebarRender();
+            },
+            onConversationIdentityChanged: (panelItem, panelKey) => {
+              if (cancelled || newWin.closed) return;
+              if (
+                decidePanelIdentityAdoption(activeConversationKey, panelKey) ===
+                "ignore"
+              ) {
+                return;
+              }
+              // The panel switched by itself (its own New chat button or a
+              // deleted chat's fallback). Follow it. This only sets window
+              // state and redraws views; it never asks the panel to switch,
+              // so it cannot loop back into this hook.
+              const leftKey = activeConversationKey;
+              activeConversationKey = panelKey;
+              activeItem = panelItem;
+              if (standaloneMode === "paper" && currentBasePaperItem) {
+                const paperItemID = Number(currentBasePaperItem.id || 0);
+                if (paperItemID > 0) {
+                  rememberStandalonePaperConversation(
+                    currentConversationSystem,
+                    getCurrentPaperLibraryID(),
+                    paperItemID,
+                    panelKey,
+                  );
+                }
+              }
+              updateContentTitle();
+              syncPaperTabLabel();
+              const leftEntry = standaloneSidebarEntriesByKey.get(leftKey);
+              if (
+                !markStandaloneSidebarActiveRow(panelKey) ||
+                (leftEntry && !(Number(leftEntry.userTurnCount) > 0))
+              ) {
+                scheduleStandaloneSidebarRender();
+              }
+              try {
+                standaloneSidePanel?.onMainMounted();
+              } catch (err) {
+                appLogger.warn("LLM: standalone side panel follow failed", err);
+              }
             },
             onDefaultContextRendered: scheduleStandaloneInputFit,
             onContextPreviewRendered:

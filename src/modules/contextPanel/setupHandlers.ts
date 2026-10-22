@@ -655,6 +655,17 @@ export type ContextPreviewRenderMetrics = {
 
 export type SetupHandlersHooks = {
   onConversationHistoryChanged?: () => void;
+  /**
+   * The panel moved to another conversation by itself (its own New chat
+   * button, a deleted chat's fallback). The standalone window adopts it, so
+   * its state and Miscellaneous view follow the chat the panel shows.
+   * Fired only when the key changed; a window-driven switch has already moved
+   * the window to this key, which makes the handler a no-op.
+   */
+  onConversationIdentityChanged?: (
+    item: Zotero.Item,
+    conversationKey: number,
+  ) => void;
   onDefaultContextRendered?: () => void;
   onContextPreviewRendered?: (metrics: ContextPreviewRenderMetrics) => void;
   onWebChatModeChanged?: (isWebChat: boolean) => void;
@@ -2096,6 +2107,20 @@ export function setupHandlers(
     }
     updateRuntimeModeButton();
     updateRuntimeSystemToggles();
+    if (
+      item &&
+      !noteSession &&
+      previousConversationKey &&
+      conversationKey &&
+      conversationKey !== previousConversationKey &&
+      !isEphemeralConversationKey(Number(conversationKey))
+    ) {
+      try {
+        hooks?.onConversationIdentityChanged?.(item, conversationKey);
+      } catch (err) {
+        ztoolkit.log("LLM: conversation identity hook failed", err);
+      }
+    }
   };
   syncConversationIdentity();
   if (getConversationSystem() === "claude_code") {
