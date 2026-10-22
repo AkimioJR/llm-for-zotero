@@ -8,8 +8,10 @@ import {
   type ReleaseNotes,
   decidePluginUpdateKind,
   parseRepoSlug,
-  releaseNotesApiUrl,
+  releaseListApiUrl,
+  releaseListPageUrl,
   releasePageUrl,
+  versionFromTag,
 } from "../src/modules/pluginUpdate";
 
 describe("pluginUpdate", function () {
@@ -59,9 +61,15 @@ describe("pluginUpdate", function () {
     );
     assert.deepEqual(slug, { owner: "yilewang", repo: "llm-for-zotero" });
     assert.equal(
-      releaseNotesApiUrl(slug!, "3.9.12"),
-      "https://api.github.com/repos/yilewang/llm-for-zotero/releases/tags/v3.9.12",
+      releaseListApiUrl(slug!, 2, 5),
+      "https://api.github.com/repos/yilewang/llm-for-zotero/releases?per_page=5&page=2",
     );
+    assert.equal(
+      releaseListPageUrl(slug!),
+      "https://github.com/yilewang/llm-for-zotero/releases",
+    );
+    assert.equal(versionFromTag("v3.9.12"), "3.9.12");
+    assert.equal(versionFromTag("3.9.12"), "3.9.12");
     assert.equal(
       releasePageUrl(slug!, "3.9.12"),
       "https://github.com/yilewang/llm-for-zotero/releases/tag/v3.9.12",
@@ -95,9 +103,9 @@ describe("pluginUpdate", function () {
             removed++;
           };
         },
-        fetchReleaseNotes: async (version) => {
+        fetchReleases: async (page) => {
           calls.notes++;
-          return notes(version);
+          return [notes(`${page}.0.0`)];
         },
         ...overrides,
       };
@@ -130,22 +138,27 @@ describe("pluginUpdate", function () {
 
     const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-    it("caches release notes per version and never caches a failure", async function () {
+    it("caches release pages and never caches a failure", async function () {
       let fail = true;
+      let empty = false;
       const t = setup({
-        fetchReleaseNotes: async (version) => {
+        fetchReleases: async (page) => {
           t.calls.notes++;
           if (fail) throw new Error("offline");
-          return notes(version);
+          return empty ? [] : [notes(`${page}.0.0`)];
         },
       });
-      assert.equal((await t.controller.loadNotes("1.0.0")).status, "failed");
+      assert.equal((await t.controller.loadReleases(1)).status, "failed");
       fail = false;
-      assert.equal((await t.controller.loadNotes("1.0.0")).status, "ready");
-      assert.equal((await t.controller.loadNotes("1.0.0")).status, "ready");
+      const first = await t.controller.loadReleases(1);
+      assert.equal(first.status, "ready");
+      assert.isTrue(first.status === "ready" && first.hasMore);
+      assert.equal((await t.controller.loadReleases(1)).status, "ready");
       assert.equal(t.calls.notes, 2, "the failure was not cached");
-      await t.controller.loadNotes("2.0.0");
-      assert.equal(t.calls.notes, 3, "another version is fetched separately");
+      empty = true;
+      const last = await t.controller.loadReleases(2);
+      assert.isTrue(last.status === "ready" && !last.hasMore);
+      assert.equal(t.calls.notes, 3, "another page is fetched separately");
     });
 
     it("runs one check at a time", async function () {

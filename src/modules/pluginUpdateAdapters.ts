@@ -1,9 +1,10 @@
 import { config } from "../../package.json";
 import {
   pluginRepoSlug,
-  releaseNotesApiUrl,
+  releaseListApiUrl,
   releasePageUrl,
   resetPluginUpdateNotesCache,
+  versionFromTag,
   type AvailableUpdate,
   type PluginUpdateDeps,
   type ReleaseNotes,
@@ -83,12 +84,15 @@ function installUpdate(
   return remove;
 }
 
-async function fetchReleaseNotes(version: string): Promise<ReleaseNotes> {
+async function fetchReleases(
+  page: number,
+  perPage: number,
+): Promise<ReleaseNotes[]> {
   const slug = pluginRepoSlug();
   if (!slug) throw new Error("repository URL is not a GitHub URL");
   const xhr = await Zotero.HTTP.request(
     "GET",
-    releaseNotesApiUrl(slug, version),
+    releaseListApiUrl(slug, page, perPage),
     {
       headers: { Accept: "application/vnd.github+json" },
       responseType: "text",
@@ -97,34 +101,40 @@ async function fetchReleaseNotes(version: string): Promise<ReleaseNotes> {
     },
   );
   if (xhr.status !== 200) throw new Error(`GitHub returned ${xhr.status}`);
-  const data = JSON.parse(xhr.responseText || "null") as {
-    body?: unknown;
-    published_at?: unknown;
-    html_url?: unknown;
-  } | null;
-  if (!data || typeof data !== "object") throw new Error("bad release JSON");
-  return {
-    version,
-    body: typeof data.body === "string" ? data.body : "",
-    publishedAt: typeof data.published_at === "string" ? data.published_at : "",
-    htmlUrl:
-      typeof data.html_url === "string" && data.html_url
-        ? data.html_url
-        : releasePageUrl(slug, version),
-  };
+  const data = JSON.parse(xhr.responseText || "null") as unknown;
+  if (!Array.isArray(data)) throw new Error("bad release JSON");
+  const releases: ReleaseNotes[] = [];
+  for (const entry of data as Array<Record<string, unknown> | null>) {
+    if (!entry || typeof entry !== "object") continue;
+    if (entry.draft === true || entry.prerelease === true) continue;
+    const tag = typeof entry.tag_name === "string" ? entry.tag_name : "";
+    const version = versionFromTag(tag);
+    if (!version) continue;
+    releases.push({
+      version,
+      body: typeof entry.body === "string" ? entry.body : "",
+      publishedAt:
+        typeof entry.published_at === "string" ? entry.published_at : "",
+      htmlUrl:
+        typeof entry.html_url === "string" && entry.html_url
+          ? entry.html_url
+          : releasePageUrl(slug, version),
+    });
+  }
+  return releases;
 }
 
 const realDeps: PluginUpdateDeps = {
   checkForUpdate,
   installUpdate,
-  fetchReleaseNotes,
+  fetchReleases,
 };
 
 // The test build never touches the network unless a test injects fakes.
 const inertDeps: PluginUpdateDeps = {
   checkForUpdate: async () => null,
   installUpdate: () => {},
-  fetchReleaseNotes: async () => {
+  fetchReleases: async () => {
     throw new Error("release notes are disabled in the test build");
   },
 };

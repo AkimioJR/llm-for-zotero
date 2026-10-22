@@ -29,12 +29,23 @@ describe("workflow: plugin update indicator", function () {
     installUpdate: () => {
       installCalls++;
     },
-    fetchReleaseNotes: async (notesVersion) => ({
-      version: notesVersion,
-      body: `## Changes\n\n- ${NOTES_MARKER}\n`,
-      publishedAt: "2026-10-16T12:00:00Z",
-      htmlUrl: `https://example.invalid/v${notesVersion}`,
-    }),
+    fetchReleases: async (page) =>
+      page > 1
+        ? []
+        : [
+            {
+              version,
+              body: `## v${version}\n\n### Changes\n\n${NOTES_MARKER}. First line.\nSecond line.\n`,
+              publishedAt: "2026-10-16T12:00:00Z",
+              htmlUrl: `https://example.invalid/v${version}`,
+            },
+            {
+              version: "0.0.1",
+              body: "- Older release\n",
+              publishedAt: "2026-01-01T12:00:00Z",
+              htmlUrl: "https://example.invalid/v0.0.1",
+            },
+          ],
   };
 
   function standaloneDoc(): Document {
@@ -121,58 +132,75 @@ describe("workflow: plugin update indicator", function () {
     assert.equal(button()!.textContent!.trim(), `v${version}`);
     assert.isOk(button()!.closest(".llm-standalone-footer-row"));
 
-    // Release notes: a large panel over the window.
+    // What's new: a centred window, one block per release.
     button()!.click();
     await until(
       () => Boolean(notes()?.textContent?.includes(NOTES_MARKER)),
-      "release notes are rendered in the panel",
+      "release notes are rendered in the window",
     );
-    assert.include(notes()!.textContent!, `What's new in v${version}`);
-    assert.isOk(notes()!.querySelector("li"), "markdown list is rendered");
+    const blocks = notes()!.querySelectorAll(
+      ".llm-standalone-release-notes-release",
+    );
+    assert.equal(blocks.length, 2, "one block per release");
+    const current = blocks[0] as HTMLElement;
+    assert.equal(current.dataset.version, version);
+    assert.include(current.textContent!, `v${version}`);
+    assert.isOk(
+      current.querySelector(".llm-standalone-release-notes-installed"),
+      "the running version is marked installed",
+    );
+    assert.isNotOk(
+      blocks[1].querySelector(".llm-standalone-release-notes-installed"),
+    );
+    assert.equal(
+      current.querySelectorAll("li").length,
+      2,
+      "plain lines become bullet points",
+    );
+    assert.notInclude(
+      current.querySelector(".llm-standalone-update-notes")!.textContent!,
+      `v${version}`,
+      "a heading that only repeats the version is hidden",
+    );
     const win = doc.defaultView as any;
     const panelRect = notes()!
       .querySelector(".llm-standalone-release-notes-panel")!
       .getBoundingClientRect();
-    assert.isAbove(
-      panelRect.width,
-      win.innerWidth * 0.8,
-      "panel spans most of the window",
-    );
-    assert.isAbove(
-      panelRect.height,
-      win.innerHeight * 0.7,
-      "panel spans most of the window height",
+    assert.isAtMost(
+      Math.abs(panelRect.left + panelRect.width / 2 - win.innerWidth / 2),
+      2,
+      "the window is centred",
     );
 
     // Esc closes.
     doc.dispatchEvent(
       new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
     );
-    await until(() => !notes(), "panel closes on Esc");
+    await until(() => !notes(), "window closes on Esc");
 
     // The close button closes.
     button()!.click();
-    await until(() => Boolean(notes()), "panel opens again");
+    await until(() => Boolean(notes()), "window opens again");
     (
       notes()!.querySelector(
         '[data-release-notes-action="close"]',
       ) as HTMLElement
     ).click();
-    await until(() => !notes(), "panel closes on the close button");
+    await until(() => !notes(), "window closes on the close button");
 
-    // A click on the dimmed area closes; a click inside the panel does not.
+    // A click on the dimmed area closes; a click inside the window does not.
     button()!.click();
     await until(
       () => Boolean(notes()?.textContent?.includes(NOTES_MARKER)),
-      "panel opens a third time",
+      "window opens a third time",
     );
     notes()!
       .querySelector(".llm-standalone-release-notes-panel")!
       .dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true }));
     await Zotero.Promise.delay(100);
-    assert.isOk(notes(), "a click inside the panel keeps it open");
+    assert.isOk(notes(), "a click inside the window keeps it open");
     notes()!.dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true }));
-    await until(() => !notes(), "panel closes on a click on the dimmed area");
+    await until(() => !notes(), "window closes on a click on the dimmed area");
 
     // Update available: icon only, with a tooltip.
     available = { version: "99.0.0" };

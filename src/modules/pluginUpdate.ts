@@ -41,8 +41,11 @@ export type PluginUpdateDeps = {
     update: AvailableUpdate,
     onFailed: () => void,
   ) => (() => void) | void;
-  /** Rejects on any network or HTTP error. */
-  fetchReleaseNotes: (version: string) => Promise<ReleaseNotes>;
+  /**
+   * One page of published releases, newest first (page counts from 1).
+   * Rejects on any network or HTTP error.
+   */
+  fetchReleases: (page: number, perPage: number) => Promise<ReleaseNotes[]>;
 };
 
 export type DecideStateInput = {
@@ -78,8 +81,22 @@ export function parseRepoSlug(url: string): RepoSlug | null {
   return match ? { owner: match[1], repo: match[2] } : null;
 }
 
-export function releaseNotesApiUrl(slug: RepoSlug, version: string): string {
-  return `https://api.github.com/repos/${slug.owner}/${slug.repo}/releases/tags/v${version}`;
+export function releaseListApiUrl(
+  slug: RepoSlug,
+  page: number,
+  perPage: number,
+): string {
+  return `https://api.github.com/repos/${slug.owner}/${slug.repo}/releases?per_page=${perPage}&page=${page}`;
+}
+
+/** The releases page on GitHub, for when the list cannot be loaded. */
+export function releaseListPageUrl(slug: RepoSlug): string {
+  return `https://github.com/${slug.owner}/${slug.repo}/releases`;
+}
+
+/** "v3.9.12" and "3.9.12" both give "3.9.12". */
+export function versionFromTag(tag: string): string {
+  return tag.trim().replace(/^v(?=\d)/i, "");
 }
 
 export function releasePageUrl(slug: RepoSlug, version: string): string {
@@ -94,8 +111,11 @@ export function pluginRepoSlug(): RepoSlug | null {
 
 export const PLUGIN_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-export type NotesLoadResult =
-  | { status: "ready"; notes: ReleaseNotes }
+/** Releases shown per page of the "What's new" window. */
+export const RELEASES_PER_PAGE = 5;
+
+export type ReleasesLoadResult =
+  | { status: "ready"; releases: ReleaseNotes[]; hasMore: boolean }
   | { status: "failed"; htmlUrl: string };
 
 type ControllerOptions = {
@@ -117,14 +137,15 @@ export type PluginUpdateController = {
   applyUpdate: () => void;
   /** Stores the running version as seen; clears the "updated" badge. */
   acknowledgeUpdated: () => void;
-  loadNotes: (version: string) => Promise<NotesLoadResult>;
+  /** One page of releases, newest first; page counts from 1. */
+  loadReleases: (page: number) => Promise<ReleasesLoadResult>;
   isReplyInFlight: () => boolean;
 };
 
-// Release notes are cached per version for the session: GitHub allows 60
+// Release pages are cached for the session: GitHub allows 60
 // unauthenticated requests per hour per IP. A failure is never cached.
-const notesCache = new Map<string, ReleaseNotes>();
-const notesInFlight = new Map<string, Promise<NotesLoadResult>>();
+const notesCache = new Map<number, ReleasesLoadResult>();
+const notesInFlight = new Map<number, Promise<ReleasesLoadResult>>();
 
 export function resetPluginUpdateNotesCache(): void {
   notesCache.clear();
@@ -244,25 +265,35 @@ export function createPluginUpdateController(
       lastSeen = runningVersion;
       emit();
     },
-    async loadNotes(version) {
-      const cached = notesCache.get(version);
-      if (cached) return { status: "ready", notes: cached };
-      const pending = notesInFlight.get(version);
+    async loadReleases(page) {
+      const cached = notesCache.get(page);
+      if (cached) return cached;
+      const pending = notesInFlight.get(page);
       if (pending) return pending;
       const slug = pluginRepoSlug();
-      const fallbackUrl = slug ? releasePageUrl(slug, version) : "";
-      const task: Promise<NotesLoadResult> = options
+      const fallbackUrl = slug ? releaseListPageUrl(slug) : "";
+      const task: Promise<ReleasesLoadResult> = options
         .getDeps()
-        .fetchReleaseNotes(version)
+        .fetchReleases(page, RELEASES_PER_PAGE)
         .then(
-          (notes): NotesLoadResult => {
-            notesCache.set(version, notes);
-            return { status: "ready", notes };
+          (releases): ReleasesLoadResult => {
+            const result: ReleasesLoadResult = {
+              status: "ready",
+              releases,
+              // Drafts and pre-releases are dropped from a page, so only an
+              // empty page shows the list has ended.
+              hasMore: releases.length > 0,
+            };
+            notesCache.set(page, result);
+            return result;
           },
-          (): NotesLoadResult => ({ status: "failed", htmlUrl: fallbackUrl }),
+          (): ReleasesLoadResult => ({
+            status: "failed",
+            htmlUrl: fallbackUrl,
+          }),
         )
-        .finally(() => notesInFlight.delete(version));
-      notesInFlight.set(version, task);
+        .finally(() => notesInFlight.delete(page));
+      notesInFlight.set(page, task);
       return task;
     },
     isReplyInFlight: options.isReplyInFlight,

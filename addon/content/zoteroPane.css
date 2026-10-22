@@ -2931,37 +2931,43 @@
   color: var(--fill-tertiary);
 }
 
-/* Release notes: a large panel over the whole standalone window, the chat
-   dimmed behind it. Same round icon buttons as the full-view window, one
-   centred flat reading column. */
+/* "What's new": a centred window over the dimmed standalone window, one
+   block per release (date, version pill, the release text). */
 .llm-standalone-release-notes {
   position: fixed;
   inset: 0;
   z-index: 10001;
   display: flex;
+  align-items: center;
+  justify-content: center;
   box-sizing: border-box;
-  padding: 18px;
-  background: rgba(0, 0, 0, 0.32);
+  padding: 48px 24px 24px;
+  background: rgba(0, 0, 0, 0.45);
   user-select: text;
   -moz-user-select: text;
 }
 
-:root[customtitlebar] .llm-standalone-release-notes {
-  padding-top: 40px;
-}
-
 .llm-standalone-release-notes-panel {
   display: flex;
-  flex: 1 1 auto;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
+  box-sizing: border-box;
+  width: min(640px, 100%);
+  max-height: 100%;
   overflow: hidden;
-  border: 1px solid var(--stroke-secondary);
-  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--fill-primary) 12%, transparent);
+  border-radius: 14px;
   background: var(--material-background);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.4);
   color: var(--fill-primary);
+  font-size: var(--llm-fs-14, 14px);
+  line-height: 1.55;
+  outline: none;
+}
+
+/* Dark: lift the window a little off the dimmed chat. */
+#llmforzotero-standalone-chat-root[data-standalone-theme="dark"]
+  .llm-standalone-release-notes-panel {
+  background: color-mix(in srgb, var(--material-background) 92%, white 8%);
 }
 
 .llm-standalone-release-notes-header {
@@ -2969,36 +2975,22 @@
   flex: none;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px 8px 22px;
+  padding: 22px 20px 6px 28px;
 }
 
 .llm-standalone-release-notes-title {
-  overflow: hidden;
-  font-size: var(--llm-fs-14, 14px);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1 1 auto;
+  font-size: calc(var(--llm-fs-14, 14px) * 1.57);
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
-.llm-standalone-release-notes-date {
-  flex: none;
-  color: var(--fill-tertiary);
-  font-size: var(--llm-fs-12, 12px);
-  white-space: nowrap;
-}
-
-.llm-standalone-release-notes-tools {
-  display: flex;
-  flex: none;
-  gap: 10px;
-  margin-inline-start: auto;
-}
-
-.llm-standalone-release-notes-btn {
+.llm-standalone-release-notes-close {
   appearance: none;
   -moz-appearance: none;
   position: relative;
   display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: center;
   width: 30px;
@@ -3006,29 +2998,26 @@
   padding: 0;
   border: 0;
   border-radius: 999px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+}
+
+.llm-standalone-release-notes-close:hover {
   background: var(--fill-quinary);
   color: var(--fill-primary);
-  cursor: pointer;
-  opacity: 0.82;
 }
 
-.llm-standalone-release-notes-btn:hover:not(:disabled) {
-  background: var(--fill-quarternary, var(--fill-quinary));
-  opacity: 1;
-}
-
-.llm-standalone-release-notes-btn:disabled {
-  cursor: default;
-  opacity: 0.4;
-}
-
-.llm-standalone-release-notes-btn:focus-visible {
+.llm-standalone-release-notes-close:focus-visible,
+.llm-standalone-release-notes-version:focus-visible,
+.llm-standalone-release-notes-more:focus-visible {
   outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
-/* Hover label under each icon button (the window shows no native tooltips). */
-.llm-standalone-release-notes-btn::after {
+/* Hover labels (the window shows no native tooltips). */
+.llm-standalone-release-notes-close::after,
+.llm-standalone-release-notes-version::after {
   content: attr(aria-label);
   position: absolute;
   top: calc(100% + 6px);
@@ -3038,119 +3027,198 @@
   border-radius: 5px;
   background: var(--fill-primary);
   color: var(--material-background);
-  font-size: 11px;
-  line-height: 1.4;
+  font:
+    400 11px/1.4 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
   transition: opacity 100ms ease;
 }
 
-.llm-standalone-release-notes-btn:hover::after,
-.llm-standalone-release-notes-btn:focus-visible::after {
+.llm-standalone-release-notes-close:hover::after,
+.llm-standalone-release-notes-close:focus-visible::after,
+.llm-standalone-release-notes-version:hover::after,
+.llm-standalone-release-notes-version:focus-visible::after {
   opacity: 1;
   transition-delay: 250ms;
 }
 
 .llm-standalone-release-notes-scroll {
-  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: clip;
   overflow-y: auto;
-  padding: 0 40px 40px;
+  padding: 4px 28px 24px;
 }
 
-.llm-standalone-release-notes-article {
-  max-width: 720px;
-  margin: 0 auto;
-  font-size: var(--llm-fs-14, 14px);
-  line-height: 1.6;
+.llm-standalone-release-notes-release {
+  padding: 18px 0 22px;
 }
 
-/* Section chips from the release headings; they stay in view while scrolling. */
-.llm-standalone-release-notes-chips {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+.llm-standalone-release-notes-release + .llm-standalone-release-notes-release {
+  border-top: 1px solid var(--stroke-secondary);
+}
+
+.llm-standalone-release-notes-release-head {
   display: flex;
-  gap: 6px;
-  padding: 6px 0 10px;
-  overflow-x: auto;
-  background: var(--material-background);
-  scrollbar-width: none;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
 }
 
-.llm-standalone-release-notes-chip {
+.llm-standalone-release-notes-date {
+  flex: 1 1 auto;
+  font-size: calc(var(--llm-fs-14, 14px) * 1.14);
+  font-weight: 650;
+}
+
+.llm-standalone-release-notes-installed {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  color: var(--color-accent);
+  font-size: var(--llm-fs-11, 11px);
+  font-weight: 600;
+}
+
+.llm-standalone-release-notes-version {
   appearance: none;
   -moz-appearance: none;
+  position: relative;
+  display: inline-flex;
   flex: none;
-  padding: 3px 11px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 6px;
   background: var(--fill-quinary);
   color: var(--fill-secondary);
   cursor: pointer;
-  font: inherit;
-  font-size: var(--llm-fs-12, 12px);
+  font:
+    var(--llm-fs-12, 12px) ui-monospace,
+    "SF Mono",
+    Menlo,
+    monospace;
 }
 
-.llm-standalone-release-notes-chip:hover {
+.llm-standalone-release-notes-version:hover {
   color: var(--fill-primary);
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
 }
 
+.llm-standalone-release-notes-version svg {
+  opacity: 0.7;
+}
+
+/* Release text: section headings are small grey capital labels, whatever
+   their level in the release body. */
 .llm-standalone-update-notes.llm-rendered-markdown h1,
-.llm-standalone-update-notes.llm-rendered-markdown h2 {
-  margin: 28px 0 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--stroke-secondary);
-  font-size: calc(var(--llm-fs-14, 14px) * 1.3);
-  font-weight: 600;
-}
-
+.llm-standalone-update-notes.llm-rendered-markdown h2,
 .llm-standalone-update-notes.llm-rendered-markdown h3,
-.llm-standalone-update-notes.llm-rendered-markdown h4 {
-  margin: 18px 0 6px;
-  font-size: calc(var(--llm-fs-14, 14px) * 1.05);
+.llm-standalone-update-notes.llm-rendered-markdown h4,
+.llm-standalone-update-notes.llm-rendered-markdown h5,
+.llm-standalone-update-notes.llm-rendered-markdown h6 {
+  margin: 16px 0 6px;
+  padding: 0;
+  border: 0;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-12, 12px);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.llm-standalone-update-notes.llm-rendered-markdown > :first-child {
+  margin-top: 0;
+}
+
+.llm-standalone-update-notes.llm-rendered-markdown p {
+  margin: 0 0 8px;
+  color: var(--fill-secondary);
+}
+
+.llm-standalone-update-notes.llm-rendered-markdown ul,
+.llm-standalone-update-notes.llm-rendered-markdown ol {
+  margin: 0 0 8px;
+  padding-inline-start: 18px;
+}
+
+.llm-standalone-update-notes.llm-rendered-markdown li {
+  margin: 0 0 8px;
+  padding-inline-start: 2px;
+  color: var(--fill-primary);
+}
+
+.llm-standalone-update-notes.llm-rendered-markdown li::marker {
+  color: var(--fill-tertiary);
+}
+
+.llm-standalone-update-notes.llm-rendered-markdown li p {
+  color: inherit;
+}
+
+.llm-standalone-update-notes.llm-rendered-markdown strong {
   font-weight: 600;
 }
 
-/* Pictures sit right in the text at column width; a click opens full view. */
+/* Pictures sit at column width; a click opens the full view. */
 .llm-standalone-update-notes.llm-rendered-markdown img {
   display: block;
   max-width: 100%;
   height: auto;
-  margin: 8px 0 14px;
+  margin: 10px 0;
   border: 1px solid var(--stroke-secondary);
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: zoom-in;
 }
 
-.llm-standalone-release-notes-footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 28px;
-  padding-top: 12px;
-  border-top: 1px solid var(--stroke-secondary);
-  font-size: var(--llm-fs-12, 12px);
+.llm-standalone-release-notes-status {
+  padding: 18px 0;
+  color: var(--fill-tertiary);
 }
 
-/* A narrow window: the panel nearly fills it. */
+.llm-standalone-release-notes-more {
+  appearance: none;
+  -moz-appearance: none;
+  display: block;
+  margin: 6px auto 0;
+  padding: 6px 14px;
+  border: 1px solid var(--stroke-secondary);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--llm-fs-13, 13px);
+}
+
+.llm-standalone-release-notes-more:hover {
+  background: var(--fill-quinary);
+  color: var(--fill-primary);
+}
+
+.llm-standalone-release-notes-more[hidden],
+.llm-standalone-release-notes-status[hidden] {
+  display: none;
+}
+
+/* A narrow window: the panel fills almost the whole width. */
 @media (max-width: 560px) {
   .llm-standalone-release-notes {
-    padding: 8px;
+    padding: 40px 10px 10px;
   }
 
-  :root[customtitlebar] .llm-standalone-release-notes {
-    padding-top: 36px;
+  .llm-standalone-release-notes-header {
+    padding: 18px 14px 4px 20px;
   }
 
   .llm-standalone-release-notes-scroll {
-    padding: 0 18px 28px;
+    padding: 4px 20px 20px;
   }
 }
 
