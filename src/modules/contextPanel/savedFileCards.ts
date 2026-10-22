@@ -34,6 +34,7 @@ import {
   fenceAround,
   getSidePanelItemHost,
   isOutsideAnswerContent,
+  NO_SIDE_ITEMS_ATTRIBUTE,
   registerSideItemRequest,
   SIDE_ITEM_KIND_ATTRIBUTE,
 } from "./sidePanelItems";
@@ -48,6 +49,15 @@ import {
 export const SAVED_FILES_MANIFEST = ".llm-files.json";
 /** A page bigger than this opens only from Finder, not in the chat. */
 export const SAVED_FILE_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
+/** A picture bigger than this keeps the type tile on its card. */
+export const SAVED_FILE_CARD_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+/** The Markdown a card's preview draws, from the top of the note. */
+const CARD_MARKDOWN_PREVIEW_CHARS = 4000;
+/** The width a page or note is laid out at before it is scaled to the card. */
+const CARD_PAGE_LAYOUT_WIDTH = 1000;
+const CARD_MARKDOWN_LAYOUT_WIDTH = 600;
+const CARD_PREVIEW_HEIGHT = 150;
+const CARD_PREVIEW_FALLBACK_WIDTH = 340;
 /** A turn rarely runs longer; the window keeps later files off old answers. */
 const TURN_WINDOW_MAX_MS = 2 * 60 * 60 * 1000;
 /** File times can trail the clock the message time came from. */
@@ -533,6 +543,10 @@ export type SavedFileCardOptions = {
   homeDir?: string;
   /** Opens an HTML page in the full-window viewer (the sidebar's full view). */
   openViewer?: (source: string, anchor: HTMLElement) => void;
+  /** Draws Markdown into a box; without it a note keeps its type tile. */
+  renderMarkdown?: (target: HTMLElement, markdown: string) => void;
+  /** Called after a card's preview mounts, so the chat can keep its scroll. */
+  onPreviewMounted?: () => void;
 };
 
 export type SavedFileTileType =
@@ -603,6 +617,26 @@ export function isShowableSavedFile(
   );
 }
 
+/**
+ * What a card's preview area shows: a page, a note or a picture drawn from the
+ * file, or the type tile. A missing file (no size) and a big one get the tile.
+ */
+export function savedFileCardPreviewKind(
+  path: string,
+  size: number | undefined,
+): "html" | "markdown" | "image" | "tile" {
+  if (typeof size !== "number" || !Number.isFinite(size) || size < 0)
+    return "tile";
+  const kind = savedFilePreviewKind(path);
+  if (kind === "html" || kind === "markdown") {
+    return size <= SAVED_FILE_PREVIEW_MAX_BYTES ? kind : "tile";
+  }
+  if (kind === "image") {
+    return size <= SAVED_FILE_CARD_IMAGE_MAX_BYTES ? "image" : "tile";
+  }
+  return "tile";
+}
+
 /** What a click on the card does. A full view exists for pages and pictures. */
 export function decideSavedFileClick(params: {
   showable: boolean;
@@ -638,6 +672,114 @@ async function readText(path: string): Promise<string | null> {
     );
   } catch {
     return null;
+  }
+}
+
+/** The <img> for a saved picture, as the card and the side panel show it. */
+function createSavedFileImage(
+  doc: Document,
+  path: string,
+  className: string,
+): HTMLImageElement {
+  const img = doc.createElement("img") as HTMLImageElement;
+  img.className = className;
+  img.alt = fileBaseName(path);
+  img.src = toFileUrl(path) || path;
+  return img;
+}
+
+/** Scales a box laid out at `layoutWidth` down to the preview area's width. */
+function fitPreviewBox(
+  box: HTMLElement,
+  area: HTMLElement,
+  layoutWidth: number,
+): () => void {
+  const apply = () => {
+    const width = area.clientWidth || CARD_PREVIEW_FALLBACK_WIDTH;
+    const scale = width / layoutWidth;
+    box.style.width = `${layoutWidth}px`;
+    box.style.height = `${Math.ceil(CARD_PREVIEW_HEIGHT / scale)}px`;
+    box.style.transform = `scale(${scale})`;
+  };
+  apply();
+  return apply;
+}
+
+/**
+ * Draws the real file in a card's preview area: a page in the safe box, a
+ * note as Markdown, a picture as itself, each scaled to a thumbnail. Returns
+ * true once it mounted; any failure leaves the type tile and returns false.
+ */
+async function mountCardPreview(
+  doc: Document,
+  area: HTMLElement,
+  path: string,
+  previewKind: "html" | "markdown" | "image",
+  options: SavedFileCardOptions,
+): Promise<boolean> {
+  try {
+    let element: HTMLElement;
+    let refit: (() => void) | null = null;
+    if (previewKind === "image") {
+      const img = createSavedFileImage(
+        doc,
+        path,
+        "llm-saved-file-preview-image",
+      );
+      img.setAttribute("aria-hidden", "true");
+      img.addEventListener("error", () => {
+        img.remove();
+        delete area.dataset.previewReady;
+      });
+      element = img;
+    } else if (previewKind === "html") {
+      const source = await readText(path);
+      if (source === null) return false;
+      const frame = createSandboxedHtmlFrame(
+        doc,
+        source,
+        "llm-saved-file-preview-frame",
+      );
+      frame.setAttribute("scrolling", "no");
+      frame.setAttribute("tabindex", "-1");
+      frame.setAttribute("aria-hidden", "true");
+      refit = fitPreviewBox(frame, area, CARD_PAGE_LAYOUT_WIDTH);
+      element = frame;
+    } else {
+      if (!options.renderMarkdown) return false;
+      const source = await readText(path);
+      if (source === null) return false;
+      const box = doc.createElement("div");
+      box.className =
+        "llm-saved-file-preview-markdown llm-standalone-side-panel-item-rendered";
+      box.setAttribute("aria-hidden", "true");
+      // A thumbnail, not part of the answer: no →| buttons or Miscellaneous rows.
+      box.setAttribute(NO_SIDE_ITEMS_ATTRIBUTE, "true");
+      options.renderMarkdown(box, source.slice(0, CARD_MARKDOWN_PREVIEW_CHARS));
+      for (const focusable of Array.from(
+        box.querySelectorAll("a, button, input, textarea, select, [tabindex]"),
+      )) {
+        (focusable as HTMLElement).tabIndex = -1;
+      }
+      refit = fitPreviewBox(box, area, CARD_MARKDOWN_LAYOUT_WIDTH);
+      element = box;
+    }
+    area.insertBefore(element, area.firstChild);
+    area.dataset.previewReady = "true";
+    if (refit) {
+      const Observer = doc.defaultView?.ResizeObserver;
+      if (Observer) {
+        try {
+          new Observer(refit).observe(area);
+        } catch {
+          /* the first fit stays */
+        }
+      }
+    }
+    options.onPreviewMounted?.();
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -784,6 +926,31 @@ export async function createSavedFileCard(
   tileEl.append(page, letters);
   previewArea.appendChild(tileEl);
 
+  const previewKind = savedFileCardPreviewKind(
+    path,
+    missing ? undefined : stat.size || 0,
+  );
+  if (previewKind !== "tile") {
+    const load = () => {
+      void mountCardPreview(doc, previewArea, path, previewKind, options);
+    };
+    const Observer = doc.defaultView?.IntersectionObserver;
+    if (Observer) {
+      try {
+        const observer = new Observer((entries) => {
+          if (!entries.some((entry) => entry.isIntersecting)) return;
+          observer.disconnect();
+          load();
+        });
+        observer.observe(previewArea);
+      } catch {
+        load();
+      }
+    } else {
+      load();
+    }
+  }
+
   const footer = doc.createElement("div");
   footer.className = "llm-saved-file-footer";
   const text = doc.createElement("div");
@@ -911,7 +1078,12 @@ export async function mountSavedFileCards(
   if (!paths.length || !host.isConnected) return;
   const doc = host.ownerDocument;
   const cards = await Promise.all(
-    paths.map((path) => createSavedFileCard(doc, path, params)),
+    paths.map((path) =>
+      createSavedFileCard(doc, path, {
+        ...params,
+        onPreviewMounted: params.onMounted,
+      }),
+    ),
   );
   host.replaceChildren(...cards);
   host.hidden = false;
@@ -968,11 +1140,9 @@ export async function renderSavedFileInto(
     return;
   }
   if (preview === "image") {
-    const img = doc.createElement("img") as HTMLImageElement;
-    img.className = "llm-saved-file-image";
-    img.alt = fileBaseName(path);
-    img.src = toFileUrl(path) || path;
-    root.replaceChildren(img);
+    root.replaceChildren(
+      createSavedFileImage(doc, path, "llm-saved-file-image"),
+    );
     return;
   }
   const source = await readText(path);

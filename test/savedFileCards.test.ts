@@ -9,6 +9,8 @@ import {
   isShowableSavedFile,
   resolveAgentFilesTargetForPanelItem,
   resolveTurnSavedFiles,
+  SAVED_FILE_CARD_IMAGE_MAX_BYTES,
+  savedFileCardPreviewKind,
   SAVED_FILE_PREVIEW_MAX_BYTES,
   SAVED_FILES_MANIFEST,
   savedFilePreviewKind,
@@ -236,6 +238,24 @@ describe("Saved file cards", function () {
       type: "missing",
       label: "?",
     });
+  });
+
+  it("picks what a card's preview area shows", function () {
+    const html = SAVED_FILE_PREVIEW_MAX_BYTES;
+    assert.equal(savedFileCardPreviewKind("/a/p.html", html), "html");
+    assert.equal(savedFileCardPreviewKind("/a/p.htm", 0), "html");
+    assert.equal(savedFileCardPreviewKind("/a/p.html", html + 1), "tile");
+    assert.equal(savedFileCardPreviewKind("/a/n.md", html), "markdown");
+    assert.equal(savedFileCardPreviewKind("/a/n.markdown", 5), "markdown");
+    assert.equal(savedFileCardPreviewKind("/a/n.md", html + 1), "tile");
+    const img = SAVED_FILE_CARD_IMAGE_MAX_BYTES;
+    for (const ext of ["png", "jpg", "jpeg", "gif", "webp", "svg"]) {
+      assert.equal(savedFileCardPreviewKind(`/a/x.${ext}`, img), "image", ext);
+    }
+    assert.equal(savedFileCardPreviewKind("/a/x.png", img + 1), "tile");
+    assert.equal(savedFileCardPreviewKind("/a/x.csv", 10), "tile");
+    assert.equal(savedFileCardPreviewKind("/a/x.pdf", 10), "tile");
+    assert.equal(savedFileCardPreviewKind("/a/p.html", undefined), "tile");
   });
 
   it("decides what a click on the card does", function () {

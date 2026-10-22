@@ -12292,6 +12292,8 @@ function renderChatForPanel(
           homeDir: resolveHomeDir(),
           openViewer: (source, anchor) =>
             openHtmlPreviewViewer(doc, source, anchor),
+          renderMarkdown: (target, markdown) =>
+            renderRenderedMarkdownInto(target, markdown, doc),
           onMounted: () =>
             scheduleChatScrollReconciliation(conversationKey, chatBox),
         }).catch((err) => appLogger.warn("LLM: saved file cards failed", err));
