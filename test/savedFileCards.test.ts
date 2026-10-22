@@ -1,13 +1,19 @@
 import { assert } from "chai";
 import {
   buildTurnWindow,
+  decideSavedFileClick,
   detectSavedFiles,
   displayLocalPath,
   extractLocalFilePaths,
+  formatFileSize,
+  isShowableSavedFile,
   resolveAgentFilesTargetForPanelItem,
   resolveTurnSavedFiles,
+  SAVED_FILE_PREVIEW_MAX_BYTES,
   SAVED_FILES_MANIFEST,
   savedFilePreviewKind,
+  savedFileTile,
+  savedFileTypeLabel,
 } from "../src/modules/contextPanel/savedFileCards";
 
 type Globals = { Zotero?: unknown; IOUtils?: unknown };
@@ -198,6 +204,69 @@ describe("Saved file cards", function () {
     assert.equal(
       displayLocalPath("/Users/me/Desktop/x.html", "/Users/me"),
       "~/Desktop/x.html",
+    );
+  });
+
+  it("names the file type and size for the card footer", function () {
+    const id = (en: string) => en;
+    assert.equal(savedFileTypeLabel("/a/b.html", id), "Web page");
+    assert.equal(savedFileTypeLabel("/a/b.md", id), "Markdown note");
+    assert.equal(savedFileTypeLabel("/a/b.JPG", id), "Picture");
+    assert.equal(savedFileTypeLabel("/a/b.docx", id), "Word document");
+    assert.equal(savedFileTypeLabel("/a/b.csv", id), "CSV file");
+    assert.equal(savedFileTypeLabel("/a/README", id), "File");
+    assert.equal(formatFileSize(0), "0 B");
+    assert.equal(formatFileSize(12 * 1024), "12 KB");
+    assert.equal(formatFileSize(1.4 * 1024 * 1024), "1.4 MB");
+    assert.equal(formatFileSize(2 * 1024 * 1024), "2 MB");
+  });
+
+  it("picks the tile colour and letters", function () {
+    assert.deepEqual(savedFileTile("/a/b.html", false), {
+      type: "html",
+      label: "HTML",
+    });
+    assert.deepEqual(savedFileTile("/a/b.markdown", false), {
+      type: "md",
+      label: "MARK",
+    });
+    assert.equal(savedFileTile("/a/b.webp", false).type, "image");
+    assert.equal(savedFileTile("/a/b.xyz", false).type, "other");
+    assert.deepEqual(savedFileTile("/a/b.html", true), {
+      type: "missing",
+      label: "?",
+    });
+  });
+
+  it("decides what a click on the card does", function () {
+    assert.isTrue(isShowableSavedFile("html", 10));
+    assert.isFalse(isShowableSavedFile("text", 10));
+    assert.isFalse(
+      isShowableSavedFile("image", SAVED_FILE_PREVIEW_MAX_BYTES + 1),
+    );
+    const base = { showable: true, hasViewer: true, standalone: false };
+    assert.equal(
+      decideSavedFileClick({ ...base, kind: "html", standalone: true }),
+      "side-panel",
+    );
+    assert.equal(decideSavedFileClick({ ...base, kind: "html" }), "full-view");
+    assert.equal(decideSavedFileClick({ ...base, kind: "image" }), "full-view");
+    assert.equal(
+      decideSavedFileClick({ ...base, kind: "markdown" }),
+      "default-app",
+    );
+    assert.equal(
+      decideSavedFileClick({ ...base, kind: "html", hasViewer: false }),
+      "default-app",
+    );
+    assert.equal(
+      decideSavedFileClick({
+        ...base,
+        kind: "text",
+        showable: false,
+        standalone: true,
+      }),
+      "default-app",
     );
   });
 });

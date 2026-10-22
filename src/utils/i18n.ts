@@ -1579,8 +1579,21 @@ const zhCN: Record<string, string> = {
   // Files the agent saved to disk.
   File: "文件",
   "Show in folder": "在文件夹中显示",
-  "Saved to": "保存到",
-  "This file is no longer there": "此文件已不在原处",
+  "More actions": "更多操作",
+  "Web page": "网页",
+  "Markdown note": "Markdown 笔记",
+  Picture: "图片",
+  PDF: "PDF",
+  "Word document": "Word 文档",
+  "{type} file": "{type} 文件",
+  "opens in default app": "用默认应用打开",
+  "Moved or deleted": "已移动或删除",
+  "Open in side panel": "在侧边栏中打开",
+  "Open full view": "打开完整视图",
+  "Open in default app": "用默认应用打开",
+  "Show in Finder": "在访达中显示",
+  "Copy file path": "复制文件路径",
+  "Copy where it was": "复制原位置",
   "This file is no longer there. It may have been moved, renamed, or deleted.":
     "此文件已不在原处，可能已被移动、重命名或删除。",
   "This kind of file can't be shown here. Use Show in folder.":
