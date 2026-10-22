@@ -1058,7 +1058,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const sendBtn = createElement(
     doc,
     "button",
-    "llm-shortcut-btn llm-action-btn llm-action-btn-primary llm-send-btn llm-action-icon-only",
+    "llm-shortcut-btn llm-action-btn llm-send-btn llm-action-icon-only",
     {
       id: "llm-send",
       title: t("Send"),
