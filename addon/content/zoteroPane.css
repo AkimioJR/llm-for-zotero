@@ -17765,22 +17765,8 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   padding: 4px 8px 12px;
 }
 
-/* "This chat | All chats": the Paper chat | Library chat switch, a size
- * smaller, at the end of the title row. */
-.llm-standalone-tab-group.llm-standalone-side-panel-misc-scope {
-  z-index: auto;
-  grid-column: auto;
-  flex: none;
-}
-
-.llm-standalone-side-panel-misc-scope .llm-standalone-tab {
-  min-height: calc(2px + var(--llm-fs-10) * 1.5);
-  padding: 0 8px;
-  font-size: var(--llm-fs-10);
-  line-height: 1.5;
-}
-
-/* "Go to chat": shown on the row under the pointer or keyboard focus. */
+/* "Go to chat": shown only while the pointer is on its row (or keyboard
+ * focus is on the row or the link). */
 .llm-standalone-side-panel-misc-go {
   flex: none;
   margin-inline-start: auto;
@@ -17799,7 +17785,8 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 }
 
 .llm-standalone-search-item:hover .llm-standalone-side-panel-misc-go,
-.llm-standalone-search-item:focus-within .llm-standalone-side-panel-misc-go {
+.llm-standalone-search-item:focus-visible .llm-standalone-side-panel-misc-go,
+.llm-standalone-side-panel-misc-go:focus-visible {
   visibility: visible;
 }
 

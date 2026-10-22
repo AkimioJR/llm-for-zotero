@@ -2020,8 +2020,6 @@ export function createStandaloneSidePanel(
   // -- Miscellaneous tab -------------------------------------------------------
   /** Where the list was scrolled when a picked item replaced it. */
   let miscScrollTop = 0;
-  /** Which chats the list shows; it starts on all of them. */
-  let miscScope: "this" | "all" = "all";
 
   // The other chats of the paper are not on screen. Each is drawn once into
   // a hidden body with the main chat's renderer (as a read-only tab draws
@@ -2214,39 +2212,16 @@ export function createStandaloneSidePanel(
   };
 
   // What the model made (diagrams, figures, pages, code, plan documents) in
-  // every chat of the main chat's paper, or only in the main chat, newest
+  // every chat of the main chat's paper (or every library chat), newest
   // first, in the History list's row styles. A picked row turns this tab
   // into that item's tab.
   const buildMiscView = (id: string): MiscTabView => {
     const root = createElement(doc, "div", "llm-standalone-side-panel-misc");
     root.dataset.sideView = "misc";
     root.dataset.sideTabId = id;
-    const { row, text, actions } = createTitleRow(t("Made in this chat"));
+    const { row, text } = createTitleRow(t("Made for this paper"));
     const count = createPill("", "kind");
     text.after(count);
-    const scopeGroup = createElement(
-      doc,
-      "div",
-      "llm-standalone-tab-group llm-standalone-side-panel-misc-scope",
-    );
-    scopeGroup.setAttribute("role", "group");
-    scopeGroup.setAttribute("aria-label", t("Which chats"));
-    const scopeButtons = (["this", "all"] as const).map((scope) => {
-      const button = createElement(doc, "button", "llm-standalone-tab", {
-        textContent: scope === "this" ? t("This chat") : t("All chats"),
-      }) as HTMLButtonElement;
-      button.type = "button";
-      button.dataset.miscScope = scope;
-      button.addEventListener("click", () => {
-        if (miscScope === scope) return;
-        miscScope = scope;
-        list.scrollTop = 0;
-        reload();
-      });
-      return button;
-    });
-    scopeGroup.append(...scopeButtons);
-    actions.appendChild(scopeGroup);
     const list = createElement(
       doc,
       "div",
@@ -2263,40 +2238,28 @@ export function createStandaloneSidePanel(
 
     const redraw = () => {
       const main = deps.getMainContext();
-      const all = miscScope === "all";
       const paper = main.mode === "paper";
-      for (const button of scopeButtons) {
-        const on = button.dataset.miscScope === miscScope;
-        button.classList.toggle("active", on);
-        button.setAttribute("aria-pressed", on ? "true" : "false");
-      }
-      text.textContent = !all
-        ? t("Made in this chat")
-        : paper
-          ? t("Made for this paper")
-          : t("Made in library chats");
+      text.textContent = paper
+        ? t("Made for this paper")
+        : t("Made in library chats");
       const mainItems: ChatMadeItem[] = collectMadeItems(mainBody).map(
         (made) => ({ ...made, conversationKey: main.conversationKey }),
       );
-      const items = all
-        ? mergeChatMadeItems([
-            mainItems,
-            otherItems.filter(
-              (made) => made.conversationKey !== main.conversationKey,
-            ),
-          ])
-        : mainItems;
+      const items = mergeChatMadeItems([
+        mainItems,
+        otherItems.filter(
+          (made) => made.conversationKey !== main.conversationKey,
+        ),
+      ]);
       list.replaceChildren();
       count.textContent = String(items.length);
       count.hidden = !items.length;
-      if (!items.length && !(all && loading)) {
+      if (!items.length && !loading) {
         list.appendChild(
           createElement(doc, "div", "llm-standalone-search-empty", {
-            textContent: !all
-              ? t("Nothing made in this chat yet")
-              : paper
-                ? t("Nothing made for this paper yet")
-                : t("Nothing made in library chats yet"),
+            textContent: paper
+              ? t("Nothing made for this paper yet")
+              : t("Nothing made in library chats yet"),
           }),
         );
         return;
@@ -2358,11 +2321,7 @@ export function createStandaloneSidePanel(
           chatsByKey.get(made.conversationKey)?.title ||
           (isMain ? t("This chat") : t("Untitled chat"));
         const time = formatGlobalHistoryTimestamp(made.timestamp);
-        const metaText = all
-          ? time
-            ? `${chatTitle} · ${time}`
-            : chatTitle
-          : time;
+        const metaText = time ? `${chatTitle} · ${time}` : chatTitle;
         if (metaText) {
           const meta = createElement(
             doc,
@@ -2374,7 +2333,7 @@ export function createStandaloneSidePanel(
               textContent: metaText,
             }),
           );
-          if (all && isMain) {
+          if (isMain) {
             meta.appendChild(
               createElement(
                 doc,
@@ -2388,9 +2347,7 @@ export function createStandaloneSidePanel(
           }
           item.appendChild(meta);
         }
-        item.title = all
-          ? `${t(ITEM_KIND_LABELS[made.kind])}: ${title} (${chatTitle})`
-          : `${t(ITEM_KIND_LABELS[made.kind])}: ${title}`;
+        item.title = `${t(ITEM_KIND_LABELS[made.kind])}: ${title} (${chatTitle})`;
         const pick = () =>
           void openItem(made.request, id, made.conversationKey);
         item.addEventListener("click", pick);
@@ -2403,7 +2360,7 @@ export function createStandaloneSidePanel(
         });
         list.appendChild(item);
       }
-      if (all && loading) {
+      if (loading) {
         list.appendChild(
           createElement(doc, "div", "llm-standalone-search-empty", {
             textContent: t("Looking through the other chats..."),
@@ -2415,11 +2372,6 @@ export function createStandaloneSidePanel(
     /** Reads the chat list again and scans the chats not read yet. */
     const reload = () => {
       const run = ++generation;
-      if (miscScope !== "all") {
-        loading = false;
-        redraw();
-        return;
-      }
       loading = true;
       redraw();
       void (async () => {
