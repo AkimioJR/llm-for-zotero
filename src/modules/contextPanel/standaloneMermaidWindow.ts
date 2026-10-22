@@ -125,6 +125,13 @@ function syncThemeVariables(sourceDoc: Document, targetDoc: Document): void {
 
 /** The chat's own theme, for a viewer kind that carries no theme key. */
 function detectThemeKey(sourceDoc: Document): MermaidThemeKey {
+  // The chat window records the theme it copied from Zotero on its root.
+  const standaloneTheme = sourceDoc
+    .getElementById("llmforzotero-standalone-chat-root")
+    ?.getAttribute("data-standalone-theme");
+  if (standaloneTheme === "dark" || standaloneTheme === "light") {
+    return standaloneTheme;
+  }
   const root = sourceDoc.documentElement;
   const dark =
     root?.hasAttribute("lwtheme-brighttext") ||
