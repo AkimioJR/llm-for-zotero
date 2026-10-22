@@ -2,7 +2,9 @@ import { assert } from "chai";
 import {
   appendMoveToSidePanelButton,
   collectMadeItems,
+  mergeChatMadeItems,
   registerSidePanelItemHost,
+  type ChatMadeItem,
   resolveSidePanelItemIdentity,
   unregisterSidePanelItemHost,
   type SidePanelItemRequest,
@@ -108,6 +110,7 @@ function buildChat(
   doc: Document,
   messages: Array<{
     index: number;
+    timestamp?: number;
     items: Array<{
       kind: string;
       source: string;
@@ -122,6 +125,9 @@ function buildChat(
     const wrapper = new FakeEl();
     wrapper.className = "llm-message-wrapper";
     wrapper.dataset.messageIndex = String(message.index);
+    if (message.timestamp !== undefined) {
+      wrapper.dataset.messageTimestamp = String(message.timestamp);
+    }
     root.appendChild(wrapper);
     for (const item of message.items) {
       const el = new FakeEl();
@@ -323,6 +329,49 @@ describe("side panel Miscellaneous and host registration", function () {
     });
   });
 
+  describe("one list from all chats of a paper", function () {
+    it("reads each item's message time, 0 when the message has none", function () {
+      const doc = fakeDoc();
+      const host = { open() {} };
+      registerSidePanelItemHost(doc, host);
+      try {
+        const chat = buildChat(doc, [
+          { index: 1, timestamp: 1000, items: [{ kind: "code", source: "a" }] },
+          { index: 3, items: [{ kind: "svg", source: "b" }] },
+        ]);
+        const made = collectMadeItems(chat as unknown as ParentNode);
+        assert.deepEqual(
+          made.map((item) => item.timestamp),
+          [0, 1000],
+        );
+      } finally {
+        unregisterSidePanelItemHost(doc, host);
+      }
+    });
+
+    it("merges chats newest first, keeping order on equal times", function () {
+      const item = (
+        conversationKey: number,
+        timestamp: number,
+        source: string,
+      ): ChatMadeItem => ({
+        kind: "code",
+        request: { kind: "code", source },
+        messageIndex: 1,
+        timestamp,
+        conversationKey,
+      });
+      const main = [item(1, 300, "m2"), item(1, 100, "m1")];
+      const other = [item(2, 400, "o2"), item(2, 300, "o1"), item(2, 0, "o0")];
+      const merged = mergeChatMadeItems([main, other]);
+      assert.deepEqual(
+        merged.map((made) => made.request.source),
+        ["o2", "m2", "o1", "m1", "o0"],
+      );
+      assert.deepEqual(mergeChatMadeItems([]), []);
+    });
+  });
+
   describe("the Miscellaneous tab in the panel state", function () {
     it("turns the New tab tab into one Miscellaneous tab", function () {
       const start = showSidePanelNewTabPage(
@@ -436,9 +485,20 @@ describe("side panel Miscellaneous and host registration", function () {
       "Saved as note",
       "Note already saved",
       "Miscellaneous",
-      "View what the model made in this chat",
+      "View what the model made in these chats",
       "Made in this chat",
       "Nothing made in this chat yet",
+      "Made for this paper",
+      "Made in library chats",
+      "Nothing made for this paper yet",
+      "Nothing made in library chats yet",
+      "Which chats",
+      "This chat",
+      "All chats",
+      "Go to chat",
+      "Go to the chat it came from",
+      "open now",
+      "Looking through the other chats...",
       "Open HTML preview viewer",
       "HTML preview",
       "HTML preview viewer controls",

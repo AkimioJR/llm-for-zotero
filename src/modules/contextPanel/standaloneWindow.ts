@@ -3463,6 +3463,7 @@ export function openStandaloneChat(options?: {
             void enqueueStandaloneConversationDeletionEvent(() =>
               handleStandaloneConversationDeletionEvent(event),
             );
+            standaloneSidePanel?.onConversationDeletionChanged();
             return;
           }
           scheduleStandaloneSidebarRender();

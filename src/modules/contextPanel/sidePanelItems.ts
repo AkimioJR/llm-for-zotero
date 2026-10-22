@@ -308,7 +308,32 @@ export type MadeItem = {
   request: SidePanelItemRequest;
   /** The source message's index in the chat; -1 when it is not known. */
   messageIndex: number;
+  /** The source message's time (ms); 0 when it is not known. */
+  timestamp: number;
 };
+
+/** A made item and the chat it was made in. */
+export type ChatMadeItem = MadeItem & { conversationKey: number };
+
+/**
+ * One list from several chats' lists (each newest first): newest first by
+ * message time. Items with the same time keep their chat's order, and the
+ * lists' order between chats.
+ */
+export function mergeChatMadeItems(
+  lists: readonly (readonly ChatMadeItem[])[],
+): ChatMadeItem[] {
+  const ranked = lists.flatMap((list, listIndex) =>
+    list.map((made, index) => ({ made, listIndex, index })),
+  );
+  ranked.sort(
+    (a, b) =>
+      b.made.timestamp - a.made.timestamp ||
+      a.listIndex - b.listIndex ||
+      a.index - b.index,
+  );
+  return ranked.map((entry) => entry.made);
+}
 
 /**
  * Everything movable in the rendered main chat (diagrams, figures, pages,
@@ -347,10 +372,14 @@ export function collectMadeItems(container: ParentNode): MadeItem[] {
     const request = button ? requestBuilders.get(button)?.() : null;
     if (!request) continue;
     const source = findSourceMessage(element);
+    const timestamp = Number(
+      (source?.wrapper as HTMLElement | undefined)?.dataset?.messageTimestamp,
+    );
     items.push({
       kind,
       request,
       messageIndex: source ? source.messageIndex : -1,
+      timestamp: Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0,
     });
   }
   return items.reverse();

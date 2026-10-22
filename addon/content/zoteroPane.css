@@ -17765,6 +17765,88 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   padding: 4px 8px 12px;
 }
 
+/* "This chat | All chats": the Paper chat | Library chat switch, a size
+ * smaller, at the end of the title row. */
+.llm-standalone-tab-group.llm-standalone-side-panel-misc-scope {
+  z-index: auto;
+  grid-column: auto;
+  flex: none;
+}
+
+.llm-standalone-side-panel-misc-scope .llm-standalone-tab {
+  min-height: calc(2px + var(--llm-fs-10) * 1.5);
+  padding: 0 8px;
+  font-size: var(--llm-fs-10);
+  line-height: 1.5;
+}
+
+/* "Go to chat": shown on the row under the pointer or keyboard focus. */
+.llm-standalone-side-panel-misc-go {
+  flex: none;
+  margin-inline-start: auto;
+  visibility: hidden;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-10);
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.llm-standalone-side-panel-misc-go::after {
+  content: " \2192";
+}
+
+.llm-standalone-search-item:hover .llm-standalone-side-panel-misc-go,
+.llm-standalone-search-item:focus-within .llm-standalone-side-panel-misc-go {
+  visibility: visible;
+}
+
+.llm-standalone-side-panel-misc-go:hover,
+.llm-standalone-side-panel-misc-go:focus-visible {
+  background: color-mix(in srgb, var(--fill-quaternary) 60%, transparent);
+  color: var(--fill-primary);
+}
+
+/* The meta line: source chat and time, then "open now" for the main chat. */
+.llm-standalone-side-panel-misc-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.llm-standalone-side-panel-misc-from {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.llm-standalone-side-panel-misc-here {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: var(--llm-history-library-chip-text);
+  background: var(--llm-history-library-chip-bg);
+}
+
+/* Other chats are drawn here, out of sight, to read what they made. */
+.llm-standalone-side-misc-scan-host {
+  position: absolute;
+  left: -100000px;
+  top: 0;
+  width: 720px;
+  height: 900px;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.llm-standalone-side-misc-scan-host > .llm-standalone-side-misc-scan {
+  width: 100%;
+  height: 100%;
+}
+
 /* The kind chip: History's chip metrics, one hue per kind (as the design
  * prototype's .klabel). */
 .llm-standalone-search-label[data-label-type="item"] {

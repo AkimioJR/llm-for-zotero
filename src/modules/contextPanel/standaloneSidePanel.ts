@@ -21,6 +21,7 @@
  * Pure decisions live in standaloneSidePanelState.ts; this module owns the
  * DOM and the panel lifecycles.
  */
+import { pendingDeletionStore } from "../../core/conversations/pendingDeletionStore";
 import { appLogger } from "../../core/logging";
 import { createElement } from "../../utils/domHelpers";
 import { t } from "../../utils/i18n";
@@ -65,7 +66,10 @@ import { createGlobalPortalItem, createPaperPortalItem } from "./portalScope";
 import { applyPanelFontScale } from "./prefHelpers";
 import { disposeSetupHandlers } from "./setupHandlers";
 import { formatPaperContextChipLabel } from "./setupHandlers/controllers/composeContextController";
-import type { ConversationHistoryEntry } from "./setupHandlers/controllers/conversationHistoryController";
+import {
+  formatGlobalHistoryTimestamp,
+  type ConversationHistoryEntry,
+} from "./setupHandlers/controllers/conversationHistoryController";
 import {
   createEmbeddedHistorySearchList,
   type EmbeddedHistorySearchListDeps,
@@ -138,6 +142,7 @@ import {
 import { setNeutralStatus, setStatus } from "./textUtils";
 import { copyTextToClipboard } from "./clipboard";
 import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
+import { flushPendingChatRender } from "./progressiveChatRender";
 import { renderRenderedMarkdownInto } from "./renderedMarkdown";
 import {
   buildItemFenceMarkdown,
@@ -145,8 +150,9 @@ import {
   canSaveItemAsNote,
   collectMadeItems,
   flashSourceMessage,
+  mergeChatMadeItems,
   resolveSidePanelItemIdentity,
-  type MadeItem,
+  type ChatMadeItem,
   registerSidePanelItemHost,
   resolveItemTabTitle,
   unregisterSidePanelItemHost,
@@ -241,6 +247,11 @@ export type StandaloneSidePanelController = {
   openItem: (request: SidePanelItemRequest) => void;
   /** Drops the tabs kept for a paper or library that is not on screen. */
   dropWorkspace: (key: string) => void;
+  /**
+   * A chat is being deleted, or its deletion was undone: the tabs of items
+   * made in a chat being deleted close, and Miscellaneous lists are read again.
+   */
+  onConversationDeletionChanged: () => void;
   /** Window close: drop everything without asking. */
   dispose: () => void;
 };
@@ -958,7 +969,7 @@ export function createStandaloneSidePanel(
       "misc",
       "llm-standalone-side-panel-icon-misc",
       t("Miscellaneous"),
-      t("View what the model made in this chat"),
+      t("View what the model made in these chats"),
     );
     miscRow.addEventListener("click", () => openMiscTab());
     nav.append(sideChatRow, historyRow, miscRow);
@@ -1904,27 +1915,23 @@ export function createStandaloneSidePanel(
     return view;
   };
 
-  /** Scrolls the main chat to the item's message and flashes it. */
-  const showInChat = (view: ItemTabView): boolean => {
-    const mainStatus = mainBody.querySelector(
-      "#llm-status",
-    ) as HTMLElement | null;
-    const wrapper =
-      view.conversationKey === deps.getMainContext().conversationKey
-        ? flashSourceMessage({
-            container: mainBody,
-            messageIndex: view.messageIndex,
-            setTimeout: (callback, ms) => win.setTimeout(callback, ms),
-          })
-        : null;
-    if (!wrapper && mainStatus) {
-      setStatus(
-        mainStatus,
-        t("The source message is not in the main chat now."),
-        "warning",
-      );
-    }
-    return Boolean(wrapper);
+  /**
+   * Scrolls the main chat to the item's message and flashes it; an item from
+   * another chat of the paper switches the main chat to that chat first.
+   */
+  const showInChat = (view: ItemTabView) => {
+    void goToChat(view.conversationKey, view.messageIndex).then((shown) => {
+      const mainStatus = mainBody.querySelector(
+        "#llm-status",
+      ) as HTMLElement | null;
+      if (!shown && mainStatus && !disposed) {
+        setStatus(
+          mainStatus,
+          t("The source message is not in the main chat now."),
+          "warning",
+        );
+      }
+    });
   };
 
   const disposeItemView = (view: ItemTabView) => {
@@ -1942,9 +1949,12 @@ export function createStandaloneSidePanel(
   const openItem = (
     request: SidePanelItemRequest,
     replaceId?: string,
+    /** The chat the item was made in; default: the main chat. */
+    sourceConversationKey?: number,
   ): boolean => {
     if (disposed) return false;
-    const conversationKey = deps.getMainContext().conversationKey;
+    const conversationKey =
+      sourceConversationKey ?? deps.getMainContext().conversationKey;
     const { messageIndex, itemKey } = resolveSidePanelItemIdentity(
       request,
       conversationKey,
@@ -2010,16 +2020,233 @@ export function createStandaloneSidePanel(
   // -- Miscellaneous tab -------------------------------------------------------
   /** Where the list was scrolled when a picked item replaced it. */
   let miscScrollTop = 0;
-  // What the model made in the main chat (diagrams, figures, pages, code,
-  // plan documents), newest first, in the History list's row styles. A picked
-  // row turns this tab into that item's tab.
+  /** Which chats the list shows; it starts on all of them. */
+  let miscScope: "this" | "all" = "all";
+
+  // The other chats of the paper are not on screen. Each is drawn once into
+  // a hidden body with the main chat's renderer (as a read-only tab draws
+  // it), its items are read off, and the body is dropped. The result is kept
+  // until the chat changes (its last activity time moves).
+  type MadeItemScan = { stamp: number; items: ChatMadeItem[] };
+  const madeItemScans = new Map<number, MadeItemScan>();
+  let scanQueue: Promise<unknown> = Promise.resolve();
+  let scanHost: HTMLElement | null = null;
+  const ensureScanHost = () => {
+    if (!scanHost) {
+      scanHost = createElement(
+        doc,
+        "div",
+        "llm-standalone-side-misc-scan-host",
+      );
+      scanHost.setAttribute("aria-hidden", "true");
+      column.appendChild(scanHost);
+    }
+    return scanHost;
+  };
+
+  /** Resolves once `root` has had no changes for `quietMs` (at most `maxMs`). */
+  const waitForQuietDom = (root: Element, quietMs = 200, maxMs = 3000) =>
+    new Promise<void>((resolve) => {
+      const MutationObserverCtor = (
+        win as unknown as { MutationObserver?: typeof MutationObserver }
+      ).MutationObserver;
+      if (!MutationObserverCtor) {
+        resolve();
+        return;
+      }
+      let quietTimer: number | null = null;
+      let capTimer: number | null = null;
+      const done = () => {
+        observer.disconnect();
+        if (quietTimer !== null) win.clearTimeout(quietTimer);
+        if (capTimer !== null) win.clearTimeout(capTimer);
+        resolve();
+      };
+      const observer = new MutationObserverCtor(() => {
+        if (quietTimer !== null) win.clearTimeout(quietTimer);
+        quietTimer = win.setTimeout(done, quietMs);
+      });
+      observer.observe(root, { childList: true, subtree: true });
+      quietTimer = win.setTimeout(done, quietMs);
+      capTimer = win.setTimeout(done, maxMs);
+    });
+
+  const scanChatMadeItems = async (
+    entry: ConversationHistoryEntry,
+  ): Promise<ChatMadeItem[]> => {
+    const key = entry.conversationKey;
+    const stamp = Number(entry.lastActivityAt) || 0;
+    const cached = madeItemScans.get(key);
+    if (cached && cached.stamp === stamp) return cached.items;
+    if (disposed) return [];
+    const item = deps.buildHistoryEntryItem(entry);
+    if (!item) return [];
+    const savedScroll = saveChatScrollStateForConversationKey(key);
+    const body = createElement(
+      doc,
+      "div",
+      "llm-standalone-side-body llm-standalone-side-misc-scan",
+    );
+    body.dataset.standalone = "true";
+    body.dataset.sideReadOnly = "true";
+    ensureScanHost().appendChild(body);
+    let added: unknown[] | null = null;
+    try {
+      buildUI(body, item);
+      setChatPanelExtensions(body, { readOnly: true });
+      if (!chatHistory.has(key) && !loadedConversationKeys.has(key)) {
+        const messages = await loadConversationMessagesForReadOnlyView(
+          key,
+          entry.system,
+        );
+        if (disposed) return [];
+        if (!chatHistory.has(key) && !loadedConversationKeys.has(key)) {
+          chatHistory.set(key, messages);
+          readOnlyBorrowedConversationKeys.add(key);
+          added = messages;
+        }
+      }
+      refreshChat(body, item);
+      flushPendingChatRender(body.querySelector("#llm-chat-box"));
+      await waitForQuietDom(body);
+      const items = collectMadeItems(body).map((made) => ({
+        ...made,
+        conversationKey: key,
+      }));
+      madeItemScans.set(key, { stamp, items });
+      return items;
+    } finally {
+      if (added && chatHistory.get(key) === added) {
+        // A read-only tab that opened this chat meanwhile took the copy.
+        const reader = [...views.values()].find(
+          (view): view is ReadOnlyTabView =>
+            view.kind === "readonly" && view.conversationKey === key,
+        );
+        if (reader) {
+          reader.addedMessages = added;
+        } else {
+          readOnlyBorrowedConversationKeys.delete(key);
+          if (!loadedConversationKeys.has(key)) chatHistory.delete(key);
+        }
+      }
+      if (deps.getMainContext().conversationKey !== key) {
+        restoreChatScrollStateForConversationKey(key, savedScroll);
+      }
+      disposeChatRendering(body);
+      clearChatPanelExtensions(body);
+      body.remove();
+    }
+  };
+  /** One chat at a time: each scan draws a whole chat. */
+  const queueChatScan = (entry: ConversationHistoryEntry) => {
+    const next = scanQueue.then(() => scanChatMadeItems(entry));
+    scanQueue = next.catch(() => undefined);
+    return next;
+  };
+
+  /**
+   * The chats of the main chat's paper (or, in Library chat, the library's
+   * chats), as the history list has them; chats being deleted are left out.
+   */
+  const loadWorkspaceChats = async (): Promise<ConversationHistoryEntry[]> => {
+    const main = deps.getMainContext();
+    const paperID = Number(main.basePaperItem?.id || 0);
+    const entries = await deps.historyList.loadEntries();
+    return entries.filter((entry) => {
+      if (
+        entry.isPendingDelete ||
+        pendingDeletionStore.isConversationPendingDeletion(
+          entry.conversationKey,
+        )
+      ) {
+        return false;
+      }
+      if (main.mode === "paper") {
+        return (
+          entry.kind === "paper" &&
+          paperID > 0 &&
+          Number(deps.resolveHistoryEntryPaper(entry)?.id || 0) === paperID
+        );
+      }
+      return (
+        entry.kind === "global" &&
+        (!entry.libraryID || entry.libraryID === main.libraryID)
+      );
+    });
+  };
+
+  /**
+   * Shows the item's message in the main chat and flashes it. An item from
+   * another chat first switches the main chat to that chat.
+   */
+  const goToChat = async (
+    conversationKey: number,
+    messageIndex: number,
+  ): Promise<boolean> => {
+    const flash = () => {
+      flushPendingChatRender(mainBody.querySelector("#llm-chat-box"));
+      return flashSourceMessage({
+        container: mainBody,
+        messageIndex,
+        setTimeout: (callback, ms) => win.setTimeout(callback, ms),
+      });
+    };
+    if (conversationKey === deps.getMainContext().conversationKey) {
+      return Boolean(flash());
+    }
+    const entries = await deps.historyList.loadEntries();
+    const entry = entries.find(
+      (candidate) => candidate.conversationKey === conversationKey,
+    );
+    if (!entry || disposed) return false;
+    if (!(await deps.openAsMainChat(entry))) return false;
+    // The main chat draws the switched-to chat on its own time.
+    for (let attempt = 0; attempt < 40 && !disposed; attempt++) {
+      if (
+        deps.getMainContext().conversationKey === conversationKey &&
+        flash()
+      ) {
+        return true;
+      }
+      await new Promise((resolve) => win.setTimeout(resolve, 75));
+    }
+    return false;
+  };
+
+  // What the model made (diagrams, figures, pages, code, plan documents) in
+  // every chat of the main chat's paper, or only in the main chat, newest
+  // first, in the History list's row styles. A picked row turns this tab
+  // into that item's tab.
   const buildMiscView = (id: string): MiscTabView => {
     const root = createElement(doc, "div", "llm-standalone-side-panel-misc");
     root.dataset.sideView = "misc";
     root.dataset.sideTabId = id;
-    const { row, text } = createTitleRow(t("Made in this chat"));
+    const { row, text, actions } = createTitleRow(t("Made in this chat"));
     const count = createPill("", "kind");
     text.after(count);
+    const scopeGroup = createElement(
+      doc,
+      "div",
+      "llm-standalone-tab-group llm-standalone-side-panel-misc-scope",
+    );
+    scopeGroup.setAttribute("role", "group");
+    scopeGroup.setAttribute("aria-label", t("Which chats"));
+    const scopeButtons = (["this", "all"] as const).map((scope) => {
+      const button = createElement(doc, "button", "llm-standalone-tab", {
+        textContent: scope === "this" ? t("This chat") : t("All chats"),
+      }) as HTMLButtonElement;
+      button.type = "button";
+      button.dataset.miscScope = scope;
+      button.addEventListener("click", () => {
+        if (miscScope === scope) return;
+        miscScope = scope;
+        list.scrollTop = 0;
+        reload();
+      });
+      return button;
+    });
+    scopeGroup.append(...scopeButtons);
+    actions.appendChild(scopeGroup);
     const list = createElement(
       doc,
       "div",
@@ -2028,15 +2255,48 @@ export function createStandaloneSidePanel(
     root.append(row, list);
     viewHost.appendChild(root);
 
-    const renderList = () => {
-      const items: MadeItem[] = collectMadeItems(mainBody);
+    /** The other chats' items and the chats' titles, from the last reload. */
+    let otherItems: ChatMadeItem[] = [];
+    let chatsByKey = new Map<number, ConversationHistoryEntry>();
+    let loading = false;
+    let generation = 0;
+
+    const redraw = () => {
+      const main = deps.getMainContext();
+      const all = miscScope === "all";
+      const paper = main.mode === "paper";
+      for (const button of scopeButtons) {
+        const on = button.dataset.miscScope === miscScope;
+        button.classList.toggle("active", on);
+        button.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+      text.textContent = !all
+        ? t("Made in this chat")
+        : paper
+          ? t("Made for this paper")
+          : t("Made in library chats");
+      const mainItems: ChatMadeItem[] = collectMadeItems(mainBody).map(
+        (made) => ({ ...made, conversationKey: main.conversationKey }),
+      );
+      const items = all
+        ? mergeChatMadeItems([
+            mainItems,
+            otherItems.filter(
+              (made) => made.conversationKey !== main.conversationKey,
+            ),
+          ])
+        : mainItems;
       list.replaceChildren();
       count.textContent = String(items.length);
       count.hidden = !items.length;
-      if (!items.length) {
+      if (!items.length && !(all && loading)) {
         list.appendChild(
           createElement(doc, "div", "llm-standalone-search-empty", {
-            textContent: t("Nothing made in this chat yet"),
+            textContent: !all
+              ? t("Nothing made in this chat yet")
+              : paper
+                ? t("Nothing made for this paper yet")
+                : t("Nothing made in library chats yet"),
           }),
         );
         return;
@@ -2050,6 +2310,7 @@ export function createStandaloneSidePanel(
         item.setAttribute("role", "button");
         item.setAttribute("tabindex", "0");
         item.dataset.madeKind = made.kind;
+        item.dataset.madeConversationKey = `${made.conversationKey}`;
         const textWrap = createElement(
           doc,
           "div",
@@ -2072,11 +2333,69 @@ export function createStandaloneSidePanel(
             textContent: title,
           }),
         );
+        const goTo = createElement(
+          doc,
+          "span",
+          "llm-standalone-side-panel-misc-go",
+          { textContent: t("Go to chat") },
+        ) as HTMLSpanElement;
+        goTo.setAttribute("role", "button");
+        goTo.setAttribute("tabindex", "0");
+        goTo.title = t("Go to the chat it came from");
+        const go = (event: Event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void goToChat(made.conversationKey, made.messageIndex);
+        };
+        goTo.addEventListener("click", go);
+        goTo.addEventListener("keydown", (event: KeyboardEvent) => {
+          if (event.key === "Enter" || event.key === " ") go(event);
+        });
+        textWrap.appendChild(goTo);
         item.appendChild(textWrap);
-        item.title = `${t(ITEM_KIND_LABELS[made.kind])}: ${title}`;
-        const pick = () => void openItem(made.request, id);
+        const isMain = made.conversationKey === main.conversationKey;
+        const chatTitle =
+          chatsByKey.get(made.conversationKey)?.title ||
+          (isMain ? t("This chat") : t("Untitled chat"));
+        const time = formatGlobalHistoryTimestamp(made.timestamp);
+        const metaText = all
+          ? time
+            ? `${chatTitle} · ${time}`
+            : chatTitle
+          : time;
+        if (metaText) {
+          const meta = createElement(
+            doc,
+            "div",
+            "llm-standalone-search-meta llm-standalone-side-panel-misc-meta",
+          );
+          meta.appendChild(
+            createElement(doc, "span", "llm-standalone-side-panel-misc-from", {
+              textContent: metaText,
+            }),
+          );
+          if (all && isMain) {
+            meta.appendChild(
+              createElement(
+                doc,
+                "span",
+                "llm-standalone-side-panel-misc-here",
+                {
+                  textContent: t("open now"),
+                },
+              ),
+            );
+          }
+          item.appendChild(meta);
+        }
+        item.title = all
+          ? `${t(ITEM_KIND_LABELS[made.kind])}: ${title} (${chatTitle})`
+          : `${t(ITEM_KIND_LABELS[made.kind])}: ${title}`;
+        const pick = () =>
+          void openItem(made.request, id, made.conversationKey);
         item.addEventListener("click", pick);
         item.addEventListener("keydown", (event: KeyboardEvent) => {
+          if (event.target !== item) return;
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             pick();
@@ -2084,15 +2403,71 @@ export function createStandaloneSidePanel(
         });
         list.appendChild(item);
       }
+      if (all && loading) {
+        list.appendChild(
+          createElement(doc, "div", "llm-standalone-search-empty", {
+            textContent: t("Looking through the other chats..."),
+          }),
+        );
+      }
     };
 
-    // The list follows the main chat: a debounced watch on its messages.
+    /** Reads the chat list again and scans the chats not read yet. */
+    const reload = () => {
+      const run = ++generation;
+      if (miscScope !== "all") {
+        loading = false;
+        redraw();
+        return;
+      }
+      loading = true;
+      redraw();
+      void (async () => {
+        try {
+          const chats = await loadWorkspaceChats();
+          if (run !== generation || view.disposed) return;
+          chatsByKey = new Map(
+            chats.map((entry) => [entry.conversationKey, entry]),
+          );
+          const mainKey = deps.getMainContext().conversationKey;
+          const others = chats.filter(
+            (entry) => entry.conversationKey !== mainKey,
+          );
+          const collect = () =>
+            others.flatMap(
+              (entry) => madeItemScans.get(entry.conversationKey)?.items || [],
+            );
+          otherItems = collect();
+          redraw();
+          for (const entry of others) {
+            const cached = madeItemScans.get(entry.conversationKey);
+            if (cached && cached.stamp === (Number(entry.lastActivityAt) || 0))
+              continue;
+            try {
+              await queueChatScan(entry);
+            } catch (err) {
+              appLogger.warn("LLM: Miscellaneous chat scan failed", err);
+            }
+            if (run !== generation || view.disposed) return;
+            otherItems = collect();
+            redraw();
+          }
+        } catch (err) {
+          appLogger.warn("LLM: Miscellaneous chat list failed", err);
+        }
+        if (run !== generation || view.disposed) return;
+        loading = false;
+        redraw();
+      })();
+    };
+
+    // The main chat's own items follow it: a debounced watch on its messages.
     let timer: number | null = null;
     const schedule = () => {
       if (timer !== null) win.clearTimeout(timer);
       timer = win.setTimeout(() => {
         timer = null;
-        if (!view.disposed) renderList();
+        if (!view.disposed) redraw();
       }, 150);
     };
     const MutationObserverCtor = (
@@ -2119,14 +2494,15 @@ export function createStandaloneSidePanel(
       tabTitle,
       confirm: null,
       disposed: false,
-      refresh: renderList,
+      refresh: reload,
       stopWatching: () => {
+        generation++;
         observer?.disconnect();
         if (timer !== null) win.clearTimeout(timer);
         timer = null;
       },
     };
-    renderList();
+    reload();
     return view;
   };
   const disposeMiscView = (view: MiscTabView) => {
@@ -2654,6 +3030,27 @@ export function createStandaloneSidePanel(
     },
     openItem: (request) => void openItem(request),
     dropWorkspace,
+    onConversationDeletionChanged: () => {
+      if (disposed) return;
+      const deleting = (key: number) =>
+        pendingDeletionStore.isConversationPendingDeletion(key);
+      for (const view of [...views.values()]) {
+        if (view.kind === "item" && deleting(view.conversationKey)) {
+          closeTabNow(view.id);
+        }
+      }
+      for (const stashed of stashedWorkspaces.values()) {
+        for (const view of [...stashed.views]) {
+          if (view.kind !== "item" || !deleting(view.conversationKey)) continue;
+          stashed.state = closeSidePanelTab(stashed.state, view.id);
+          stashed.views = stashed.views.filter((other) => other !== view);
+          disposeView(view);
+        }
+      }
+      for (const view of views.values()) {
+        if (view.kind === "misc") view.refresh();
+      }
+    },
     dispose: () => {
       if (disposed) return;
       if (slide?.frameId != null) win.cancelAnimationFrame?.(slide.frameId);
@@ -2663,6 +3060,8 @@ export function createStandaloneSidePanel(
       for (const key of [...stashedWorkspaces.keys()]) dropWorkspace(key);
       disposed = true;
       unregisterSidePanelItemHost(doc, itemHost);
+      scanHost?.remove();
+      madeItemScans.clear();
       resize.dispose();
       themeObserver?.disconnect();
       win.removeEventListener("resize", onWindowResize);
