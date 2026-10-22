@@ -430,11 +430,13 @@ function wrapCopyable(
   copySource: string,
   kind: "code" | "math" | "table",
   display: "block" | "inline" = "block",
+  extraClass = "",
 ): string {
-  const className =
+  const baseClass =
     display === "inline"
       ? `llm-copyable llm-copyable-${kind} llm-copyable-inline`
       : `llm-copyable llm-copyable-${kind}`;
+  const className = extraClass ? `${baseClass} ${extraClass}` : baseClass;
   const tag = display === "inline" ? "span" : "div";
   return `<${tag} class="${className}" data-llm-copy-source="${escapeAttribute(copySource)}">${html}</${tag}>`;
 }
@@ -1858,8 +1860,14 @@ function renderCodeBlock(code: string, raw: string): string {
     isHtmlFenceLanguage(lang) && isClosedCodeFence(raw)
       ? renderHtmlPreview(code)
       : "";
+  // Plain code (no visual preview) is the only kind the flat answer style
+  // restyles; previews keep the framed shell.
+  const isPlain = !svgPreview && !mermaidPreview && !htmlPreview;
+  const plainClass = isPlain
+    ? "llm-codeblock-shell llm-codeblock-plain"
+    : "llm-codeblock-shell";
   const html = [
-    `<div class="llm-codeblock-shell" data-code-lang="${escapeAttribute(label)}">`,
+    `<div class="${plainClass}" data-code-lang="${escapeAttribute(label)}">`,
     `<div class="llm-codeblock-header"><span class="llm-codeblock-lang">${escapeHtml(label)}</span></div>`,
     svgPreview,
     mermaidPreview,
@@ -1867,7 +1875,13 @@ function renderCodeBlock(code: string, raw: string): string {
     `<div class="llm-codeblock-body">${codeHtml}</div>`,
     `</div>`,
   ].join("");
-  return wrapCopyable(html, raw.trim(), "code");
+  return wrapCopyable(
+    html,
+    raw.trim(),
+    "code",
+    "block",
+    isPlain ? "llm-copyable-plain-code" : "",
+  );
 }
 
 /** Render display math block */

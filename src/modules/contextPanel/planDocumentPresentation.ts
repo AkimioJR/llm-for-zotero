@@ -4,6 +4,12 @@ import type {
   PlanDocument,
 } from "../../agent/documents/types";
 import { toFileUrl } from "../../utils/pathFileUrl";
+import { t } from "../../utils/i18n";
+import {
+  CONTENT_FLAT_SCOPE_CLASS,
+  appendContentCaption,
+} from "./contentChrome";
+import { createGeneratedImageFrame } from "./generatedImageRender";
 import type { Message, PaperContextRef } from "./types";
 import {
   renderAssistantRichText,
@@ -440,29 +446,47 @@ export function renderPlanDocumentFigures(
 ): HTMLElement | null {
   if (!document.assets.length) return null;
   const gallery = doc.createElement("section");
-  gallery.className = "llm-plan-document-figures";
+  // The gallery sets its own flat scope: in the chat card it sits outside the
+  // document body, and the standalone window is already in scope.
+  gallery.className = [
+    "llm-plan-document-figures",
+    "llm-assistant-generated-images",
+    "llm-agent-image-artifacts-grid",
+    "llm-agent-figure-strip",
+    CONTENT_FLAT_SCOPE_CLASS,
+  ].join(" ");
+  let frameCount = 0;
   for (const asset of document.assets) {
-    const figure = doc.createElement("figure");
-    figure.className = "llm-plan-document-figure";
-    const image = doc.createElement("img");
-    image.src = toFileUrl(asset.durablePath) || "";
-    image.alt = asset.caption;
-    if (asset.width) image.width = asset.width;
-    if (asset.height) image.height = asset.height;
-    image.loading = "lazy";
-    const caption = doc.createElement("figcaption");
-    caption.textContent = asset.caption;
-    const provenance = doc.createElement("span");
-    provenance.textContent =
+    const frame = createGeneratedImageFrame(
+      gallery,
+      {
+        id: asset.assetId,
+        label: asset.caption,
+        path: asset.durablePath,
+        src: toFileUrl(asset.durablePath) || undefined,
+      },
+      doc,
+      { flatChrome: true, allowMoveToSidePanel: false },
+    );
+    if (!frame) continue;
+    const provenance =
       asset.provenance.origin === "extracted"
         ? `Extracted from ${getPlanDocumentItemTitle(
             asset.provenance.libraryID,
             asset.provenance.itemKey,
           )}, PDF page ${asset.provenance.pageIndex + 1}`
-        : `Generated asset · ${asset.provenance.generator}`;
-    caption.appendChild(provenance);
-    figure.append(image, caption);
-    gallery.appendChild(figure);
+        : `Generated asset \u00b7 ${asset.provenance.generator}`;
+    // The document's own caption and provenance replace the file name.
+    appendContentCaption(
+      frame,
+      {
+        kind: t("Figure"),
+        text: [asset.caption, provenance].filter(Boolean).join(" \u2014 "),
+      },
+      doc,
+    );
+    gallery.appendChild(frame);
+    frameCount += 1;
   }
-  return gallery;
+  return frameCount ? gallery : null;
 }

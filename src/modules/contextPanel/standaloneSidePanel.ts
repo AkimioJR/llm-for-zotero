@@ -21,6 +21,10 @@
  * Pure decisions live in standaloneSidePanelState.ts; this module owns the
  * DOM and the panel lifecycles.
  */
+import {
+  CONTENT_TAB_ZOOM_ATTRIBUTE,
+  markStandaloneFlatScope,
+} from "./contentChrome";
 import { pendingDeletionStore } from "../../core/conversations/pendingDeletionStore";
 import { appLogger } from "../../core/logging";
 import { createElement } from "../../utils/domHelpers";
@@ -141,7 +145,6 @@ import {
 } from "./surfaceChoices";
 import { setNeutralStatus, setStatus } from "./textUtils";
 import { copyTextToClipboard } from "./clipboard";
-import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
 import { flushPendingChatRender } from "./progressiveChatRender";
 import { renderRenderedMarkdownInto } from "./renderedMarkdown";
 import { renderSavedFileInto, savedFilePreviewKind } from "./savedFileCards";
@@ -1825,19 +1828,11 @@ export function createStandaloneSidePanel(
       body.replaceChildren();
       if (kind === "file") {
         void renderSavedFileInto(doc, body, filePath, {
-          markdown: (target, markdown) =>
-            renderRenderedMarkdownInto(target, markdown, doc),
+          markdown: (target, markdown) => {
+            markStandaloneFlatScope(target);
+            renderRenderedMarkdownInto(target, markdown, doc);
+          },
         });
-        return;
-      }
-      if (kind === "html") {
-        body.appendChild(
-          createSandboxedHtmlFrame(
-            doc,
-            request.source,
-            "llm-side-panel-item-frame",
-          ),
-        );
         return;
       }
       const box = createElement(
@@ -1845,10 +1840,21 @@ export function createStandaloneSidePanel(
         "div",
         "llm-standalone-side-panel-item-rendered",
       );
+      // The flat style, as in chat answers: no container, one hover bar.
+      markStandaloneFlatScope(box);
+      // Diagrams and drawings zoom and pan like a figure tab.
+      if (!request.renderBody && (kind === "mermaid" || kind === "svg")) {
+        box.setAttribute(CONTENT_TAB_ZOOM_ATTRIBUTE, "true");
+      }
       body.appendChild(box);
       if (request.renderBody) {
         request.renderBody(doc, box);
-      } else if (kind === "mermaid" || kind === "svg" || kind === "code") {
+      } else if (
+        kind === "mermaid" ||
+        kind === "svg" ||
+        kind === "code" ||
+        kind === "html"
+      ) {
         renderRenderedMarkdownInto(box, buildItemFenceMarkdown(request), doc);
       } else {
         renderRenderedMarkdownInto(box, request.source, doc);

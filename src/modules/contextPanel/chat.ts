@@ -416,6 +416,7 @@ import {
   openHtmlPreviewViewer,
   renderRenderedMarkdownInto,
 } from "./renderedMarkdown";
+import { CONTENT_FLAT_SCOPE_CLASS } from "./contentChrome";
 import {
   buildTurnWindow,
   mountSavedFileCards,
@@ -10601,7 +10602,7 @@ function updateMountedAssistantViews(
       const expandedQuoteCards = collectExpandedQuoteCardKeys(view.answer);
       if (!view.answer) {
         view.answer = box.ownerDocument.createElement("div");
-        view.answer.className = "llm-assistant-answer";
+        view.answer.className = `llm-assistant-answer ${CONTENT_FLAT_SCOPE_CLASS}`;
         view.bubble.insertBefore(
           view.answer,
           view.actionSummaryHost.parentElement === view.bubble
@@ -12078,7 +12079,7 @@ function renderChatForPanel(
           webSourceAnchors,
         );
         answerHost = doc.createElement("div");
-        answerHost.className = "llm-assistant-answer";
+        answerHost.className = `llm-assistant-answer ${CONTENT_FLAT_SCOPE_CLASS}`;
         bubble.appendChild(answerHost);
         if (msg.streaming) bubble.classList.add("streaming");
         if (msg.compactMarker) {
@@ -12213,6 +12214,8 @@ function renderChatForPanel(
       if (hasGeneratedImages) {
         if (!agentTraceReplacesAssistantTurn) {
           renderAssistantGeneratedImagesInto(bubble, generatedImages, doc, {
+            // Part of the answer: the flat style, like the answer text.
+            flatChrome: true,
             onImageLoaded: () => {
               scheduleChatScrollReconciliation(conversationKey, chatBox);
             },
@@ -12292,6 +12295,12 @@ function renderChatForPanel(
           homeDir: resolveHomeDir(),
           openViewer: (source, anchor) =>
             openHtmlPreviewViewer(doc, source, anchor),
+          renderMarkdown: (target, markdown) =>
+            renderRenderedMarkdownInto(
+              target,
+              markdown,
+              target.ownerDocument || doc,
+            ),
           onMounted: () =>
             scheduleChatScrollReconciliation(conversationKey, chatBox),
         }).catch((err) => appLogger.warn("LLM: saved file cards failed", err));

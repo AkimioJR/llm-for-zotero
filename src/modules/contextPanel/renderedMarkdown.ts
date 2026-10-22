@@ -17,23 +17,50 @@ import {
   getCachedMermaidSvg,
   invalidateMermaidSvg,
 } from "./mermaidSvgCache";
+import { mountDiagramTabZoom } from "./figureViewer";
 import {
   openStandaloneMermaidWindow,
   openStandaloneSvgWindow,
+  openStandaloneViewerWindow,
 } from "./standaloneMermaidWindow";
 import { sanitizeText } from "../../utils/textSanitization";
 import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
 import { t } from "../../utils/i18n";
 import {
+  adoptContentBarButton,
+  appendContentBarButton,
+  appendContentCaption,
+  detectNumericColumns,
+  ensureContentBar,
+  isInFlatContentScope,
+  isInStandaloneContentScope,
+  isInTabZoomScope,
+  NUMERIC_CELL_CLASS,
+  parseHtmlTitle,
+  parseMermaidTitle,
+  parseSvgTitle,
+  tableRowsToCsv,
+} from "./contentChrome";
+import {
+  copyGeneratedImageToClipboard,
+  pickGeneratedImageSavePath,
+} from "./generatedImageRender";
+import { openFigureViewer } from "./figureViewer";
+import { copyTextToClipboard } from "./clipboard";
+import { saveGeneratedImageAssetToPath } from "../../services/images/generatedImageAssets";
+import {
   NO_SIDE_ITEMS_ATTRIBUTE,
   SIDE_ITEM_KIND_ATTRIBUTE,
   appendMoveToSidePanelButton,
   getSidePanelItemHost,
+  getSideItemRequestBuilder,
   isOutsideAnswerContent,
+  registerSideItemRequest,
   splitCodeFence,
 } from "./sidePanelItems";
 import {
   copySvgFigureAsPngToClipboard,
+  defaultRasterizeSvgToPngBytes,
   isMermaidFigureFenceLanguage,
 } from "./figureExport";
 
@@ -60,9 +87,18 @@ const MERMAID_ZOOM_STEP = 0.25;
 const MERMAID_WHEEL_ZOOM_DELTA_MAX = 24;
 const MERMAID_WHEEL_ZOOM_SENSITIVITY = 0.002;
 type MermaidThemeKey = "light" | "dark";
-const MERMAID_RENDER_VERSION = "3";
+// Bumped when the palette changes so cached SVGs (keyed by version, theme
+// and source) and rendered previews are drawn again.
+const MERMAID_RENDER_VERSION = "5";
 const MERMAID_VENDOR_SCRIPT_URL = `chrome://${config.addonRef}/content/vendor/mermaid/mermaid.min.js`;
 
+/**
+ * Diagram colours that sit on the chat background instead of in a box: quiet
+ * tinted nodes with a hue-matched outline, plain text, grey edges, and a
+ * transparent canvas. Outlines are the accent hues blended to about 70% over
+ * the background, as plain hex (the renderer's colour maths rejects some
+ * alpha forms). A diagram's own classDef or style lines still win.
+ */
 const MERMAID_THEME_VARIABLES: Record<
   MermaidThemeKey,
   Record<string, string>
@@ -70,52 +106,52 @@ const MERMAID_THEME_VARIABLES: Record<
   light: {
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     fontSize: "15px",
-    background: "#ffffff",
-    mainBkg: "#dbeafe",
-    primaryColor: "#dbeafe",
-    primaryTextColor: "#111827",
-    primaryBorderColor: "#3b82f6",
-    secondaryColor: "#dcfce7",
-    secondaryTextColor: "#111827",
-    secondaryBorderColor: "#22c55e",
-    tertiaryColor: "#fef3c7",
-    tertiaryTextColor: "#111827",
-    tertiaryBorderColor: "#f59e0b",
-    lineColor: "#4b5563",
-    defaultLinkColor: "#4b5563",
+    background: "transparent",
+    mainBkg: "#e8effd",
+    primaryColor: "#e8effd",
+    primaryTextColor: "#1d1d1f",
+    primaryBorderColor: "#80a5f4",
+    secondaryColor: "#fdeee6",
+    secondaryTextColor: "#1d1d1f",
+    secondaryBorderColor: "#ef9e76",
+    tertiaryColor: "#e5f4ec",
+    tertiaryTextColor: "#1d1d1f",
+    tertiaryBorderColor: "#6dbf9a",
+    lineColor: "#8a8a8a",
+    defaultLinkColor: "#8a8a8a",
     edgeLabelBackground: "#ffffff",
-    clusterBkg: "#ffffff",
-    clusterBorder: "#e5e7eb",
-    nodeBkg: "#dbeafe",
-    nodeBorder: "#3b82f6",
-    nodeTextColor: "#111827",
-    titleColor: "#111827",
-    textColor: "#111827",
+    clusterBkg: "#fafafa",
+    clusterBorder: "#e5e5e5",
+    nodeBkg: "#e8effd",
+    nodeBorder: "#80a5f4",
+    nodeTextColor: "#1d1d1f",
+    titleColor: "#1d1d1f",
+    textColor: "#1d1d1f",
   },
   dark: {
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     fontSize: "15px",
-    background: "#151515",
-    mainBkg: "#dbeafe",
-    primaryColor: "#dbeafe",
-    primaryTextColor: "#111827",
-    primaryBorderColor: "#60a5fa",
-    secondaryColor: "#dcfce7",
-    secondaryTextColor: "#111827",
-    secondaryBorderColor: "#34d399",
-    tertiaryColor: "#fef3c7",
-    tertiaryTextColor: "#111827",
-    tertiaryBorderColor: "#f59e0b",
-    lineColor: "#d4d4d8",
-    defaultLinkColor: "#d4d4d8",
-    edgeLabelBackground: "#151515",
-    clusterBkg: "#171717",
-    clusterBorder: "#3f3f46",
-    nodeBkg: "#dbeafe",
-    nodeBorder: "#60a5fa",
-    nodeTextColor: "#111827",
-    titleColor: "#f8fafc",
-    textColor: "#f8fafc",
+    background: "transparent",
+    mainBkg: "#1f2a3d",
+    primaryColor: "#1f2a3d",
+    primaryTextColor: "#e6e6e6",
+    primaryBorderColor: "#3d61b1",
+    secondaryColor: "#33261f",
+    secondaryTextColor: "#e6e6e6",
+    secondaryBorderColor: "#ab5a32",
+    tertiaryColor: "#1d2f27",
+    tertiaryTextColor: "#e6e6e6",
+    tertiaryBorderColor: "#2a7b57",
+    lineColor: "#8a8a8a",
+    defaultLinkColor: "#8a8a8a",
+    edgeLabelBackground: "#1e1e1e",
+    clusterBkg: "#262626",
+    clusterBorder: "#3a3a3a",
+    nodeBkg: "#1f2a3d",
+    nodeBorder: "#3d61b1",
+    nodeTextColor: "#e6e6e6",
+    titleColor: "#e6e6e6",
+    textColor: "#e6e6e6",
   },
 };
 
@@ -1337,6 +1373,7 @@ function setMermaidPreviewError(preview: HTMLElement, error?: unknown): void {
     ? `Unable to render Mermaid diagram: ${reason}`
     : "Unable to render Mermaid diagram.";
   if (reason) preview.title = reason;
+  syncFlatPreviewBarState(preview);
 }
 
 function clampMermaidZoom(scale: number): number {
@@ -1537,37 +1574,96 @@ function renderMermaidImagePreview(
   }
   viewport.appendChild(svg);
 
-  const openButton = createMermaidZoomButton(
-    doc,
-    MERMAID_PREVIEW_OPEN_ICON,
-    "Open Mermaid diagram viewer",
-  );
-  openButton.classList.add("llm-mermaid-open-btn");
-  openButton.addEventListener("click", () => {
-    const currentThemeKey = getMermaidThemeKey(doc, preview);
-    if (currentThemeKey !== themeKey) {
-      preview.dataset.mermaidState = "pending";
-      void renderMermaidBlocks(
-        preview.closest(".llm-rendered-markdown") || doc,
-        doc,
-      );
-      return;
-    }
-    const opened = openStandaloneMermaidWindow(doc, {
-      svgMarkup,
-      source,
-      themeKey,
-    });
-    if (!opened) openMermaidViewer(doc, svgMarkup, preview, themeKey);
-  });
-
   delete preview.dataset.mermaidZoom;
   preview.dataset.llmRenderedSvg = svgMarkup;
-  preview.replaceChildren(viewport, openButton);
-  attachSideItemMoveButton(doc, preview, "mermaid", source);
+  if (isInFlatContentScope(preview)) {
+    // The flat style has no corner buttons: the hover bar built beside the
+    // preview opens the full view and the side panel.
+    preview.replaceChildren(viewport);
+    // A side panel tab zooms the diagram like a figure tab does.
+    if (isInTabZoomScope(preview)) mountDiagramTabZoom(preview, svg);
+    syncFlatPreviewBarState(preview);
+  } else {
+    const openButton = createMermaidZoomButton(
+      doc,
+      MERMAID_PREVIEW_OPEN_ICON,
+      "Open Mermaid diagram viewer",
+    );
+    openButton.classList.add("llm-mermaid-open-btn");
+    openButton.addEventListener("click", () =>
+      openMermaidPreviewFullView(doc, preview, svgMarkup, themeKey, source),
+    );
+    preview.replaceChildren(viewport, openButton);
+    attachSideItemMoveButton(doc, preview, "mermaid", source);
+  }
   syncFigureCopyButtonStateForShell(
     preview.closest(".llm-codeblock-shell") as HTMLElement | null,
   );
+}
+
+/** A rendered diagram in the shared full-view window (or the overlay). */
+function openMermaidPreviewFullView(
+  doc: Document,
+  preview: HTMLElement,
+  svgMarkup: string,
+  themeKey: MermaidThemeKey,
+  source: string,
+): void {
+  const currentThemeKey = getMermaidThemeKey(doc, preview);
+  if (currentThemeKey !== themeKey) {
+    preview.dataset.mermaidState = "pending";
+    void renderMermaidBlocks(
+      preview.closest(".llm-rendered-markdown") || doc,
+      doc,
+    );
+    return;
+  }
+  const opened = openStandaloneMermaidWindow(doc, {
+    svgMarkup,
+    source,
+    themeKey,
+  });
+  if (!opened) openMermaidViewer(doc, svgMarkup, preview, themeKey);
+}
+
+/** A drawing in the shared full-view window (or the overlay). */
+function openSvgPreviewFullView(
+  doc: Document,
+  preview: HTMLElement,
+  svgMarkup: string,
+): void {
+  const themeKey = getMermaidThemeKey(doc, preview);
+  const opened = openStandaloneSvgWindow(doc, {
+    svgMarkup,
+    themeKey,
+    title: "SVG Preview",
+    ariaLabel: "SVG preview",
+    toolbarLabel: "SVG preview controls",
+    zoomTargetLabel: "SVG preview",
+  });
+  if (!opened) {
+    openSvgViewer(doc, svgMarkup, preview, themeKey, {
+      ariaLabel: "SVG preview",
+      toolbarLabel: "SVG preview viewer controls",
+      zoomTargetLabel: "SVG preview",
+      closeTitle: "Close SVG preview viewer",
+    });
+  }
+}
+
+/** A web page in the shared full-view window (or the overlay). */
+function openHtmlPreviewFullView(
+  doc: Document,
+  preview: HTMLElement,
+  source: string,
+): void {
+  const opened = openStandaloneViewerWindow(doc, {
+    kind: "html",
+    source,
+    title: t("HTML preview"),
+    themeKey: getMermaidThemeKey(doc, preview),
+  });
+  if (!opened) openHtmlPreviewViewer(doc, source, preview);
 }
 
 function attachRenderedSvgPreviewButtons(
@@ -1578,6 +1674,8 @@ function attachRenderedSvgPreviewButtons(
     root.querySelectorAll(".llm-svg-preview[data-llm-svg-source]"),
   ) as HTMLElement[];
   for (const preview of previews) {
+    // The flat style builds its own hover bar (attachFlatPreviewChrome).
+    if (isInFlatContentScope(preview)) continue;
     if (preview.querySelector(":scope > .llm-svg-open-btn")) continue;
     const svgMarkup = buildSafeSvgMarkup(preview.dataset.llmSvgSource || "");
     if (!svgMarkup) continue;
@@ -1588,25 +1686,9 @@ function attachRenderedSvgPreviewButtons(
       "Open SVG preview viewer",
     );
     openButton.classList.add("llm-mermaid-open-btn", "llm-svg-open-btn");
-    openButton.addEventListener("click", () => {
-      const themeKey = getMermaidThemeKey(doc, preview);
-      const opened = openStandaloneSvgWindow(doc, {
-        svgMarkup,
-        themeKey,
-        title: "SVG Preview",
-        ariaLabel: "SVG preview",
-        toolbarLabel: "SVG preview controls",
-        zoomTargetLabel: "SVG preview",
-      });
-      if (!opened) {
-        openSvgViewer(doc, svgMarkup, preview, themeKey, {
-          ariaLabel: "SVG preview",
-          toolbarLabel: "SVG preview viewer controls",
-          zoomTargetLabel: "SVG preview",
-          closeTitle: "Close SVG preview viewer",
-        });
-      }
-    });
+    openButton.addEventListener("click", () =>
+      openSvgPreviewFullView(doc, preview, svgMarkup),
+    );
     preview.appendChild(openButton);
     attachSideItemMoveButton(doc, preview, "svg", svgMarkup);
   }
@@ -1649,18 +1731,53 @@ function attachRenderedHtmlPreviews(root: ParentNode, doc: Document): void {
     preview.dataset.llmHtmlHydrated = "true";
 
     const frame = createSandboxedHtmlFrame(doc, source);
+    if (isInFlatContentScope(preview)) {
+      // Only the page: the hover bar (attachFlatPreviewChrome) has the rest.
+      preview.replaceChildren(frame);
+      continue;
+    }
     const openButton = createMermaidZoomButton(
       doc,
       MERMAID_PREVIEW_OPEN_ICON,
       t("Open HTML preview viewer"),
     );
     openButton.classList.add("llm-mermaid-open-btn", "llm-html-open-btn");
-    openButton.addEventListener("click", () => {
-      openHtmlPreviewViewer(doc, source, preview);
-    });
+    openButton.addEventListener("click", () =>
+      openHtmlPreviewFullView(doc, preview, source),
+    );
     preview.replaceChildren(frame, openButton);
     attachSideItemMoveButton(doc, preview, "html", source);
   }
+}
+
+/**
+ * True where "Move to side panel" does not belong: inside a block that opted
+ * out of side items, and on flat reading surfaces outside the chat (a side
+ * panel tab is already the side panel).
+ */
+function hasNoSideItems(element: Element): boolean {
+  return isOutsideAnswerContent(element) || isInStandaloneContentScope(element);
+}
+
+/**
+ * The chat answers copy through a click handler on the chat box. A bar copy
+ * button on a standalone reading surface sits outside it, so it copies the
+ * block's source itself. It stops the click, so the chat's handler never runs
+ * for it twice.
+ */
+function bindStandaloneCopyButton(button: HTMLElement): void {
+  if (!isInStandaloneContentScope(button)) return;
+  if (button.dataset.standaloneCopyBound === "true") return;
+  button.dataset.standaloneCopyBound = "true";
+  button.addEventListener("click", (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const copyable = button.closest(".llm-copyable") as HTMLElement | null;
+    const source = copyable?.dataset.llmCopySource || "";
+    if (!source) return;
+    copyable?.setAttribute("data-copy-feedback", "copied");
+    void copyTextToClipboard(button, source).catch(() => undefined);
+  });
 }
 
 /**
@@ -1673,7 +1790,7 @@ function attachSideItemMoveButton(
   kind: "mermaid" | "svg" | "html",
   source: string,
 ): void {
-  if (isOutsideAnswerContent(preview)) return;
+  if (hasNoSideItems(preview)) return;
   preview.setAttribute(SIDE_ITEM_KIND_ATTRIBUTE, kind);
   appendMoveToSidePanelButton({
     doc,
@@ -1702,7 +1819,7 @@ function attachRenderedCodeBlockMoveButtons(
     }
     const header = getDirectChildWithClass(shell, "llm-codeblock-header");
     const body = getDirectChildWithClass(shell, "llm-codeblock-body");
-    if (!header || !body || isOutsideAnswerContent(shell)) continue;
+    if (!header || !body || hasNoSideItems(shell)) continue;
     shell.setAttribute(SIDE_ITEM_KIND_ATTRIBUTE, "code");
     appendMoveToSidePanelButton({
       doc,
@@ -1907,12 +2024,164 @@ function normalizeMermaidStyleDefinitionForTheme(
   return `${trimmed},color:#f8fafc`;
 }
 
+type Rgb = { r: number; g: number; b: number };
+
+function parseMermaidColor(value: string): Rgb | null {
+  const text = value
+    .trim()
+    .replace(/\s*!important\s*$/i, "")
+    .toLowerCase();
+  if (text === "white") return { r: 255, g: 255, b: 255 };
+  const hex = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/);
+  if (hex) {
+    const digits =
+      hex[1].length === 3
+        ? hex[1]
+            .split("")
+            .map((c) => c + c)
+            .join("")
+        : hex[1];
+    return {
+      r: parseInt(digits.slice(0, 2), 16),
+      g: parseInt(digits.slice(2, 4), 16),
+      b: parseInt(digits.slice(4, 6), 16),
+    };
+  }
+  const rgb = text.match(
+    /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/,
+  );
+  if (rgb) {
+    return { r: +rgb[1], g: +rgb[2], b: +rgb[3] };
+  }
+  return null;
+}
+
+/** Hue (degrees), saturation and lightness (0..1) of an sRGB colour. */
+function rgbToHsl(color: Rgb): { h: number; s: number; l: number } {
+  const r = color.r / 255;
+  const g = color.g / 255;
+  const b = color.b / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) return { h: 0, s: 0, l };
+  const s = d / (1 - Math.abs(2 * l - 1));
+  let h: number;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return { h: (h * 60 + 360) % 360, s, l };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  const [r, g, b] =
+    h < 60
+      ? [c, x, 0]
+      : h < 120
+        ? [x, c, 0]
+        : h < 180
+          ? [0, c, x]
+          : h < 240
+            ? [0, x, c]
+            : h < 300
+              ? [x, 0, c]
+              : [c, 0, x];
+  const hex = (v: number) =>
+    Math.round((v + m) * 255)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
+}
+
+const MERMAID_LIGHT_FILL_MIN_LIGHTNESS = 0.62;
+const MERMAID_DARK_TEXT = "#e6e6e6";
+
+function isLightMermaidFill(color: Rgb): boolean {
+  return rgbToHsl(color).l >= MERMAID_LIGHT_FILL_MIN_LIGHTNESS;
+}
+
+/**
+ * One classDef or style definition ("fill:#ffd6e0,stroke:#333,color:#000")
+ * for the dark theme: a light fill becomes a dark tint of the same hue, the
+ * outline turns into a mid-light tone of that hue (a deliberate coloured
+ * outline stays), and dark or missing text turns light. A definition with a
+ * dark or no fill stays as it is.
+ */
+function darkenMermaidDefinition(definition: string): string {
+  const fillMatch = definition.match(/(^|[,;\s])fill\s*:\s*([^,;]+)/i);
+  if (!fillMatch) return definition;
+  const fill = parseMermaidColor(fillMatch[2]);
+  if (!fill || !isLightMermaidFill(fill)) return definition;
+  const { h, s } = rgbToHsl(fill);
+  const chromatic = s >= 0.12;
+  const darkFill = chromatic ? hslToHex(h, 0.22, 0.19) : "#2b2b2b";
+  const outline = chromatic ? hslToHex(h, 0.45, 0.62) : "#71717a";
+  const important = /!important/i.test(fillMatch[2]) ? " !important" : "";
+  let result = definition.replace(
+    /(^|[,;\s])fill\s*:\s*[^,;]+/i,
+    (_all, lead) => `${lead}fill:${darkFill}${important}`,
+  );
+  const strokeMatch = result.match(/(^|[,;\s])stroke\s*:\s*([^,;]+)/i);
+  if (strokeMatch) {
+    const stroke = parseMermaidColor(strokeMatch[2]);
+    const hsl = stroke ? rgbToHsl(stroke) : null;
+    const deliberate =
+      hsl && hsl.s >= 0.3 && hsl.l >= 0.35 && hsl.l <= 0.8 ? true : false;
+    if (!deliberate) {
+      result = result.replace(
+        /(^|[,;\s])stroke\s*:\s*[^,;]+/i,
+        (_all, lead) => `${lead}stroke:${outline}${important}`,
+      );
+    }
+  } else {
+    result = `${result.replace(/[;\s]+$/, "")},stroke:${outline}${
+      /;\s*$/.test(definition) ? ";" : ""
+    }`;
+  }
+  const colorMatch = result.match(/(^|[,;\s])color\s*:\s*([^,;]+)/i);
+  const text = colorMatch ? parseMermaidColor(colorMatch[2]) : null;
+  if (!colorMatch) {
+    const trailing = /;\s*$/.test(result);
+    result = `${result.replace(/[;\s]+$/, "")},color:${MERMAID_DARK_TEXT}${
+      trailing ? ";" : ""
+    }`;
+  } else if (!text || rgbToHsl(text).l < 0.5) {
+    result = result.replace(
+      /(^|[,;\s])color\s*:\s*[^,;]+/i,
+      (_all, lead) => `${lead}color:${MERMAID_DARK_TEXT}`,
+    );
+  }
+  return result;
+}
+
+/**
+ * Dark theme only: a diagram's own `classDef` and `style` lines often use
+ * light pastel fills that glare on a dark page. Each light fill becomes a dark
+ * tint that keeps its hue, with a matching outline and light text. The
+ * theme's own node colours are not in the source and are not touched.
+ */
+export function remapMermaidLightFillsForDark(source: string): string {
+  return source
+    .replace(
+      /^(\s*classDef\s+[^\s]+\s+)([^\n]+)$/gim,
+      (_line, prefix, def) => `${prefix}${darkenMermaidDefinition(def)}`,
+    )
+    .replace(
+      /^(\s*style\s+[^\s]+\s+)([^\n]+)$/gim,
+      (_line, prefix, def) => `${prefix}${darkenMermaidDefinition(def)}`,
+    );
+}
+
 export function normalizeMermaidSourceForTheme(
   source: string,
   themeKey: MermaidThemeKey,
 ): string {
   const subgraphIds = getMermaidSubgraphIds(source);
-  return source
+  const normalized = source
     .replace(/^\s*%%\{\s*init\s*:[^\n]*\}%%\s*\r?\n?/gim, (directive) =>
       MERMAID_LOCKED_INIT_DIRECTIVE_KEYS.test(directive) ? "" : directive,
     )
@@ -1935,6 +2204,9 @@ export function normalizeMermaidSourceForTheme(
         )}`;
       },
     );
+  return themeKey === "dark"
+    ? remapMermaidLightFillsForDark(normalized)
+    : normalized;
 }
 
 function getMermaidSvgPolishCss(themeKey: MermaidThemeKey): string {
@@ -2200,6 +2472,8 @@ export async function renderMermaidSourceToSvg(
   source: string,
   doc: Document,
   anchor?: HTMLElement,
+  /** Forces a theme (a note is read on a light page whatever the chat is). */
+  forcedThemeKey?: MermaidThemeKey,
 ): Promise<string | null> {
   const normalizedSource = source.trim();
   if (!normalizedSource) return null;
@@ -2215,7 +2489,8 @@ export async function renderMermaidSourceToSvg(
     anchor || (doc.body as HTMLElement | null) || doc.documentElement;
   mount?.appendChild(preview);
   try {
-    const themeKey = getMermaidThemeKey(doc, anchor || preview);
+    const themeKey =
+      forcedThemeKey || getMermaidThemeKey(doc, anchor || preview);
     const mermaid = await getMermaidRenderer(doc);
     await initializeMermaidRenderer(mermaid, doc, themeKey);
     const svg = await renderMermaidSvgWithRetry(
@@ -2277,7 +2552,13 @@ function setCodeBlockWordWrap(
 ): void {
   shell.dataset.wordWrap = enabled ? "true" : "false";
   button.setAttribute("aria-pressed", enabled ? "true" : "false");
-  const ariaLabel = enabled ? "Disable word wrap" : "Enable word wrap";
+  // A toggle in the flat style's hover bar shows its state by colour, so the
+  // label names the action and stays the same.
+  const ariaLabel = isInFlatContentScope(shell)
+    ? t("Wrap long lines")
+    : enabled
+      ? "Disable word wrap"
+      : "Enable word wrap";
   button.textContent = "";
   button.title = ariaLabel;
   button.setAttribute("aria-label", ariaLabel);
@@ -2373,6 +2654,450 @@ function attachCodeBlockFigureCopyButton(
   syncFigureCopyButtonStateForShell(shell);
 }
 
+/** A button the flat style moved into the hover bar of `scope`'s block. */
+function findFlatBarButton(
+  scope: HTMLElement,
+  className: string,
+): HTMLElement | null {
+  const block = scope.classList.contains("llm-copyable")
+    ? scope
+    : (scope.parentElement as HTMLElement | null);
+  const bar = block ? getDirectChildWithClass(block, "llm-content-bar") : null;
+  return bar ? getDirectChildWithClass(bar, className) : null;
+}
+
+const FLAT_CODE_FOLD_MIN_LINES = 16;
+
+function countCodeLines(text: string): number {
+  const trimmed = text.replace(/\n+$/, "");
+  return trimmed ? trimmed.split("\n").length : 0;
+}
+
+function setFlatCodeFolded(
+  shell: HTMLElement,
+  button: HTMLButtonElement,
+  lineCount: number,
+  folded: boolean,
+): void {
+  shell.dataset.fold = folded ? "folded" : "expanded";
+  button.setAttribute("aria-expanded", folded ? "false" : "true");
+  button.textContent = folded
+    ? t("Show all {count} lines").replace("{count}", String(lineCount))
+    : t("Show fewer lines");
+}
+
+/**
+ * The flat answer style for plain code blocks: the copy, wrap and move
+ * buttons go into one hover bar, and a long block is folded behind a
+ * "Show all N lines" pill. Runs once per block, after the header controls
+ * exist; blocks outside a flat scope are left as they are.
+ */
+export function attachFlatCodeBlockChrome(
+  root: ParentNode,
+  doc: Document,
+): void {
+  const shells = Array.from(
+    root.querySelectorAll(".llm-codeblock-shell"),
+  ) as HTMLElement[];
+  for (const shell of shells) {
+    if (shell.dataset.flatChrome === "true") continue;
+    if (!isInFlatContentScope(shell)) continue;
+    if (
+      getVisualCodeBlockPreview(shell) ||
+      getDirectChildWithClass(shell, "llm-html-preview")
+    ) {
+      continue;
+    }
+    const block = shell.parentElement as HTMLElement | null;
+    const header = getDirectChildWithClass(shell, "llm-codeblock-header");
+    const body = getDirectChildWithClass(shell, "llm-codeblock-body");
+    if (!block || !block.classList.contains("llm-copyable")) continue;
+    if (!header || !body) continue;
+    shell.dataset.flatChrome = "true";
+    shell.classList.add("llm-codeblock-plain");
+
+    const bar = ensureContentBar(block, doc);
+    const wrapButton = getDirectChildWithClass(
+      header,
+      "llm-codeblock-wrap-toggle",
+    ) as HTMLButtonElement | null;
+    if (wrapButton) {
+      adoptContentBarButton(bar, wrapButton);
+      setCodeBlockWordWrap(
+        shell,
+        wrapButton,
+        shell.dataset.wordWrap === "true",
+      );
+    }
+    const copyButton = getDirectChildWithClass(
+      header,
+      "llm-render-copy-btn",
+    ) as HTMLButtonElement | null;
+    if (copyButton) {
+      copyButton.textContent = "";
+      const label = t("Copy code");
+      copyButton.title = label;
+      copyButton.setAttribute("aria-label", label);
+      adoptContentBarButton(bar, copyButton);
+      bindStandaloneCopyButton(copyButton);
+    }
+    const moveButton = getDirectChildWithClass(
+      header,
+      "llm-side-move-btn",
+    ) as HTMLButtonElement | null;
+    if (moveButton) {
+      // collectMadeItems looks for the builder on the marked element's own
+      // button; the button now sits outside the shell, so register it there.
+      const build = getSideItemRequestBuilder(moveButton);
+      if (build) registerSideItemRequest(shell, build);
+      adoptContentBarButton(bar, moveButton);
+    }
+
+    const lineCount = countCodeLines(body.textContent || "");
+    // A reading surface outside the chat (a side panel tab) shows it all.
+    if (
+      lineCount >= FLAT_CODE_FOLD_MIN_LINES &&
+      !isInStandaloneContentScope(shell)
+    ) {
+      const foldButton = doc.createElement("button") as HTMLButtonElement;
+      foldButton.type = "button";
+      foldButton.className = "llm-content-fold-btn";
+      foldButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setFlatCodeFolded(
+          shell,
+          foldButton,
+          lineCount,
+          shell.dataset.fold !== "folded",
+        );
+      });
+      block.appendChild(foldButton);
+      setFlatCodeFolded(shell, foldButton, lineCount, true);
+    }
+  }
+}
+
+type FlatPreviewKind = "mermaid" | "svg" | "html";
+
+const FLAT_HTML_EXPAND_ATTRIBUTE = "data-expanded";
+const FLAT_SAVE_RESET_DELAY_MS = 1600;
+
+function getFlatPreview(
+  shell: HTMLElement,
+): { kind: FlatPreviewKind; preview: HTMLElement } | null {
+  const mermaid = getDirectChildWithClass(shell, "llm-mermaid-preview");
+  if (mermaid) return { kind: "mermaid", preview: mermaid };
+  const svg = getDirectChildWithClass(shell, "llm-svg-preview");
+  if (svg) return { kind: "svg", preview: svg };
+  const html = getDirectChildWithClass(shell, "llm-html-preview");
+  if (html) return { kind: "html", preview: html };
+  return null;
+}
+
+function getFlatPreviewBar(preview: HTMLElement): HTMLElement | null {
+  const block = preview.closest(".llm-copyable") as HTMLElement | null;
+  return block ? getDirectChildWithClass(block, "llm-content-bar") : null;
+}
+
+/**
+ * Buttons that need a finished diagram stay off until the renderer has
+ * produced the SVG (and after an error).
+ */
+function syncFlatPreviewBarState(preview: HTMLElement): void {
+  const bar = getFlatPreviewBar(preview);
+  if (!bar) return;
+  const ready = Boolean(preview.dataset.llmRenderedSvg);
+  for (const button of Array.from(bar.children) as HTMLButtonElement[]) {
+    if (button.dataset?.needsRender === "true") button.disabled = !ready;
+  }
+}
+
+function setFlatSourceShown(
+  shell: HTMLElement,
+  body: HTMLElement,
+  toggle: HTMLElement | null,
+  barButton: HTMLElement,
+  shown: boolean,
+): void {
+  shell.dataset.sourceCollapsed = shown ? "false" : "true";
+  body.setAttribute("aria-hidden", shown ? "false" : "true");
+  if (toggle) toggle.setAttribute("aria-expanded", shown ? "true" : "false");
+  const label = shown ? t("Hide code") : t("Show code");
+  barButton.title = label;
+  barButton.setAttribute("aria-label", label);
+  barButton.setAttribute("aria-pressed", shown ? "true" : "false");
+}
+
+/** The PNG's backdrop: the diagram text colours assume the chat background. */
+function getFlatSaveBackground(
+  kind: FlatPreviewKind,
+  doc: Document,
+  preview: HTMLElement,
+): string {
+  if (kind !== "mermaid") return "#ffffff";
+  const themeKey =
+    getRenderedMermaidTheme(preview) || getMermaidThemeKey(doc, preview);
+  return themeKey === "dark" ? "#1e1e1e" : "#ffffff";
+}
+
+/** "Save as image": a PNG of the drawing, written where the user picks. */
+async function saveFlatPreviewAsImage(
+  doc: Document,
+  kind: FlatPreviewKind,
+  preview: HTMLElement,
+  svgMarkup: string,
+): Promise<"saved" | "cancelled" | "failed"> {
+  try {
+    const bytes = await defaultRasterizeSvgToPngBytes(doc, svgMarkup, {
+      background: getFlatSaveBackground(kind, doc, preview),
+    });
+    if (!bytes?.length) return "failed";
+    const fileName = kind === "mermaid" ? "diagram.png" : "drawing.png";
+    const target = await pickGeneratedImageSavePath(doc, fileName);
+    if (target.status === "cancelled") return "cancelled";
+    if (target.status !== "selected") return "failed";
+    await saveGeneratedImageAssetToPath(
+      {
+        image: { id: fileName },
+        bytes,
+        mimeType: "image/png",
+        fileName,
+      },
+      target.path,
+    );
+    return "saved";
+  } catch {
+    return "failed";
+  }
+}
+
+/**
+ * The flat answer style for diagrams, drawings and web pages: no header or
+ * corner buttons. One hover bar (Show code, Copy, Save as image, Full view,
+ * Side panel), a caption under the content, and the source folded away until
+ * "Show code". Runs once per block, after the other controls exist; blocks
+ * outside a flat scope are left as they are.
+ */
+export function attachFlatPreviewChrome(root: ParentNode, doc: Document): void {
+  const shells = Array.from(
+    root.querySelectorAll(".llm-codeblock-shell"),
+  ) as HTMLElement[];
+  for (const shell of shells) {
+    if (shell.dataset.flatChrome === "true") continue;
+    if (!isInFlatContentScope(shell)) continue;
+    const found = getFlatPreview(shell);
+    if (!found) continue;
+    const { kind, preview } = found;
+    const block = shell.parentElement as HTMLElement | null;
+    const header = getDirectChildWithClass(shell, "llm-codeblock-header");
+    const body = getDirectChildWithClass(shell, "llm-codeblock-body");
+    if (!block || !block.classList.contains("llm-copyable")) continue;
+    if (!header || !body) continue;
+    shell.dataset.flatChrome = "true";
+    shell.classList.add("llm-codeblock-flat-preview");
+    if (kind === "svg" && isInTabZoomScope(preview)) {
+      const picture = preview.querySelector("img") as HTMLElement | null;
+      if (picture) mountDiagramTabZoom(preview, picture);
+    }
+    block.classList.add("llm-copyable-flat-preview");
+    if (!body.id) {
+      body.id = `llm-codeblock-source-${++renderedCodeBlockSourceIdCounter}`;
+    }
+
+    const bar = ensureContentBar(block, doc);
+    const sourceToggle = getDirectChildWithClass(
+      header,
+      "llm-codeblock-source-toggle",
+    );
+
+    // 1. The content's own actions.
+    const showCode = appendContentBarButton(
+      bar,
+      {
+        className: "llm-content-bar-source",
+        label: t("Show code"),
+        pressed: false,
+        onClick: () =>
+          setFlatSourceShown(
+            shell,
+            body,
+            sourceToggle,
+            showCode,
+            shell.dataset.sourceCollapsed === "true",
+          ),
+      },
+      doc,
+    );
+    showCode.setAttribute("aria-controls", body.id);
+    // Source starts folded away for every kind in the flat style.
+    setFlatSourceShown(shell, body, sourceToggle, showCode, false);
+
+    const copyButton = getDirectChildWithClass(
+      header,
+      "llm-render-copy-btn",
+    ) as HTMLButtonElement | null;
+    if (copyButton) {
+      copyButton.textContent = "";
+      const label =
+        kind === "svg"
+          ? t("Copy SVG")
+          : kind === "html"
+            ? t("Copy HTML")
+            : t("Copy code");
+      copyButton.title = label;
+      copyButton.setAttribute("aria-label", label);
+      adoptContentBarButton(bar, copyButton);
+      bindStandaloneCopyButton(copyButton);
+    }
+
+    const readSvgMarkup = (): string | null =>
+      kind === "svg"
+        ? buildSafeSvgMarkup(preview.dataset.llmSvgSource || "")
+        : preview.dataset.llmRenderedSvg || null;
+
+    if (kind !== "html") {
+      const saveButton = appendContentBarButton(
+        bar,
+        {
+          className: "llm-content-bar-save",
+          label: t("Save as image"),
+          onClick: () => {
+            const svgMarkup = readSvgMarkup();
+            if (!svgMarkup) return;
+            saveButton.disabled = true;
+            void saveFlatPreviewAsImage(doc, kind, preview, svgMarkup).then(
+              (result) => {
+                saveButton.disabled = false;
+                if (result === "cancelled") return;
+                saveButton.dataset.saveState = result;
+                doc.defaultView?.setTimeout?.(() => {
+                  delete saveButton.dataset.saveState;
+                }, FLAT_SAVE_RESET_DELAY_MS);
+              },
+            );
+          },
+        },
+        doc,
+      );
+      if (kind === "mermaid") saveButton.dataset.needsRender = "true";
+    }
+
+    // 2. The shared full-view window.
+    const fullViewButton = appendContentBarButton(
+      bar,
+      {
+        className: "llm-content-bar-fullview",
+        label: t("Open full view"),
+        onClick: () => {
+          if (kind === "html") {
+            openHtmlPreviewFullView(
+              doc,
+              preview,
+              preview.dataset.llmHtmlSource || "",
+            );
+            return;
+          }
+          const svgMarkup = readSvgMarkup();
+          if (!svgMarkup) return;
+          if (kind === "svg") {
+            openSvgPreviewFullView(doc, preview, svgMarkup);
+            return;
+          }
+          const themeKey = getRenderedMermaidTheme(preview);
+          if (!themeKey) return;
+          openMermaidPreviewFullView(
+            doc,
+            preview,
+            svgMarkup,
+            themeKey,
+            preview.dataset.llmMermaidSource || "",
+          );
+        },
+      },
+      doc,
+    );
+    if (kind === "mermaid") fullViewButton.dataset.needsRender = "true";
+
+    // 3. The side panel (standalone window only).
+    if (!hasNoSideItems(preview)) {
+      const sideSource =
+        kind === "mermaid"
+          ? preview.dataset.llmMermaidSource || ""
+          : kind === "svg"
+            ? buildSafeSvgMarkup(preview.dataset.llmSvgSource || "") || ""
+            : preview.dataset.llmHtmlSource || "";
+      const buildRequest = () => ({
+        kind,
+        source: sideSource,
+        element: preview,
+      });
+      const moveButton = appendMoveToSidePanelButton({
+        doc,
+        parent: bar,
+        className: "llm-side-move-glyph",
+        buildRequest,
+      });
+      if (moveButton) {
+        preview.setAttribute(SIDE_ITEM_KIND_ATTRIBUTE, kind);
+        // collectMadeItems finds the builder on the marked element.
+        registerSideItemRequest(preview, buildRequest);
+        adoptContentBarButton(bar, moveButton);
+      }
+    }
+
+    // The caption sits under the content, above the folded source.
+    const captionText =
+      kind === "mermaid"
+        ? parseMermaidTitle(preview.dataset.llmMermaidSource || "")
+        : kind === "svg"
+          ? parseSvgTitle(preview.dataset.llmSvgSource || "")
+          : parseHtmlTitle(preview.dataset.llmHtmlSource || "");
+    const caption = appendContentCaption(
+      shell,
+      {
+        kind:
+          kind === "mermaid"
+            ? t("Diagram")
+            : kind === "svg"
+              ? t("Drawing")
+              : t("Web page"),
+        text: captionText || undefined,
+      },
+      doc,
+    );
+    shell.insertBefore(caption, body);
+
+    if (kind === "html") {
+      preview.setAttribute(FLAT_HTML_EXPAND_ATTRIBUTE, "false");
+      const expand = doc.createElement("button") as HTMLButtonElement;
+      expand.type = "button";
+      expand.className = "llm-content-fold-btn llm-content-expand-btn";
+      const setExpanded = (expanded: boolean) => {
+        preview.setAttribute(
+          FLAT_HTML_EXPAND_ATTRIBUTE,
+          expanded ? "true" : "false",
+        );
+        expand.setAttribute("aria-expanded", expanded ? "true" : "false");
+        expand.textContent = expanded
+          ? t("Show less")
+          : t("Show the whole page");
+      };
+      expand.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setExpanded(
+          preview.getAttribute(FLAT_HTML_EXPAND_ATTRIBUTE) !== "true",
+        );
+      });
+      preview.appendChild(expand);
+      setExpanded(false);
+    }
+
+    syncFlatPreviewBarState(preview);
+  }
+}
+
 export function attachRenderedCodeBlockControls(
   root: ParentNode,
   doc: Document,
@@ -2421,10 +3146,14 @@ export function attachRenderedCodeBlockControls(
     button.setAttribute("aria-controls", body.id);
     setCodeBlockSourceCollapsed(shell, body, button, initialCollapsed);
 
-    let wrapButton = getDirectChildWithClass(
+    let wrapButton = (getDirectChildWithClass(
       header,
       "llm-codeblock-wrap-toggle",
-    ) as HTMLButtonElement | null;
+    ) ||
+      findFlatBarButton(
+        shell,
+        "llm-codeblock-wrap-toggle",
+      )) as HTMLButtonElement | null;
     const initialWordWrap =
       shell.dataset.wordWrap === undefined
         ? shouldDefaultCodeBlockWordWrap(shell)
@@ -2449,6 +3178,219 @@ export function attachRenderedCodeBlockControls(
     }
     setCodeBlockWordWrap(shell, wrapButton, initialWordWrap);
     attachCodeBlockFigureCopyButton(shell, header, doc);
+  }
+}
+
+const FLAT_TABLE_CSV_NAME = "table.csv";
+const UTF8_BOM = "\uFEFF";
+
+function readTableRows(table: HTMLElement): {
+  header: HTMLElement[][];
+  body: HTMLElement[][];
+} {
+  const header: HTMLElement[][] = [];
+  const body: HTMLElement[][] = [];
+  for (const row of Array.from(table.querySelectorAll("tr")) as HTMLElement[]) {
+    const cells = Array.from(row.children) as HTMLElement[];
+    const isHeader =
+      cells.length > 0 &&
+      cells.every((cell) => (cell.tagName || "").toLowerCase() === "th");
+    (isHeader ? header : body).push(cells);
+  }
+  return { header, body };
+}
+
+const cellText = (cell: HTMLElement): string =>
+  (cell.textContent || "").replace(/\s+/g, " ").trim();
+
+/** "Save as CSV": the table as text, written where the user picks. */
+async function saveFlatTableAsCsv(
+  doc: Document,
+  table: HTMLElement,
+): Promise<"saved" | "cancelled" | "failed"> {
+  try {
+    const { header, body } = readTableRows(table);
+    const csv = tableRowsToCsv(
+      [...header, ...body].map((row) => row.map(cellText)),
+    );
+    const target = await pickGeneratedImageSavePath(doc, FLAT_TABLE_CSV_NAME, {
+      title: t("Save as CSV"),
+      filter: { label: "CSV", pattern: "*.csv" },
+    });
+    if (target.status === "cancelled") return "cancelled";
+    if (target.status !== "selected") return "failed";
+    // The byte order mark lets Excel read non-English text as UTF-8.
+    const bytes = new TextEncoder().encode(`${UTF8_BOM}${csv}\n`);
+    await saveGeneratedImageAssetToPath(
+      {
+        image: { id: FLAT_TABLE_CSV_NAME },
+        bytes,
+        mimeType: "text/csv",
+        fileName: FLAT_TABLE_CSV_NAME,
+      },
+      target.path,
+    );
+    return "saved";
+  } catch {
+    return "failed";
+  }
+}
+
+/**
+ * The flat answer style for tables: no outer box (CSS), numeric columns marked
+ * for right alignment, and a hover bar with Copy table and Save as CSV. Runs
+ * once per table, after the copy button exists; tables outside a flat scope
+ * are left as they are.
+ */
+export function attachFlatTableChrome(root: ParentNode, doc: Document): void {
+  const blocks = Array.from(
+    root.querySelectorAll(".llm-copyable-table"),
+  ) as HTMLElement[];
+  for (const block of blocks) {
+    if (block.dataset.flatChrome === "true") continue;
+    if (!isInFlatContentScope(block)) continue;
+    const table = (
+      Array.from(block.querySelectorAll("table")) as HTMLElement[]
+    )[0];
+    if (!table) continue;
+    block.dataset.flatChrome = "true";
+    block.classList.add("llm-copyable-flat-table");
+
+    const { header, body } = readTableRows(table);
+    const numeric = detectNumericColumns(body.map((row) => row.map(cellText)));
+    for (const row of [...header, ...body]) {
+      row.forEach((cell, index) => {
+        if (numeric[index]) cell.classList.add(NUMERIC_CELL_CLASS);
+      });
+    }
+
+    const bar = ensureContentBar(block, doc);
+    const copyButton = getDirectChildWithClass(
+      block,
+      "llm-render-copy-btn",
+    ) as HTMLButtonElement | null;
+    if (copyButton) {
+      copyButton.textContent = "";
+      const label = t("Copy table");
+      copyButton.title = label;
+      copyButton.setAttribute("aria-label", label);
+      adoptContentBarButton(bar, copyButton);
+      bindStandaloneCopyButton(copyButton);
+    }
+    const csvButton = appendContentBarButton(
+      bar,
+      {
+        className: "llm-content-bar-save llm-content-bar-csv",
+        label: t("Save as CSV"),
+        onClick: () => {
+          csvButton.disabled = true;
+          void saveFlatTableAsCsv(doc, table).then((result) => {
+            csvButton.disabled = false;
+            if (result === "cancelled") return;
+            csvButton.dataset.saveState = result;
+            doc.defaultView?.setTimeout?.(() => {
+              delete csvButton.dataset.saveState;
+            }, FLAT_SAVE_RESET_DELAY_MS);
+          });
+        },
+      },
+      doc,
+    );
+  }
+}
+
+/**
+ * The flat answer style for display equations: no tinted box (CSS) and a
+ * hover bar with one button, Copy LaTeX. Inline math is left alone.
+ */
+export function attachFlatMathChrome(root: ParentNode, doc: Document): void {
+  const blocks = Array.from(
+    root.querySelectorAll(".llm-copyable-math"),
+  ) as HTMLElement[];
+  for (const block of blocks) {
+    if (block.dataset.flatChrome === "true") continue;
+    if (block.classList.contains("llm-copyable-inline")) continue;
+    if (!isInFlatContentScope(block)) continue;
+    const copyButton = getDirectChildWithClass(
+      block,
+      "llm-render-copy-btn",
+    ) as HTMLButtonElement | null;
+    if (!copyButton) continue;
+    block.dataset.flatChrome = "true";
+    block.classList.add("llm-copyable-flat-math");
+    const bar = ensureContentBar(block, doc);
+    copyButton.textContent = "";
+    const label = t("Copy LaTeX");
+    copyButton.title = label;
+    copyButton.setAttribute("aria-label", label);
+    adoptContentBarButton(bar, copyButton);
+    bindStandaloneCopyButton(copyButton);
+  }
+}
+
+/**
+ * The flat answer style for plain Markdown pictures: the image sits in a
+ * wrapper with a hover bar (Copy image, Open full view). Pictures with no
+ * address (note attachments) are left alone.
+ */
+export function attachFlatInlineImageChrome(
+  root: ParentNode,
+  doc: Document,
+): void {
+  const images = Array.from(
+    root.querySelectorAll(".llm-chat-inline-figure"),
+  ) as HTMLImageElement[];
+  for (const img of images) {
+    if (img.dataset.flatChrome === "true") continue;
+    if (!isInFlatContentScope(img)) continue;
+    const src = (img.getAttribute("src") || "").trim();
+    const parent = img.parentElement;
+    if (!src || !parent) continue;
+    img.dataset.flatChrome = "true";
+    const wrapper = doc.createElement("span") as HTMLElement;
+    wrapper.className = "llm-flat-inline-figure";
+    parent.insertBefore(wrapper, img);
+    wrapper.appendChild(img);
+
+    const bar = ensureContentBar(wrapper, doc);
+    appendContentBarButton(
+      bar,
+      {
+        className: "llm-content-bar-copy-image",
+        label: t("Copy image"),
+        onClick: () => {
+          void copyGeneratedImageToClipboard(wrapper, {
+            id: "inline-image",
+            src,
+          }).catch(() => undefined);
+        },
+      },
+      doc,
+    );
+    appendContentBarButton(
+      bar,
+      {
+        className: "llm-content-bar-fullview",
+        label: t("Open full view"),
+        onClick: () => {
+          const alt = img.getAttribute("alt") || "";
+          const opened = openStandaloneViewerWindow(doc, {
+            kind: "image",
+            src: img.src || src,
+            alt,
+            caption: alt,
+          });
+          if (!opened) {
+            openFigureViewer(wrapper, {
+              src: img.src || src,
+              alt,
+              caption: alt,
+            });
+          }
+        },
+      },
+      doc,
+    );
   }
 }
 
@@ -2478,6 +3420,7 @@ export function attachRenderedCopyButtons(
       ":scope > .llm-render-copy-btn",
     ) as HTMLButtonElement | null;
     if (existing) continue;
+    if (findFlatBarButton(copyable, "llm-render-copy-btn")) continue;
     const codeShell = copyable.querySelector(
       ":scope .llm-codeblock-shell",
     ) as HTMLElement | null;
@@ -2549,8 +3492,13 @@ export function renderRenderedMarkdownInto(
   attachRenderedCodeBlockControls(target, doc);
   attachRenderedCopyButtons(target, doc);
   attachRenderedCodeBlockMoveButtons(target, doc);
+  attachFlatCodeBlockChrome(target, doc);
   attachRenderedSvgPreviewButtons(target, doc);
   attachRenderedHtmlPreviews(target, doc);
+  attachFlatPreviewChrome(target, doc);
+  attachFlatTableChrome(target, doc);
+  attachFlatMathChrome(target, doc);
+  attachFlatInlineImageChrome(target, doc);
   void renderMermaidBlocks(
     target,
     doc,

@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   FIGURE_VIEW_MAX_SCALE,
+  attachFigurePanZoom,
+  inlineSvgNaturalSize,
   clampFigurePan,
   fitFigureScale,
   zoomFigureAround,
@@ -93,5 +95,70 @@ describe("figure viewer", function () {
       css,
       /\.llm-generated-image-action::after \{[^}]*content: attr\(aria-label\)/,
     );
+  });
+
+  it("pan-zooms a non-picture element from its natural size", function () {
+    const listeners: Record<string, Array<() => void>> = {};
+    const stageEl = {
+      clientWidth: 400,
+      clientHeight: 300,
+      addEventListener: (name: string, fn: () => void) =>
+        (listeners[name] ||= []).push(fn),
+      getBoundingClientRect: () => ({
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 300,
+      }),
+    };
+    const classes = new Set<string>();
+    const root = {
+      classList: {
+        toggle: (name: string, on: boolean) =>
+          on ? classes.add(name) : classes.delete(name),
+        add: (name: string) => classes.add(name),
+        remove: (name: string) => classes.delete(name),
+      },
+    };
+    const svgEl = { style: {} as Record<string, string>, contains: () => true };
+    const percent = { textContent: "" };
+    let size: { width: number; height: number } | null = null;
+    const zoom = attachFigurePanZoom({
+      stage: stageEl as never,
+      image: svgEl as never,
+      naturalSize: () => size,
+      stateRoot: root as never,
+      percent: percent as never,
+    });
+    assert.equal(percent.textContent, "", "waits for a size");
+    size = { width: 800, height: 600 };
+    zoom.relayout();
+    assert.equal(svgEl.style.width, "800px");
+    assert.isBelow(zoom.scale(), 1);
+    assert.equal(percent.textContent, `${Math.round(zoom.scale() * 100)}%`);
+    zoom.zoomTo(1);
+    assert.equal(percent.textContent, "100%");
+    assert.isTrue(classes.has("llm-figure-viewer-zoomed"));
+    zoom.fit();
+    assert.isFalse(zoom.isZoomed());
+  });
+
+  it("reads an inline SVG's natural size from viewBox, then attributes", function () {
+    const withBox = { viewBox: { baseVal: { width: 320, height: 200 } } };
+    assert.deepEqual(inlineSvgNaturalSize(withBox as never), {
+      width: 320,
+      height: 200,
+    });
+    const attrs: Record<string, string> = { width: "640", height: "480" };
+    const withAttrs = { getAttribute: (name: string) => attrs[name] ?? null };
+    assert.deepEqual(inlineSvgNaturalSize(withAttrs as never), {
+      width: 640,
+      height: 480,
+    });
+    const none = { getAttribute: () => null };
+    assert.deepEqual(inlineSvgNaturalSize(none as never), {
+      width: 800,
+      height: 600,
+    });
   });
 });

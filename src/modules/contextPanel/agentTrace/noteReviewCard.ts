@@ -4,6 +4,7 @@ import type {
   AgentPendingField,
 } from "../../../agent/types";
 import { createDocumentCardLayout } from "../documentCard";
+import { markStandaloneFlatScope } from "../contentChrome";
 import {
   parseSanitizedRenderedHtml,
   renderRenderedMarkdownInto,
@@ -58,6 +59,8 @@ export function renderNoteReviewCard(params: {
     statusKind: "awaiting_approval",
   });
   preview.classList.add("llm-note-review-preview");
+  // Flat code, tables and figures, but no side panel buttons inside the card.
+  markStandaloneFlatScope(preview);
   const description = doc.createElement("p");
   description.className = "llm-note-review-description";
   description.textContent =
@@ -98,6 +101,7 @@ export function renderNoteReviewCard(params: {
     } else {
       const before = doc.createElement("article");
       before.className = "llm-plan-markdown";
+      markStandaloneFlatScope(before);
       renderRenderedMarkdownInto(before, diff.before || "", doc);
       decorateNoteEmbedBadges(before, doc);
       details.appendChild(before);

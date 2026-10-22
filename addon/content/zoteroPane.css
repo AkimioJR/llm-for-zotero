@@ -201,7 +201,8 @@
 /* Code block and Mermaid colours, shared by the chat panel and the
  * standalone side panel's item tabs (which sit outside .llm-panel). */
 .llm-panel,
-.llm-standalone-side-panel-item-rendered {
+.llm-standalone-side-panel-item-rendered,
+.llm-plan-document-window-root {
   --llm-codeblock-bg: color-mix(
     in srgb,
     var(--material-background, #ffffff) 92%,
@@ -212,6 +213,7 @@
     var(--stroke-secondary, rgba(120, 120, 120, 0.3)) 86%,
     transparent
   );
+  --llm-flat-surface: color-mix(in srgb, #000 3.5%, transparent);
   --llm-codeblock-header-text: var(--fill-secondary, #4b5563);
   --llm-codeblock-copy: var(--fill-secondary, #4b5563);
   --llm-codeblock-copy-hover: var(--fill-primary, #111827);
@@ -283,6 +285,7 @@
 :root[sizemode][lwtheme-brighttext] .llm-standalone-side-panel-item-rendered {
   --llm-codeblock-bg: #202020;
   --llm-codeblock-border: color-mix(in srgb, #fff 8%, transparent);
+  --llm-flat-surface: color-mix(in srgb, #fff 4.5%, transparent);
   --llm-codeblock-header-text: #d4d4d8;
   --llm-codeblock-copy: #d4d4d8;
   --llm-codeblock-copy-hover: #ffffff;
@@ -9964,6 +9967,637 @@ label.llm-search-results-item:hover {
   color: var(--llm-codeblock-meta);
 }
 
+/* ------------------------------------------------------------------ *
+ * Flat answer style: rich content in chat answers has no container, a
+ * caption line under it, and one floating hover bar. `.llm-content-flat`
+ * marks the rendered text root. The chat answers, the side panel item tabs,
+ * the full-view Markdown window and the document windows carry it; the agent
+ * trace does not and keeps its compact framed look.
+ * ------------------------------------------------------------------ */
+
+/* The hover bar (shared by every kind of content). The block must be
+ * position: relative. */
+.llm-content-flat .llm-content-bar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 75%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--material-background) 80%, transparent);
+  box-shadow: 0 2px 10px color-mix(in srgb, #000 16%, transparent);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.llm-content-flat :hover > .llm-content-bar,
+.llm-content-flat :focus-within > .llm-content-bar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.llm-content-flat .llm-content-bar:empty {
+  display: none;
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn {
+  appearance: none;
+  -moz-appearance: none;
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  color: var(--fill-secondary);
+  font-size: 0;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 1;
+  transform: none;
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn::before {
+  content: "";
+  display: block;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  mask-image: var(--llm-content-bar-icon, none);
+  -webkit-mask-image: var(--llm-content-bar-icon, none);
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+}
+
+.llm-content-flat .llm-content-bar > .llm-codeblock-wrap-toggle {
+  --llm-content-bar-icon: url("icons/action-word-wrap.svg");
+}
+
+.llm-content-flat .llm-content-bar > .llm-render-code-copy-btn {
+  --llm-content-bar-icon: url("icons/action-copy.svg");
+}
+
+.llm-content-flat .llm-content-bar > .llm-side-move-btn {
+  --llm-content-bar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h13M11 6l6 6-6 6M21 5v14'/%3E%3C/svg%3E");
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:hover,
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:focus-visible {
+  background: color-mix(in srgb, var(--fill-primary) 9%, transparent);
+  color: var(--fill-primary);
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 0;
+}
+
+/* A toggle that is on shows the accent colour. */
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn[aria-pressed="true"] {
+  color: var(--color-accent, var(--accent-blue, #4072e5));
+}
+
+.llm-content-flat
+  .llm-copyable[data-copy-feedback="copied"]
+  .llm-render-code-copy-btn {
+  color: #7dd3a8;
+}
+
+/* Hover label under each bar button, right-aligned (same pattern as the
+ * figure buttons; the standalone window shows no native title tooltips). */
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn::after {
+  content: attr(aria-label);
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 4;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--fill-primary);
+  color: var(--material-background);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:hover::after,
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:focus-visible::after {
+  opacity: 1;
+  transition-delay: 250ms;
+}
+
+/* Caption line under a block: kind label, text, accent link. */
+.llm-content-flat .llm-content-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 6px 2px 0;
+  color: var(--fill-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.llm-content-flat .llm-content-caption-kind {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.llm-content-flat .llm-content-caption-link {
+  appearance: none;
+  -moz-appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent, var(--accent-blue, #4072e5));
+  font: inherit;
+  cursor: pointer;
+}
+
+.llm-content-flat .llm-content-caption-link:hover {
+  text-decoration: underline;
+}
+
+/* Plain code blocks: faint surface, no border, no header. */
+.llm-content-flat .llm-copyable.llm-copyable-plain-code {
+  position: relative;
+  margin: 6px 0 22px;
+  border-radius: 8px;
+}
+
+.llm-content-flat .llm-codeblock-shell.llm-codeblock-plain {
+  position: relative;
+  /* The old shell rule clips; the bar and its tooltips sit outside. */
+  overflow: visible;
+  border: 0;
+  border-radius: 8px;
+  background: var(
+    --llm-flat-surface,
+    color-mix(in srgb, var(--fill-primary, #111827) 4%, transparent)
+  );
+}
+
+/* The header (language, source toggle) is replaced by the corner label and
+ * the hover bar. */
+.llm-content-flat
+  .llm-codeblock-plain[data-flat-chrome="true"]
+  > .llm-codeblock-header {
+  display: none;
+}
+
+.llm-content-flat .llm-codeblock-plain::before {
+  content: attr(data-code-lang);
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  z-index: 1;
+  color: var(--fill-secondary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.llm-content-flat .llm-codeblock-plain > .llm-codeblock-body pre {
+  padding: 28px 22px 16px 12px;
+}
+
+/* Long blocks: clipped with a fade, a pill expands them. */
+.llm-content-flat .llm-codeblock-shell.llm-codeblock-plain[data-fold="folded"] {
+  overflow: hidden;
+  max-height: 230px;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 64px), transparent);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - 64px),
+    transparent
+  );
+}
+
+.llm-content-flat
+  .llm-codeblock-plain[data-fold="expanded"]
+  > .llm-codeblock-body
+  pre {
+  padding-bottom: 44px;
+}
+
+.llm-content-flat .llm-content-fold-btn {
+  appearance: none;
+  -moz-appearance: none;
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  z-index: 2;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 75%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--material-background) 88%, transparent);
+  color: var(--fill-secondary);
+  font-size: 11.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 1px 6px color-mix(in srgb, #000 14%, transparent);
+}
+
+.llm-content-flat .llm-content-fold-btn:hover,
+.llm-content-flat .llm-content-fold-btn:focus-visible {
+  color: var(--fill-primary);
+  background: color-mix(
+    in srgb,
+    var(--material-background) 80%,
+    var(--fill-primary) 10%
+  );
+}
+
+.llm-content-flat .llm-content-fold-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Diagrams, drawings and web pages: no header, no box. The caption sits
+ * under the content and the source folds away until "Show code". */
+.llm-content-flat .llm-content-caption-kind {
+  text-transform: uppercase;
+}
+
+.llm-content-flat .llm-copyable.llm-copyable-flat-preview {
+  position: relative;
+  margin: 6px 0 22px;
+}
+
+.llm-content-flat .llm-copyable-flat-preview .llm-codeblock-flat-preview {
+  position: static;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-header {
+  display: none;
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-source {
+  --llm-content-bar-icon: url("icons/action-source-code.svg");
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-save {
+  --llm-content-bar-icon: url("icons/action-save.svg");
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-fullview {
+  --llm-content-bar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7'/%3E%3C/svg%3E");
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+.llm-content-flat
+  .llm-content-bar
+  > .llm-content-bar-save[data-save-state="saved"] {
+  color: #7dd3a8;
+}
+
+.llm-content-flat
+  .llm-content-bar
+  > .llm-content-bar-save[data-save-state="failed"] {
+  color: #f87171;
+}
+
+/* Diagram and drawing: centered, at most 520px wide (less in the sidebar). */
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-mermaid-preview,
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-svg-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-mermaid-preview[data-mermaid-state="error"] {
+  justify-content: flex-start;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-mermaid-preview
+  .llm-mermaid-static-viewport {
+  width: 100%;
+  max-width: 520px;
+  min-height: 0;
+  max-height: none;
+  margin: 0 auto;
+  padding: 0;
+  overflow: visible;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-svg-preview
+  img {
+  max-width: min(100%, 520px);
+  max-height: 420px;
+}
+
+/* Web page: the top of the page in a 300px frame; a pill shows all of it. */
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview {
+  position: relative;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 75%, transparent);
+  border-radius: 10px;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview
+  iframe {
+  height: 300px;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview[data-expanded="true"]
+  iframe {
+  height: 520px;
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview[data-expanded="false"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  height: 64px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--llm-mermaid-canvas-bg, #fff)
+  );
+  pointer-events: none;
+}
+
+/* The source, when shown: one quiet surface under the caption. */
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-body {
+  margin-top: 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(
+    --llm-flat-surface,
+    color-mix(in srgb, var(--fill-primary, #111827) 4%, transparent)
+  );
+}
+
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-body
+  pre {
+  padding: 14px 22px 14px 14px;
+}
+
+/* Pictures (paper figures, pictures the agent made, Markdown images): just
+ * the image, 8px radius, at most 560px wide and centered. The caption line
+ * and the hover bar come from the shared chrome. */
+.llm-content-flat.llm-assistant-generated-images {
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.llm-content-flat .llm-assistant-generated-image-frame.llm-flat-figure {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: min(100%, 560px);
+  margin: 6px auto 22px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.llm-content-flat .llm-flat-figure > .llm-assistant-generated-image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+  margin: 0 auto;
+  border-radius: 8px;
+  background: transparent;
+}
+
+/* A strip of two or more figures stays a grid: two columns, one when the
+ * answer is narrower than about 420px. A lone figure spans the row. */
+.llm-content-flat.llm-agent-image-artifacts-grid.llm-agent-image-artifacts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 8px 16px;
+}
+
+.llm-agent-figure-strip {
+  container-type: inline-size;
+}
+
+@container (max-width: 420px) {
+  .llm-content-flat.llm-agent-image-artifacts-grid.llm-agent-image-artifacts-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.llm-content-flat.llm-agent-image-artifacts-grid > .llm-flat-figure:only-child {
+  grid-column: 1 / -1;
+}
+
+.llm-content-flat.llm-agent-image-artifacts-grid > .llm-flat-figure {
+  margin: 6px auto 16px;
+}
+
+/* The caption must not widen a narrow picture's frame. */
+.llm-content-flat .llm-flat-figure > .llm-content-caption {
+  width: 0;
+  min-width: 100%;
+  margin: 6px 0 0;
+  box-sizing: border-box;
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-copy-image,
+.llm-content-flat .llm-content-bar > .llm-render-copy-btn {
+  --llm-content-bar-icon: url("icons/action-copy.svg");
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-folder {
+  --llm-content-bar-icon: url("icons/folder-open.svg");
+}
+
+.llm-content-flat
+  .llm-copyable[data-copy-feedback="copied"]
+  .llm-content-bar
+  > .llm-render-copy-btn {
+  color: #7dd3a8;
+}
+
+.llm-content-flat .llm-flat-inline-figure {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: min(100%, 560px);
+  margin: 6px auto;
+}
+
+.llm-content-flat .llm-flat-inline-figure > img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto !important;
+  border-radius: 8px !important;
+}
+
+/* Tables: no outer box, one rule under the header, hairlines between rows,
+ * numbers right-aligned, and a horizontal scroll when the table is wide. */
+.llm-content-flat .llm-copyable.llm-copyable-flat-table {
+  margin: 8px 0 14px;
+}
+
+.llm-content-flat .llm-copyable-flat-table .llm-table-scroll {
+  overflow-x: auto;
+}
+
+.llm-content-flat .llm-copyable-flat-table table {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  margin: 0;
+  border: 0;
+}
+
+.llm-content-flat .llm-copyable-flat-table th,
+.llm-content-flat .llm-copyable-flat-table td {
+  max-width: 28em;
+  padding: 7px 14px 7px 0;
+  border: 0;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--stroke-secondary) 55%, transparent);
+  background: transparent;
+}
+
+.llm-content-flat .llm-copyable-flat-table thead th {
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--fill-primary) 35%, transparent);
+  font-weight: 600;
+}
+
+.llm-content-flat .llm-copyable-flat-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.llm-content-flat .llm-copyable-flat-table th:last-child,
+.llm-content-flat .llm-copyable-flat-table td:last-child {
+  padding-right: 0;
+}
+
+.llm-content-flat .llm-copyable-flat-table .llm-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Display equations: centered, no tinted box. The bar floats at the block's
+ * top-right corner and shows on hover only, so nothing moves; it can cover a
+ * far-right equation number while the pointer is over the equation. */
+.llm-content-flat .llm-copyable.llm-copyable-flat-math {
+  margin: 12px 0;
+}
+
+.llm-content-flat .llm-copyable-flat-math > .math-display {
+  margin: 0;
+  padding: 4px 0;
+  background: transparent;
+  border-radius: 0;
+  text-align: center;
+}
+
+.llm-content-flat .llm-copyable-flat-math > .llm-content-bar {
+  top: -4px;
+  right: 0;
+}
+
 .llm-rendered-markdown .llm-svg-preview {
   position: relative;
   display: flex;
@@ -10277,7 +10911,163 @@ label.llm-search-results-item:hover {
   opacity: 0.45;
 }
 
+/* Figure actions (copy, save, folder, jump) in the full-view toolbar look
+   like the other toolbar buttons. */
+.llm-mermaid-window-toolbar .llm-generated-image-action {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--llm-mermaid-button-bg);
+  color: var(--llm-mermaid-button-text);
+  opacity: 0.82;
+}
+
+.llm-mermaid-window-toolbar .llm-generated-image-action:hover:not(:disabled),
+.llm-mermaid-window-toolbar .llm-generated-image-action:focus-visible {
+  background: var(--llm-mermaid-button-hover-bg);
+  color: var(--llm-mermaid-button-text);
+  opacity: 1;
+}
+
+.llm-mermaid-window-caption {
+  position: fixed;
+  left: 24px;
+  right: 24px;
+  bottom: 14px;
+  pointer-events: none;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--llm-mermaid-button-text);
+  opacity: 0.8;
+}
+
 .llm-mermaid-window-viewport {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--llm-mermaid-canvas-bg);
+}
+
+/* Pan / zoom stage (see attachFigurePanZoom): fills the window under the
+   toolbar; the picture or diagram is placed by its transform. */
+.llm-mermaid-window-stage {
+  position: absolute;
+  top: 56px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.llm-mermaid-window-stage-captioned {
+  bottom: 36px;
+}
+
+.llm-mermaid-window-media {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  max-width: none;
+  max-height: none;
+  transform-origin: 0 0;
+}
+
+.llm-mermaid-window-root.llm-figure-viewer-zoomed .llm-mermaid-window-media {
+  cursor: grab;
+}
+
+.llm-mermaid-window-root.llm-figure-viewer-dragging .llm-mermaid-window-media {
+  cursor: grabbing;
+}
+
+.llm-mermaid-window-percent {
+  min-width: 42px;
+  color: var(--llm-mermaid-viewer-zoom-text);
+}
+
+/* The page kind fills the window under the toolbar; the page paints its own
+ * background, so the frame stays white like the side panel's. */
+.llm-viewer-window-frame {
+  display: block;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+.llm-mermaid-window-root.llm-viewer-window-html {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Flat style outside the chat. The side panel tab fills its width (the 520px
+ * cap is for answers); a code tab is never folded (the script skips the fold).
+ * Document windows take the surface from the text colour, so it follows the
+ * theme the window copied from the chat. */
+.llm-plan-document-window-root {
+  --llm-flat-surface: color-mix(in srgb, var(--fill-primary) 5%, transparent);
+}
+
+.llm-standalone-side-panel-item-body
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-mermaid-preview
+  .llm-mermaid-static-viewport {
+  max-width: none;
+}
+
+.llm-standalone-side-panel-item-body
+  .llm-content-standalone.llm-standalone-side-panel-item-rendered
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-svg-preview
+  img {
+  width: 100%;
+  max-width: 100%;
+  max-height: none;
+  height: auto;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-copyable.llm-copyable-flat-preview,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"]
+  .llm-copyable.llm-copyable-flat-preview {
+  margin-top: 0;
+}
+
+/* Figure tab: the flat figure becomes the zoom frame (mountFigureTabZoom).
+ * The bar and the caption line stay on the figure; the stage clips only the
+ * picture. */
+.llm-standalone-side-panel-item-body[data-item-kind="figure"]
+  .llm-content-flat.llm-standalone-side-panel-item-rendered
+  .llm-assistant-generated-image-frame.llm-flat-figure.llm-figure-tab-frame {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="figure"]
+  .llm-flat-figure.llm-figure-tab-frame
+  > .llm-content-caption {
+  flex: 0 0 auto;
+}
+
+/* The note kind scrolls as a document: a centred column of readable width. */
+.llm-viewer-window-document {
   box-sizing: border-box;
   width: 100%;
   height: 100%;
@@ -10286,23 +11076,25 @@ label.llm-search-results-item:hover {
   background: var(--llm-mermaid-canvas-bg);
 }
 
-.llm-mermaid-window-stage {
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
+.llm-viewer-window-markdown {
   box-sizing: border-box;
-  min-width: 100%;
-  min-height: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  color: var(--llm-mermaid-viewer-zoom-text);
+  font-size: 15px;
+  line-height: 1.6;
+  user-select: text;
 }
 
-.llm-mermaid-window-svg {
-  display: block;
-  flex: 0 0 auto;
-  width: 100%;
-  max-width: none;
-  max-height: none;
-  height: auto;
-  object-fit: contain;
+.llm-mermaid-theme-dark .llm-viewer-window-markdown {
+  --llm-flat-surface: color-mix(in srgb, #fff 4.5%, transparent);
+  --llm-codeblock-bg: #202020;
+  --llm-codeblock-border: color-mix(in srgb, #fff 8%, transparent);
+  --llm-codeblock-header-text: #d4d4d8;
+  --llm-codeblock-copy: #d4d4d8;
+  --llm-codeblock-copy-hover: #ffffff;
+  --llm-codeblock-text: #f4f4f5;
+  --llm-codeblock-comment: #a1a1aa;
 }
 
 .llm-rendered-markdown .llm-mermaid-status {
@@ -11588,39 +12380,7 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 }
 
 .llm-plan-document-figures {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
   margin-top: 14px;
-}
-
-.llm-plan-document-figure {
-  margin: 0;
-  padding: 10px;
-  border: 1px solid var(--stroke-secondary);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--fill-primary) 3%, transparent);
-}
-
-.llm-plan-document-figure img {
-  display: block;
-  width: 100%;
-  height: auto;
-  max-height: 440px;
-  object-fit: contain;
-  border-radius: 4px;
-}
-
-.llm-plan-document-figure figcaption {
-  margin-top: 8px;
-  font-size: var(--llm-fs-11);
-}
-
-.llm-plan-document-figure figcaption span {
-  display: block;
-  margin-top: 3px;
-  color: var(--fill-tertiary);
-  font-size: var(--llm-fs-10);
 }
 
 .llm-plan-document-citation-cluster {
@@ -17503,34 +18263,291 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 .llm-saved-files {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  width: min(100%, 560px);
+  gap: 8px;
+  width: 100%;
   margin-top: 8px;
 }
 
 .llm-saved-file-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--fill-quinary, rgba(127, 127, 127, 0.25));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--fill-quinary, #888) 35%, transparent);
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--stroke-secondary, rgba(127, 127, 127, 0.3));
+  border-radius: 12px;
+  background: color-mix(
+    in srgb,
+    var(--fill-quinary, #888) 45%,
+    var(--material-background, transparent)
+  );
+  color: var(--fill-primary, inherit);
 }
 
-.llm-saved-file-icon {
-  flex: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+/* In the standalone window the card keeps a card's width. */
+.llm-saved-file-card[data-standalone="true"] {
+  max-width: 340px;
+}
+
+.llm-saved-file-card[role="button"] {
+  cursor: pointer;
+}
+
+.llm-saved-file-card:focus-visible {
+  outline: 2px solid var(--color-accent, #4072e5);
+  outline-offset: 2px;
+}
+
+.llm-saved-file-preview {
+  position: relative;
+  height: 150px;
   display: grid;
   place-items: center;
-  color: var(--accent-blue, #4072e5);
-  background: color-mix(in srgb, var(--accent-blue, #4072e5) 14%, transparent);
+  overflow: hidden;
+  border-bottom: 1px solid var(--stroke-secondary, rgba(127, 127, 127, 0.3));
+  border-radius: 11px 11px 0 0;
 }
 
-.llm-saved-file-icon::before,
-.llm-saved-file-reveal::before,
+.llm-saved-file-preview-frame,
+.llm-saved-file-preview-markdown {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: top left;
+  pointer-events: none;
+  overflow: hidden;
+  border: 0;
+  background: #fff;
+}
+
+.llm-saved-file-preview-markdown {
+  box-sizing: border-box;
+  padding: 12px 16px;
+  background: var(--material-background, #fff);
+  color: var(--fill-primary, inherit);
+}
+
+.llm-saved-file-preview-image {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.llm-saved-file-preview[data-preview-ready="true"] .llm-saved-file-tile {
+  display: none;
+}
+
+.llm-saved-file-preview-overlay {
+  z-index: 2;
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.llm-saved-file-card:hover .llm-saved-file-preview-overlay,
+.llm-saved-file-card:focus-visible .llm-saved-file-preview-overlay {
+  opacity: 1;
+}
+
+.llm-saved-file-tile {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: #6c6c6c;
+}
+
+.llm-saved-file-tile[data-type="html"] {
+  background: #e8743b;
+}
+
+.llm-saved-file-tile[data-type="md"] {
+  background: #4a7ef0;
+}
+
+.llm-saved-file-tile[data-type="image"] {
+  background: #2fa36f;
+}
+
+.llm-saved-file-tile[data-type="pdf"] {
+  background: #d9534f;
+}
+
+.llm-saved-file-tile[data-type="docx"] {
+  background: #2f5fb3;
+}
+
+.llm-saved-file-tile[data-type="missing"] {
+  background: #5a5a5a;
+}
+
+/* The page: a rectangle with its top right corner cut off, and the fold. */
+.llm-saved-file-tile-page {
+  position: absolute;
+  left: 12px;
+  top: 7px;
+  width: 24px;
+  height: 34px;
+  background: rgba(255, 255, 255, 0.28);
+  clip-path: polygon(0 0, 65% 0, 100% 24%, 100% 100%, 0 100%);
+}
+
+.llm-saved-file-tile-page::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 35%;
+  height: 24%;
+  background: rgba(255, 255, 255, 0.5);
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
+}
+
+.llm-saved-file-tile-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  text-align: center;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.llm-saved-file-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 12px;
+}
+
+.llm-saved-file-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.llm-saved-file-name {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-saved-file-meta {
+  font-size: 0.85em;
+  color: var(--fill-secondary, #777);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-saved-file-card.is-missing .llm-saved-file-meta {
+  color: var(--accent-orange, #c77c1e);
+}
+
+.llm-saved-file-more {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--fill-secondary, #777);
+  cursor: pointer;
+}
+
+.llm-saved-file-more:hover,
+.llm-saved-file-more[aria-expanded="true"] {
+  background: var(--fill-quinary, rgba(127, 127, 127, 0.2));
+  color: var(--fill-primary, inherit);
+}
+
+.llm-saved-file-more-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='%23fff'%3E%3Ccircle cx='5' cy='12' r='2'/%3E%3Ccircle cx='12' cy='12' r='2'/%3E%3Ccircle cx='19' cy='12' r='2'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='%23fff'%3E%3Ccircle cx='5' cy='12' r='2'/%3E%3Ccircle cx='12' cy='12' r='2'/%3E%3Ccircle cx='19' cy='12' r='2'/%3E%3C/svg%3E");
+}
+
+/* The ⋯ menu reuses .llm-response-menu; it opens over the card's footer. */
+.llm-saved-file-menu {
+  display: flex;
+  flex-direction: column;
+  right: 8px;
+  bottom: 44px;
+  min-width: calc(170px * var(--llm-font-scale, 1));
+}
+
+.llm-saved-file-menu-item {
+  gap: calc(8px * var(--llm-font-scale, 1));
+}
+
+.llm-saved-file-menu-divider {
+  height: 1px;
+  margin: calc(3px * var(--llm-font-scale, 1)) 0;
+  background: var(--stroke-secondary, rgba(127, 127, 127, 0.3));
+}
+
+.llm-saved-file-menu-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+}
+
+.llm-saved-file-menu-icon[data-icon="side-panel"] {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2'/%3E%3Cpath d='M15 4v16'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2'/%3E%3Cpath d='M15 4v16'/%3E%3C/svg%3E");
+}
+
+.llm-saved-file-menu-icon[data-icon="full-view"] {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7'/%3E%3C/svg%3E");
+}
+
+.llm-saved-file-menu-icon[data-icon="app"] {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3'/%3E%3C/svg%3E");
+}
+
+.llm-saved-file-menu-icon[data-icon="folder"] {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/%3E%3C/svg%3E");
+}
+
+.llm-saved-file-menu-icon[data-icon="copy"] {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='9' width='12' height='12' rx='2'/%3E%3Cpath d='M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='9' width='12' height='12' rx='2'/%3E%3Cpath d='M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1'/%3E%3C/svg%3E");
+}
+
 .llm-standalone-side-panel-icon-reveal::before {
   content: "";
   display: block;
@@ -17547,79 +18564,6 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E");
 }
 
-.llm-saved-file-icon[data-icon="html"]::before {
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z'/%3E%3Cpath d='M14 3v5h5M10 13l-2 2 2 2M14 13l2 2-2 2'/%3E%3C/svg%3E");
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z'/%3E%3Cpath d='M14 3v5h5M10 13l-2 2 2 2M14 13l2 2-2 2'/%3E%3C/svg%3E");
-}
-
-.llm-saved-file-icon[data-icon="image"]::before {
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2'/%3E%3Ccircle cx='9' cy='10' r='2'/%3E%3Cpath d='m21 16-5-5-9 9'/%3E%3C/svg%3E");
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2'/%3E%3Ccircle cx='9' cy='10' r='2'/%3E%3Cpath d='m21 16-5-5-9 9'/%3E%3C/svg%3E");
-}
-
-.llm-saved-file-icon[data-icon="missing"]::before {
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3 2 20h20z'/%3E%3Cpath d='M12 10v4M12 17v.5'/%3E%3C/svg%3E");
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3 2 20h20z'/%3E%3Cpath d='M12 10v4M12 17v.5'/%3E%3C/svg%3E");
-}
-
-.llm-saved-file-card.is-missing .llm-saved-file-icon {
-  color: var(--accent-orange, #c77c1e);
-  background: color-mix(
-    in srgb,
-    var(--accent-orange, #c77c1e) 14%,
-    transparent
-  );
-}
-
-.llm-saved-file-text {
-  flex: 1;
-  min-width: 0;
-}
-
-.llm-saved-file-name {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.llm-saved-file-path {
-  font-size: 0.85em;
-  color: var(--fill-secondary, #777);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.llm-saved-file-card.is-missing .llm-saved-file-path {
-  color: var(--accent-orange, #c77c1e);
-}
-
-.llm-saved-file-actions {
-  flex: none;
-  display: flex;
-  gap: 2px;
-}
-
-.llm-saved-file-btn {
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 6px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  background: transparent;
-  color: var(--fill-secondary, #777);
-  cursor: pointer;
-}
-
-.llm-saved-file-btn:hover {
-  background: var(--fill-quinary, rgba(127, 127, 127, 0.2));
-  color: var(--fill-primary, inherit);
-}
-
-.llm-saved-file-reveal::before,
 .llm-standalone-side-panel-icon-reveal::before {
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/%3E%3C/svg%3E");
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/%3E%3C/svg%3E");
@@ -17793,13 +18737,8 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   min-width: 0;
 }
 
-.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
-  .llm-mermaid-preview,
-.llm-standalone-side-panel-item-body[data-item-kind="svg"] .llm-svg-preview {
-  min-height: 60%;
-}
-
-/* A figure tab fits the picture to the tab; scroll or pinch zooms, a drag
+/* A figure tab uses the flat figure chrome (hover bar, caption line) and fits
+   the picture to the tab; scroll or pinch zooms, a drag
    moves it (figureViewer.ts mountFigureTabZoom). */
 .llm-standalone-side-panel-item-body[data-item-kind="figure"] {
   overflow: hidden;
@@ -17886,6 +18825,186 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 .llm-standalone-side-panel-item-body[data-item-kind="code"]
   .llm-codeblock-body {
   max-height: none;
+}
+
+/* Diagram and drawing tabs: the rendered diagram becomes the zoom stage
+ * (figureViewer.ts mountDiagramTabZoom), like a figure tab. The flex chain
+ * runs from the tab body down to the preview; the caption keeps its height
+ * and the source, when shown, sits under the stage and scrolls on its own. */
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"],
+.llm-standalone-side-panel-item-body[data-item-kind="svg"] {
+  overflow: hidden;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-standalone-side-panel-item-rendered,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"]
+  .llm-standalone-side-panel-item-rendered {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-content-standalone
+  .llm-copyable.llm-copyable-flat-preview,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"]
+  .llm-content-standalone
+  .llm-copyable.llm-copyable-flat-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin-bottom: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.llm-standalone-side-panel-item-body
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-diagram-tab-frame {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.llm-standalone-side-panel-item-body
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-diagram-tab-frame
+  > .llm-figure-tab-stage {
+  width: 100%;
+}
+
+/* Web page tab: the same flat bar and caption as the other tabs; the page
+ * fills the tab, so the 300px cap, its fade and the "whole page" pill go. */
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-standalone-side-panel-item-rendered {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable.llm-copyable-flat-preview,
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview
+  iframe {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview::after,
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-html-preview
+  > .llm-content-expand-btn {
+  display: none;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-content-caption {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 12px;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-body {
+  flex: 0 1 auto;
+  max-height: 45vh;
+  margin: 0;
+  border-radius: 0;
+  overflow: auto;
+}
+
+/* A diagram draws on the tab's own background, not the figure's white. */
+.llm-figure-tab-stage .llm-figure-tab-image.llm-diagram-tab-media {
+  background: transparent;
+}
+
+.llm-standalone-side-panel-item-body
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-diagram-tab-frame
+  ~ .llm-content-caption {
+  flex: 0 0 auto;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-body,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-body {
+  flex: 0 1 auto;
+  max-height: 45vh;
+  overflow: auto;
 }
 
 /* Miscellaneous tab (side panel): shapes icon (triangle, square, circle),

@@ -375,7 +375,10 @@ export function collectMadeItems(container: ParentNode): MadeItem[] {
       (candidate) =>
         candidate.closest(`[${SIDE_ITEM_KIND_ATTRIBUTE}]`) === element,
     );
-    const request = button ? requestBuilders.get(button)?.() : null;
+    const build =
+      requestBuilders.get(element) ||
+      (button ? requestBuilders.get(button) : undefined);
+    const request = build ? build() : null;
     if (!request) continue;
     const source = findSourceMessage(element);
     const timestamp = Number(
@@ -389,6 +392,24 @@ export function collectMadeItems(container: ParentNode): MadeItem[] {
     });
   }
   return items.reverse();
+}
+
+/** The request builder behind a →| button, for a caller that re-homes it. */
+export function getSideItemRequestBuilder(
+  button: Element,
+): (() => SidePanelItemRequest | null) | undefined {
+  return requestBuilders.get(button);
+}
+
+/**
+ * Registers what opening `element` in the side panel means, for an item
+ * that opens itself on click instead of having a →| button (a file card).
+ */
+export function registerSideItemRequest(
+  element: Element,
+  buildRequest: () => SidePanelItemRequest | null,
+): void {
+  requestBuilders.set(element, buildRequest);
 }
 
 /**

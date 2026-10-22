@@ -132,20 +132,56 @@ export type FigurePanZoom = {
 };
 
 /**
+ * Natural size of an inline SVG: its viewBox, else its width and height
+ * attributes, else its bounding box, else 800 x 600.
+ */
+export function inlineSvgNaturalSize(svg: SVGElement): FigureViewSize {
+  const box = (svg as SVGSVGElement).viewBox?.baseVal;
+  if (box && box.width > 0 && box.height > 0) {
+    return { width: box.width, height: box.height };
+  }
+  const width = Number.parseFloat(svg.getAttribute("width") || "");
+  const height = Number.parseFloat(svg.getAttribute("height") || "");
+  if (
+    Number.isFinite(width) &&
+    Number.isFinite(height) &&
+    width > 0 &&
+    height > 0 &&
+    !svg.getAttribute("width")?.includes("%") &&
+    !svg.getAttribute("height")?.includes("%")
+  ) {
+    return { width, height };
+  }
+  try {
+    const bbox = (svg as SVGGraphicsElement).getBBox();
+    if (bbox.width > 0 && bbox.height > 0) {
+      return { width: bbox.width, height: bbox.height };
+    }
+  } catch {
+    // getBBox throws when the element is not rendered.
+  }
+  return { width: 800, height: 600 };
+}
+
+/**
  * Wheel / pinch zoom and drag-to-move for a picture in a stage. The large
  * view and the side panel figure tab both use it, so they zoom alike (at the
  * Mermaid window's speed, see wheelZoom.ts).
  */
 export function attachFigurePanZoom(params: {
   stage: HTMLElement;
-  image: HTMLImageElement;
+  /** A picture, or another element (an inline SVG) given `naturalSize`. */
+  image: HTMLElement | SVGElement;
+  /** Size of a non-picture element; null while it is not known yet. */
+  naturalSize?: () => FigureViewSize | null;
   /** Gets the zoomed / dragging classes for the cursors. */
   stateRoot: HTMLElement;
   percent?: HTMLElement;
   /** A press that did not move: on the picture or beside it. */
   onClick?: (onImage: boolean, clientX: number, clientY: number) => void;
 }): FigurePanZoom {
-  const { stage, image, stateRoot, percent } = params;
+  const { stage, stateRoot, percent, naturalSize } = params;
+  const image = params.image as HTMLElement & Partial<HTMLImageElement>;
   let natural: FigureViewSize = { width: 0, height: 0 };
   let view: FigureViewTransform = { scale: 1, x: 0, y: 0 };
   let minScale = 1;
@@ -183,6 +219,7 @@ export function attachFigurePanZoom(params: {
     paint();
   };
   const relayout = () => {
+    if (!natural.width && naturalSize) onImageReady();
     if (!natural.width) return;
     if (!isZoomed()) {
       fit();
@@ -198,15 +235,25 @@ export function attachFigurePanZoom(params: {
   };
 
   const onImageReady = () => {
-    natural = {
-      width: image.naturalWidth || 800,
-      height: image.naturalHeight || 600,
-    };
+    if (naturalSize) {
+      const size = naturalSize();
+      if (!size || !(size.width > 0) || !(size.height > 0)) return;
+      natural = size;
+    } else {
+      natural = {
+        width: image.naturalWidth || 800,
+        height: image.naturalHeight || 600,
+      };
+    }
     fit();
   };
   image.draggable = false;
-  image.addEventListener("load", onImageReady);
-  if (image.complete && image.naturalWidth) onImageReady();
+  if (naturalSize) {
+    onImageReady();
+  } else {
+    image.addEventListener("load", onImageReady);
+    if (image.complete && image.naturalWidth) onImageReady();
+  }
 
   let press: {
     x: number;
@@ -224,7 +271,7 @@ export function attachFigurePanZoom(params: {
       y: event.clientY,
       viewX: view.x,
       viewY: view.y,
-      onImage: event.target === image,
+      onImage: image.contains(event.target as Node | null),
       moved: false,
     };
     try {
@@ -468,23 +515,22 @@ export function openFigureViewer(
 }
 
 /**
- * Turns a figure box in a side panel tab into a zoomable view: the picture
- * fits the tab, scroll or pinch zooms around the pointer, a drag moves it,
- * and a double click (or the fit button) fits it again.
+ * Fills a stage in a side panel tab with a zoomable view of `media`: scroll
+ * or pinch zooms around the pointer, a drag moves it, a double click (or the
+ * fit button) fits it again, and a small - % + fit pill sits in the stage's
+ * corner. The caller has already put `stage` in place; `stateRoot` gets the
+ * zoomed / dragging classes.
  */
-export function mountFigureTabZoom(
-  frame: HTMLElement,
-  image: HTMLImageElement,
+function fillTabZoomStage(
+  stateRoot: HTMLElement,
+  stage: HTMLElement,
+  media: HTMLElement | SVGElement,
+  naturalSize?: () => FigureViewSize | null,
 ): FigurePanZoom | null {
-  const doc = frame.ownerDocument;
+  const doc = stage.ownerDocument;
   const win = doc?.defaultView;
   if (!doc || !win) return null;
-  frame.classList.add("llm-figure-tab-frame");
-  const stage = htmlEl(doc, "div", "llm-figure-tab-stage");
-  image.replaceWith(stage);
-  image.classList.add("llm-figure-tab-image");
-  image.removeAttribute("title");
-  stage.appendChild(image);
+  stage.appendChild(media);
 
   const button = (className: string, label: string) => {
     const node = htmlEl(
@@ -506,8 +552,9 @@ export function mountFigureTabZoom(
 
   const panZoom = attachFigurePanZoom({
     stage,
-    image,
-    stateRoot: frame,
+    image: media,
+    naturalSize,
+    stateRoot,
     percent,
   });
   // The controls sit inside the stage: their presses are not drags.
@@ -537,4 +584,52 @@ export function mountFigureTabZoom(
     new ResizeObserverCtor(() => panZoom.relayout()).observe(stage);
   }
   return panZoom;
+}
+
+/**
+ * Turns a figure box in a side panel tab into a zoomable view: the picture
+ * fits the tab, scroll or pinch zooms around the pointer, a drag moves it,
+ * and a double click (or the fit button) fits it again.
+ */
+export function mountFigureTabZoom(
+  frame: HTMLElement,
+  image: HTMLImageElement,
+): FigurePanZoom | null {
+  const doc = frame.ownerDocument;
+  if (!doc?.defaultView) return null;
+  frame.classList.add("llm-figure-tab-frame");
+  const stage = htmlEl(doc, "div", "llm-figure-tab-stage");
+  image.replaceWith(stage);
+  image.classList.add("llm-figure-tab-image");
+  image.removeAttribute("title");
+  return fillTabZoomStage(frame, stage, image);
+}
+
+/**
+ * The same zoomable view for a diagram or drawing tab. `preview` is the
+ * element that held the rendered diagram (its children are replaced); `media`
+ * is the inline SVG or the picture. The view fills the preview.
+ */
+export function mountDiagramTabZoom(
+  preview: HTMLElement,
+  media: HTMLElement | SVGElement,
+): FigurePanZoom | null {
+  const doc = preview.ownerDocument;
+  if (!doc?.defaultView) return null;
+  preview.classList.add("llm-figure-tab-frame", "llm-diagram-tab-frame");
+  const stage = htmlEl(doc, "div", "llm-figure-tab-stage");
+  preview.replaceChildren(stage);
+  media.classList.add("llm-figure-tab-image", "llm-diagram-tab-media");
+  media.removeAttribute("title");
+  const isImage = media.localName.toLowerCase() === "img";
+  if (!isImage) {
+    // Diagram SVGs carry an inline max-width that would stop the zoom.
+    (media as SVGElement).style.maxWidth = "none";
+  }
+  return fillTabZoomStage(
+    preview,
+    stage,
+    media,
+    isImage ? undefined : () => inlineSvgNaturalSize(media as SVGElement),
+  );
 }

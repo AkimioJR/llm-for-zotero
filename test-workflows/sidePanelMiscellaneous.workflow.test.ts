@@ -98,10 +98,25 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
       const rect = el.getBoundingClientRect();
       return !el.hidden && rect.width > 0 && rect.height > 0;
     }) || null;
+  // The flat style puts the →| button in the block's hover bar, a child of
+  // the .llm-copyable wrapper and outside the element that carries
+  // data-side-item-kind; older markup kept it inside that element.
+  const moveButtonsOfKind = (root: ParentNode, kind: string): HTMLElement[] =>
+    (
+      Array.from(
+        root.querySelectorAll(`[data-side-item-kind="${kind}"]`),
+      ) as HTMLElement[]
+    ).flatMap((el) => {
+      const inBar = el
+        .closest(".llm-copyable")
+        ?.querySelector(":scope > .llm-content-bar > .llm-side-move-btn");
+      if (inBar) return [inBar as HTMLElement];
+      return Array.from(
+        el.querySelectorAll(".llm-side-move-btn, :scope > .llm-side-move-btn"),
+      ) as HTMLElement[];
+    });
   const moveButton = (kind: string) =>
-    mainBody().querySelector<HTMLElement>(
-      `[data-side-item-kind="${kind}"] .llm-side-move-btn, [data-side-item-kind="${kind}"] > .llm-side-move-btn`,
-    );
+    moveButtonsOfKind(mainBody(), kind)[0] || null;
 
   before(function () {
     api = (Zotero as any).LLMForZotero?.api?.workflowTest;
@@ -291,7 +306,7 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
     await shoot(win, "answer-footer-no-move.png");
     // The mermaid/svg/html previews do not also get a code-block button.
     assert.lengthOf(
-      qa('[data-side-item-kind="code"] .llm-side-move-btn'),
+      moveButtonsOfKind(win.document, "code"),
       1,
       "only the plain code block has a code button",
     );
@@ -346,15 +361,25 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
     await clickKind("html", "tab-html.png", 3);
     const htmlRoot = shownItemRoot()!;
     assert.isOk(
-      htmlRoot.querySelector("iframe.llm-side-panel-item-frame"),
+      htmlRoot.querySelector(".llm-html-preview iframe"),
       "the html tab holds the sandboxed frame",
     );
     assert.equal(
       htmlRoot
-        .querySelector("iframe.llm-side-panel-item-frame")!
+        .querySelector(".llm-html-preview iframe")!
         .getAttribute("sandbox"),
       "allow-scripts",
     );
+    // Every tab kind has the same flat hover bar: Show code, Copy, Full view.
+    const htmlBar = htmlRoot.querySelector(".llm-content-bar");
+    assert.isOk(htmlBar, "the html tab has the flat hover bar");
+    for (const cls of [
+      "llm-content-bar-source",
+      "llm-render-code-copy-btn",
+      "llm-content-bar-fullview",
+    ]) {
+      assert.isOk(htmlBar!.querySelector(`.${cls}`), `html bar has ${cls}`);
+    }
     await clickKind("code", "tab-code.png", 4);
     // The code tab draws the chat's own code block: inner code, real
     // language, highlighted. It never shows the ``` fence lines as code.
