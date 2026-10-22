@@ -10456,6 +10456,33 @@ label.llm-search-results-item:hover {
   background: transparent;
 }
 
+/* A strip of two or more figures stays a grid: two columns, one when the
+ * answer is narrower than about 420px. A lone figure spans the row. */
+.llm-content-flat.llm-agent-image-artifacts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 8px 16px;
+}
+
+.llm-agent-figure-strip {
+  container-type: inline-size;
+}
+
+@container (max-width: 420px) {
+  .llm-content-flat.llm-agent-image-artifacts-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.llm-content-flat.llm-agent-image-artifacts-grid > .llm-flat-figure:only-child {
+  grid-column: 1 / -1;
+}
+
+.llm-content-flat.llm-agent-image-artifacts-grid > .llm-flat-figure {
+  margin: 6px auto 16px;
+}
+
 /* The caption must not widen a narrow picture's frame. */
 .llm-content-flat .llm-flat-figure > .llm-content-caption {
   width: 0;
