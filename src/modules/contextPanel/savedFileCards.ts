@@ -276,7 +276,11 @@ export async function statLocalPath(path: string): Promise<FileStat> {
 
 export type TurnWindow = { start: number; end: number };
 
-/** From the question's time to the next question (at most two hours on). */
+/**
+ * From the question's time to the next question (at most two hours on), as a
+ * half-open range. Both ends move back by the same slack, so the windows of
+ * neighbouring turns meet without overlapping and a file belongs to one turn.
+ */
 export function buildTurnWindow(params: {
   userTimestamp: number;
   assistantTimestamp: number;
@@ -287,15 +291,16 @@ export function buildTurnWindow(params: {
   const cap =
     Math.max(params.userTimestamp, params.assistantTimestamp) +
     TURN_WINDOW_MAX_MS;
-  const end = params.nextUserTimestamp
-    ? Math.min(params.nextUserTimestamp, cap)
-    : cap;
-  return { start, end: end + TURN_WINDOW_SLACK_MS };
+  const end =
+    params.nextUserTimestamp && params.nextUserTimestamp <= cap
+      ? params.nextUserTimestamp - TURN_WINDOW_SLACK_MS
+      : cap + TURN_WINDOW_SLACK_MS;
+  return { start, end };
 }
 
 function inWindow(stat: FileStat, window: TurnWindow): boolean {
   const time = stat.lastModified || 0;
-  return time >= window.start && time <= window.end;
+  return time >= window.start && time < window.end;
 }
 
 async function listChildren(directory: string): Promise<string[]> {

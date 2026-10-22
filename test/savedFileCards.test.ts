@@ -170,8 +170,20 @@ describe("Saved file cards", function () {
         assistantTimestamp: 11_000,
         nextUserTimestamp: 50_000,
       }),
-      { start: 5_000, end: 55_000 },
+      { start: 5_000, end: 45_000 },
     );
+    // Neighbouring turns meet without overlapping: a file saved early in the
+    // second turn belongs to it alone.
+    const first = buildTurnWindow({
+      userTimestamp: 10_000,
+      assistantTimestamp: 11_000,
+      nextUserTimestamp: 50_000,
+    });
+    const second = buildTurnWindow({
+      userTimestamp: 50_000,
+      assistantTimestamp: 60_000,
+    });
+    assert.equal(first.end, second.start);
     const open = buildTurnWindow({
       userTimestamp: 10_000,
       assistantTimestamp: 11_000,
