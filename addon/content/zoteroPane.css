@@ -10153,8 +10153,10 @@ label.llm-search-results-item:hover {
   border-radius: 8px;
 }
 
-.llm-content-flat .llm-codeblock-plain {
+.llm-content-flat .llm-codeblock-shell.llm-codeblock-plain {
   position: relative;
+  /* The old shell rule clips; the bar and its tooltips sit outside. */
+  overflow: visible;
   border: 0;
   border-radius: 8px;
   background: var(
@@ -10165,7 +10167,9 @@ label.llm-search-results-item:hover {
 
 /* The header (language, source toggle) is replaced by the corner label and
  * the hover bar. */
-.llm-content-flat .llm-codeblock-plain > .llm-codeblock-header {
+.llm-content-flat
+  .llm-codeblock-plain[data-flat-chrome="true"]
+  > .llm-codeblock-header {
   display: none;
 }
 
@@ -10191,7 +10195,8 @@ label.llm-search-results-item:hover {
 }
 
 /* Long blocks: clipped with a fade, a pill expands them. */
-.llm-content-flat .llm-codeblock-plain[data-fold="folded"] {
+.llm-content-flat .llm-codeblock-shell.llm-codeblock-plain[data-fold="folded"] {
+  overflow: hidden;
   max-height: 230px;
   mask-image: linear-gradient(to bottom, #000 calc(100% - 64px), transparent);
   -webkit-mask-image: linear-gradient(
@@ -10460,7 +10465,7 @@ label.llm-search-results-item:hover {
 
 /* A strip of two or more figures stays a grid: two columns, one when the
  * answer is narrower than about 420px. A lone figure spans the row. */
-.llm-content-flat.llm-agent-image-artifacts-grid {
+.llm-content-flat.llm-agent-image-artifacts-grid.llm-agent-image-artifacts-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: start;
@@ -10472,7 +10477,7 @@ label.llm-search-results-item:hover {
 }
 
 @container (max-width: 420px) {
-  .llm-content-flat.llm-agent-image-artifacts-grid {
+  .llm-content-flat.llm-agent-image-artifacts-grid.llm-agent-image-artifacts-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -12375,39 +12380,7 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 }
 
 .llm-plan-document-figures {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
   margin-top: 14px;
-}
-
-.llm-plan-document-figure {
-  margin: 0;
-  padding: 10px;
-  border: 1px solid var(--stroke-secondary);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--fill-primary) 3%, transparent);
-}
-
-.llm-plan-document-figure img {
-  display: block;
-  width: 100%;
-  height: auto;
-  max-height: 440px;
-  object-fit: contain;
-  border-radius: 4px;
-}
-
-.llm-plan-document-figure figcaption {
-  margin-top: 8px;
-  font-size: var(--llm-fs-11);
-}
-
-.llm-plan-document-figure figcaption span {
-  display: block;
-  margin-top: 3px;
-  color: var(--fill-tertiary);
-  font-size: var(--llm-fs-10);
 }
 
 .llm-plan-document-citation-cluster {
@@ -18852,6 +18825,186 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 .llm-standalone-side-panel-item-body[data-item-kind="code"]
   .llm-codeblock-body {
   max-height: none;
+}
+
+/* Diagram and drawing tabs: the rendered diagram becomes the zoom stage
+ * (figureViewer.ts mountDiagramTabZoom), like a figure tab. The flex chain
+ * runs from the tab body down to the preview; the caption keeps its height
+ * and the source, when shown, sits under the stage and scrolls on its own. */
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"],
+.llm-standalone-side-panel-item-body[data-item-kind="svg"] {
+  overflow: hidden;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-standalone-side-panel-item-rendered,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"]
+  .llm-standalone-side-panel-item-rendered {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-content-standalone
+  .llm-copyable.llm-copyable-flat-preview,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"]
+  .llm-content-standalone
+  .llm-copyable.llm-copyable-flat-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin-bottom: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.llm-standalone-side-panel-item-body
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-diagram-tab-frame {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.llm-standalone-side-panel-item-body
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-diagram-tab-frame
+  > .llm-figure-tab-stage {
+  width: 100%;
+}
+
+/* Web page tab: the same flat bar and caption as the other tabs; the page
+ * fills the tab, so the 300px cap, its fade and the "whole page" pill go. */
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-standalone-side-panel-item-rendered {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable.llm-copyable-flat-preview,
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview
+  iframe {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview::after,
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-html-preview
+  > .llm-content-expand-btn {
+  display: none;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-content-caption {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 12px;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="html"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-body {
+  flex: 0 1 auto;
+  max-height: 45vh;
+  margin: 0;
+  border-radius: 0;
+  overflow: auto;
+}
+
+/* A diagram draws on the tab's own background, not the figure's white. */
+.llm-figure-tab-stage .llm-figure-tab-image.llm-diagram-tab-media {
+  background: transparent;
+}
+
+.llm-standalone-side-panel-item-body
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-diagram-tab-frame
+  ~ .llm-content-caption {
+  flex: 0 0 auto;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-body,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"]
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-codeblock-body {
+  flex: 0 1 auto;
+  max-height: 45vh;
+  overflow: auto;
 }
 
 /* Miscellaneous tab (side panel): shapes icon (triangle, square, circle),

@@ -1,4 +1,5 @@
 import { fnv1a32Raw } from "../../../utils/fnv1a";
+import { CONTENT_FLAT_SCOPE_CLASS } from "../contentChrome";
 import type {
   AgentActionSummaryResultCard,
   AgentNoteChangeResultCard,
@@ -6175,7 +6176,7 @@ function renderPlanProposal(
   artifact: StoredPlanArtifact,
 ): HTMLElement {
   const markdown = doc.createElement("div");
-  markdown.className = "llm-plan-markdown";
+  markdown.className = `llm-plan-markdown ${CONTENT_FLAT_SCOPE_CLASS}`;
   const rawSource =
     artifact.nativePlanning?.proposal?.markdown ||
     [
@@ -6529,7 +6530,7 @@ function syncDocumentLead(
   if (documentView.lead?.text !== text) {
     documentView.lead?.node.remove();
     const node = doc.createElement("div");
-    node.className = "llm-agent-inline-text llm-plan-document-lead";
+    node.className = `llm-agent-inline-text llm-plan-document-lead ${CONTENT_FLAT_SCOPE_CLASS}`;
     const markdown = buildAgentTraceMarkdownForRender(
       text,
       documentView.message,
@@ -6677,6 +6678,7 @@ function renderPlanDocumentCard(params: {
         },
       }),
     });
+    content.classList.add(CONTENT_FLAT_SCOPE_CLASS);
     renderPlanDocumentContent({
       doc: params.doc,
       root: content,

@@ -1,4 +1,5 @@
 import { t } from "../../utils/i18n";
+import { copyFlatContentScope } from "./contentChrome";
 import { createSourcePopover } from "./sourcePopover";
 import { createContextIcon } from "./contextIcons";
 import { PARAGRAPH_CITATION_TOKEN_PATTERN } from "./quoteRenderPlan";
@@ -951,6 +952,7 @@ function replaceElementWithRenderedMarkdown(
     return;
   }
   const container = ownerDoc.createElement("div");
+  copyFlatContentScope(element, container);
   renderRenderedMarkdownInto(container, safeText, ownerDoc);
   const fragment = ownerDoc.createDocumentFragment();
   if (!container.firstChild) {
@@ -3407,10 +3409,12 @@ function renderQuoteCardMarkdownInto(
   target: HTMLElement,
   quoteText: string,
   ownerDoc: Document,
+  scopeSource?: Element,
 ): void {
   const safeText = sanitizeText(quoteText || "").trim();
   if (!safeText) return;
   const container = ownerDoc.createElement("div");
+  if (scopeSource) copyFlatContentScope(scopeSource, container);
   renderRenderedMarkdownInto(container, safeText, ownerDoc);
   if (!appendQuoteCardBodyContent(target, container)) {
     target.textContent = safeText;
@@ -3429,8 +3433,9 @@ function renderQuoteCardBodyMarkdown(
   body: HTMLElement,
   quoteText: string,
   ownerDoc: Document,
+  scopeSource?: Element,
 ): void {
-  renderQuoteCardMarkdownInto(body, quoteText, ownerDoc);
+  renderQuoteCardMarkdownInto(body, quoteText, ownerDoc, scopeSource);
 }
 
 // Markdown that sanitizes down to nothing still leaves nodes behind: the
@@ -3596,7 +3601,12 @@ function createQuoteCardElement(params: {
     if (bodyRendered) return;
     bodyRendered = true;
     if (!appendQuoteCardBodyContent(body, params.quoteContent)) {
-      renderQuoteCardBodyMarkdown(body, params.quoteText, params.ownerDoc);
+      renderQuoteCardBodyMarkdown(
+        body,
+        params.quoteText,
+        params.ownerDoc,
+        body.isConnected ? body : (renderScopeSource ?? undefined),
+      );
     }
   };
 
@@ -3965,10 +3975,12 @@ function buildQuoteBodyBatchMarkdown(
 function renderImmediateQuoteBodiesBatch(
   occurrences: QuoteRenderOccurrence[],
   ownerDoc: Document,
+  scopeSource?: Element,
 ): Map<string, DocumentFragment> {
   const immediate = occurrences.filter(needsImmediateQuoteRender);
   if (!immediate.length) return new Map();
   const batchContainer = ownerDoc.createElement("div");
+  if (scopeSource) copyFlatContentScope(scopeSource, batchContainer);
   try {
     renderRenderedMarkdownInto(
       batchContainer,
@@ -4058,7 +4070,35 @@ function liftQuoteCardsOutOfParagraph(paragraph: HTMLElement): void {
   parent.replaceChild(replacement, paragraph);
 }
 
+/**
+ * The answer element the quote cards are being built for. Cards that render
+ * their text right away (outside a document) copy its flat scope.
+ */
+let renderScopeSource: Element | null = null;
+
+function withRenderScope(scopeSource: Element, run: () => void): void {
+  const previous = renderScopeSource;
+  renderScopeSource = scopeSource;
+  try {
+    run();
+  } finally {
+    renderScopeSource = previous;
+  }
+}
+
 export function renderQuoteCitationPlaceholders(params: {
+  body: Element;
+  panelItem: Zotero.Item;
+  bubble: HTMLDivElement;
+  assistantMessage: Message;
+  pairedUserMessage?: Message | null;
+}): void {
+  withRenderScope(params.body, () =>
+    renderQuoteCitationPlaceholdersNow(params),
+  );
+}
+
+function renderQuoteCitationPlaceholdersNow(params: {
   body: Element;
   panelItem: Zotero.Item;
   bubble: HTMLDivElement;
@@ -4113,6 +4153,7 @@ export function renderQuoteCitationPlaceholders(params: {
   const immediateQuoteBodies = renderImmediateQuoteBodiesBatch(
     plan.occurrences,
     ownerDoc,
+    params.body,
   );
   const targets: Text[] = [];
   const walk = (node: Node): void => {
@@ -4462,6 +4503,16 @@ function buildQuoteCardBodyContentFromBlockquote(
 }
 
 export function decorateAssistantCitationLinks(params: {
+  body: Element;
+  panelItem: Zotero.Item;
+  bubble: HTMLDivElement;
+  assistantMessage: Message;
+  pairedUserMessage?: Message | null;
+}): void {
+  withRenderScope(params.body, () => decorateAssistantCitationLinksNow(params));
+}
+
+function decorateAssistantCitationLinksNow(params: {
   body: Element;
   panelItem: Zotero.Item;
   bubble: HTMLDivElement;

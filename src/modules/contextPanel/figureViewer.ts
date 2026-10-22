@@ -515,23 +515,22 @@ export function openFigureViewer(
 }
 
 /**
- * Turns a figure box in a side panel tab into a zoomable view: the picture
- * fits the tab, scroll or pinch zooms around the pointer, a drag moves it,
- * and a double click (or the fit button) fits it again.
+ * Fills a stage in a side panel tab with a zoomable view of `media`: scroll
+ * or pinch zooms around the pointer, a drag moves it, a double click (or the
+ * fit button) fits it again, and a small - % + fit pill sits in the stage's
+ * corner. The caller has already put `stage` in place; `stateRoot` gets the
+ * zoomed / dragging classes.
  */
-export function mountFigureTabZoom(
-  frame: HTMLElement,
-  image: HTMLImageElement,
+function fillTabZoomStage(
+  stateRoot: HTMLElement,
+  stage: HTMLElement,
+  media: HTMLElement | SVGElement,
+  naturalSize?: () => FigureViewSize | null,
 ): FigurePanZoom | null {
-  const doc = frame.ownerDocument;
+  const doc = stage.ownerDocument;
   const win = doc?.defaultView;
   if (!doc || !win) return null;
-  frame.classList.add("llm-figure-tab-frame");
-  const stage = htmlEl(doc, "div", "llm-figure-tab-stage");
-  image.replaceWith(stage);
-  image.classList.add("llm-figure-tab-image");
-  image.removeAttribute("title");
-  stage.appendChild(image);
+  stage.appendChild(media);
 
   const button = (className: string, label: string) => {
     const node = htmlEl(
@@ -553,8 +552,9 @@ export function mountFigureTabZoom(
 
   const panZoom = attachFigurePanZoom({
     stage,
-    image,
-    stateRoot: frame,
+    image: media,
+    naturalSize,
+    stateRoot,
     percent,
   });
   // The controls sit inside the stage: their presses are not drags.
@@ -584,4 +584,52 @@ export function mountFigureTabZoom(
     new ResizeObserverCtor(() => panZoom.relayout()).observe(stage);
   }
   return panZoom;
+}
+
+/**
+ * Turns a figure box in a side panel tab into a zoomable view: the picture
+ * fits the tab, scroll or pinch zooms around the pointer, a drag moves it,
+ * and a double click (or the fit button) fits it again.
+ */
+export function mountFigureTabZoom(
+  frame: HTMLElement,
+  image: HTMLImageElement,
+): FigurePanZoom | null {
+  const doc = frame.ownerDocument;
+  if (!doc?.defaultView) return null;
+  frame.classList.add("llm-figure-tab-frame");
+  const stage = htmlEl(doc, "div", "llm-figure-tab-stage");
+  image.replaceWith(stage);
+  image.classList.add("llm-figure-tab-image");
+  image.removeAttribute("title");
+  return fillTabZoomStage(frame, stage, image);
+}
+
+/**
+ * The same zoomable view for a diagram or drawing tab. `preview` is the
+ * element that held the rendered diagram (its children are replaced); `media`
+ * is the inline SVG or the picture. The view fills the preview.
+ */
+export function mountDiagramTabZoom(
+  preview: HTMLElement,
+  media: HTMLElement | SVGElement,
+): FigurePanZoom | null {
+  const doc = preview.ownerDocument;
+  if (!doc?.defaultView) return null;
+  preview.classList.add("llm-figure-tab-frame", "llm-diagram-tab-frame");
+  const stage = htmlEl(doc, "div", "llm-figure-tab-stage");
+  preview.replaceChildren(stage);
+  media.classList.add("llm-figure-tab-image", "llm-diagram-tab-media");
+  media.removeAttribute("title");
+  const isImage = media.localName.toLowerCase() === "img";
+  if (!isImage) {
+    // Diagram SVGs carry an inline max-width that would stop the zoom.
+    (media as SVGElement).style.maxWidth = "none";
+  }
+  return fillTabZoomStage(
+    preview,
+    stage,
+    media,
+    isImage ? undefined : () => inlineSvgNaturalSize(media as SVGElement),
+  );
 }

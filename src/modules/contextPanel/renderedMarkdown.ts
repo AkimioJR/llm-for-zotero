@@ -17,6 +17,7 @@ import {
   getCachedMermaidSvg,
   invalidateMermaidSvg,
 } from "./mermaidSvgCache";
+import { mountDiagramTabZoom } from "./figureViewer";
 import {
   openStandaloneMermaidWindow,
   openStandaloneSvgWindow,
@@ -33,6 +34,7 @@ import {
   ensureContentBar,
   isInFlatContentScope,
   isInStandaloneContentScope,
+  isInTabZoomScope,
   NUMERIC_CELL_CLASS,
   parseHtmlTitle,
   parseMermaidTitle,
@@ -1578,6 +1580,8 @@ function renderMermaidImagePreview(
     // The flat style has no corner buttons: the hover bar built beside the
     // preview opens the full view and the side panel.
     preview.replaceChildren(viewport);
+    // A side panel tab zooms the diagram like a figure tab does.
+    if (isInTabZoomScope(preview)) mountDiagramTabZoom(preview, svg);
     syncFlatPreviewBarState(preview);
   } else {
     const openButton = createMermaidZoomButton(
@@ -2892,6 +2896,10 @@ export function attachFlatPreviewChrome(root: ParentNode, doc: Document): void {
     if (!header || !body) continue;
     shell.dataset.flatChrome = "true";
     shell.classList.add("llm-codeblock-flat-preview");
+    if (kind === "svg" && isInTabZoomScope(preview)) {
+      const picture = preview.querySelector("img") as HTMLElement | null;
+      if (picture) mountDiagramTabZoom(preview, picture);
+    }
     block.classList.add("llm-copyable-flat-preview");
     if (!body.id) {
       body.id = `llm-codeblock-source-${++renderedCodeBlockSourceIdCounter}`;

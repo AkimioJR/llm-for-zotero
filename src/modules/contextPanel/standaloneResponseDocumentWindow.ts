@@ -84,6 +84,7 @@ function renderResponseDocument(
   const article = doc.createElementNS(HTML_NS, "article") as HTMLElement;
   article.className =
     "llm-plan-markdown llm-plan-document-window-content llm-response-document-window-content";
+  markStandaloneFlatScope(article);
   const title = doc.createElementNS(HTML_NS, "h1") as HTMLHeadingElement;
   title.className =
     "llm-plan-document-window-title llm-response-document-window-title";
@@ -112,6 +113,7 @@ function renderResponseDocument(
   };
   renderAssistantGeneratedImagesInto(article, target.generatedImages, doc, {
     wrapClassName: "llm-response-document-generated-images",
+    flatChrome: true,
     onImageActionStatus: setActionStatus,
   });
   root.replaceChildren(article);

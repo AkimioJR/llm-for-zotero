@@ -15,6 +15,7 @@
  * card is never shown for a path that never existed.
  */
 
+import { markStandaloneFlatScope } from "./contentChrome";
 import { t } from "../../utils/i18n";
 import { getIOUtils } from "../../utils/geckoFs";
 import {
@@ -752,6 +753,7 @@ async function mountCardPreview(
       box.className =
         "llm-saved-file-preview-markdown llm-standalone-side-panel-item-rendered";
       box.setAttribute("aria-hidden", "true");
+      markStandaloneFlatScope(box);
       // A thumbnail, not part of the answer: no →| buttons or Miscellaneous rows.
       box.setAttribute(NO_SIDE_ITEMS_ATTRIBUTE, "true");
       options.renderMarkdown(box, source.slice(0, CARD_MARKDOWN_PREVIEW_CHARS));

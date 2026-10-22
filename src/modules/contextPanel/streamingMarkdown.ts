@@ -1,5 +1,6 @@
 import { withChatContentScrollGuard } from "./chatScrollSnapshots";
 import { renderRenderedMarkdownInto } from "./renderedMarkdown";
+import { copyFlatContentScope } from "./contentChrome";
 import { splitSettledMarkdownBlocks } from "../../utils/markdown";
 import { createCoalescedFrameScheduler } from "./setupHandlers/controllers/uiSchedulingController";
 
@@ -52,6 +53,9 @@ export function renderStreamingMarkdownInto(
           }
           const block = doc.createElement("div");
           block.style.display = "contents";
+          // The block renders off-DOM, so flat hydrators cannot see the
+          // destination's scope. Copy it onto the block first.
+          copyFlatContentScope(target, block);
           renderRenderedMarkdownInto(block, raw, doc, {
             onAsyncContentRendered: onResize,
           });
