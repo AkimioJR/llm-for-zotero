@@ -56,9 +56,14 @@ describe("workflow: task progress button", function () {
     return {
       win: standaloneWindow(),
       root,
-      actions: Array.from(
-        doc.querySelectorAll(".llm-standalone-content-title-actions > button"),
-      ) as HTMLButtonElement[],
+      // The buttons a person sees: Pin this paper is hidden in a Library chat.
+      actions: (
+        Array.from(
+          doc.querySelectorAll(
+            ".llm-standalone-content-title-actions > button",
+          ),
+        ) as HTMLButtonElement[]
+      ).filter((node) => !node.hidden),
       button: doc.querySelector(
         `.llm-standalone-content-title-actions ${BUTTON}`,
       ) as HTMLButtonElement,
