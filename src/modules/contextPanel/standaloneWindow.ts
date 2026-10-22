@@ -4527,18 +4527,33 @@ export function openStandaloneChat(options?: {
           : null;
       // A pinned paper opened from the sidebar selects it in Zotero; until
       // that settles, other papers Zotero shows on the way are not followed.
+      // Arriving at the pinned paper settles it. A paper skipped meanwhile is
+      // checked again when the wait ends, so the window ends on what Zotero
+      // shows.
       let pinnedPaperNavigation: { paperID: number; until: number } | null =
         null;
+      let pinnedPaperRecheck: number | null = null;
       standaloneItemChangeHandler = (rawItem: Zotero.Item | null) => {
         if (cancelled || standaloneMode !== "paper") return;
         const target = resolvePaperSwitchTarget(rawItem);
         const newBasePaper = target.paperItem;
         if (pinnedPaperNavigation) {
-          if (Date.now() > pinnedPaperNavigation.until) {
+          const arrived =
+            Number(newBasePaper?.id || 0) === pinnedPaperNavigation.paperID;
+          if (arrived || Date.now() > pinnedPaperNavigation.until) {
             pinnedPaperNavigation = null;
-          } else if (
-            Number(newBasePaper?.id || 0) !== pinnedPaperNavigation.paperID
-          ) {
+          } else {
+            if (pinnedPaperRecheck === null) {
+              pinnedPaperRecheck = newWin.setTimeout(
+                () => {
+                  pinnedPaperRecheck = null;
+                  if (cancelled) return;
+                  pinnedPaperNavigation = null;
+                  standaloneItemChangeHandler?.(readSelectedTabItem());
+                },
+                Math.max(0, pinnedPaperNavigation.until - Date.now()) + 50,
+              );
+            }
             return;
           }
         }
