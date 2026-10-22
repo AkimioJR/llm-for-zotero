@@ -322,6 +322,8 @@ import {
   isWebAccessConfigured,
 } from "../webAccess/prefs";
 import { registerWebAccessPreferences } from "./preferences/webAccessPanel";
+import { registerSavedFilesPreferences } from "./preferences/savedFilesPanel";
+import { getAgentFilesRoot } from "../utils/agentFilesDirectory";
 import { TavilyClient } from "../webAccess/tavilyClient";
 import {
   clearLibraryTextIndex,
@@ -4045,6 +4047,10 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         ? [inputValue("notes-dir-nickname") || t("Notes"), notesPath]
         : [t("Not set")],
     );
+    const savedFilesRoot = getAgentFilesRoot();
+    setAgentRowSummary("saved-files", !!savedFilesRoot, [
+      savedFilesRoot || t("Not set"),
+    ]);
   };
 
   for (const row of Array.from(
@@ -5358,6 +5364,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       });
     }
   }
+
+  // ── Saved files: the agent's folder and its cleanup ─────────────
+  registerSavedFilesPreferences(doc, () => refreshAgentRowSummaries());
 
   // ── Semantic Search settings ───────────────────────────────────
   // Follows the same toggle + sub-settings pattern as MinerU.

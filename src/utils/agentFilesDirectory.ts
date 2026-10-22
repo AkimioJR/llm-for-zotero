@@ -39,11 +39,18 @@ const TITLE_STOP_WORDS = new Set([
 type ZoteroLike = {
   DataDirectory?: { dir?: string };
   Profile?: { dir?: string };
-  Prefs?: { get?: (key: string, global?: boolean) => unknown };
-  Items?: { get?: (id: number) => unknown };
+  Prefs?: {
+    get?: (key: string, global?: boolean) => unknown;
+    set?: (key: string, value: unknown, global?: boolean) => void;
+  };
+  Items?: {
+    get?: (id: number) => unknown;
+    getByLibraryAndKey?: (libraryID: number, key: string) => unknown;
+  };
   Libraries?: {
     userLibraryID?: number;
     getName?: (libraryID: number) => string;
+    getAll?: () => Array<{ libraryID?: number }>;
   };
 };
 
@@ -52,20 +59,35 @@ type ItemLike = {
   libraryID?: number;
   getField?: (field: string) => unknown;
   getCreators?: () => Array<{ lastName?: string; name?: string }>;
+  deleted?: boolean;
+  getDisplayTitle?: () => string;
 };
 
 function getZotero(): ZoteroLike | undefined {
   return (globalThis as typeof globalThis & { Zotero?: ZoteroLike }).Zotero;
 }
 
-/** The root every agent folder lives in; a pref may move it. */
-export function getAgentFilesRoot(): string | null {
+/** `<Zotero data dir>/llm-for-zotero-files`, used when no folder is set. */
+export function getDefaultAgentFilesRoot(): string | null {
   const zotero = getZotero();
-  const custom = zotero?.Prefs?.get?.(AGENT_FILES_DIR_PREF_KEY, true);
-  if (typeof custom === "string" && custom.trim()) return custom.trim();
   const base =
     zotero?.DataDirectory?.dir?.trim() || zotero?.Profile?.dir?.trim();
   return base ? joinLocalPath(base, AGENT_FILES_DIR_NAME) : null;
+}
+
+/** The folder the user set in Settings; empty means the default. */
+export function getAgentFilesRootPref(): string {
+  const value = getZotero()?.Prefs?.get?.(AGENT_FILES_DIR_PREF_KEY, true);
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function setAgentFilesRootPref(value: string): void {
+  getZotero()?.Prefs?.set?.(AGENT_FILES_DIR_PREF_KEY, value.trim(), true);
+}
+
+/** The root every agent folder lives in; Settings may move it. */
+export function getAgentFilesRoot(): string | null {
+  return getAgentFilesRootPref() || getDefaultAgentFilesRoot();
 }
 
 /** Removes what a file name cannot hold on macOS, Windows, or Linux. */
@@ -228,4 +250,177 @@ export async function buildAgentFilesInstructionForScope(scope: {
     folder = null;
   }
   return buildAgentFilesInstruction(folder);
+}
+
+/** What the cleanup list shows for one folder. */
+export type AgentFilesFolderSummary = {
+  path: string;
+  name: string;
+  /** "paper": its paper is in the library; "trash": in the trash; "gone":
+   * left over, its paper deleted for good; "library": a Library chat folder;
+   * "unknown": a folder the plugin did not name. */
+  status: "paper" | "trash" | "gone" | "library" | "unknown";
+  /** The paper's title now, when it still exists. */
+  title?: string;
+  fileCount: number;
+  bytes: number;
+};
+
+/** The key a folder was named by: "ABCD1234" in "ABCD1234 - Some name". */
+export function folderKeyOf(folderName: string): string {
+  return folderName.split(" - ")[0].trim();
+}
+
+function findItemByKey(key: string): ItemLike | null {
+  const zotero = getZotero();
+  const libraries = zotero?.Libraries?.getAll?.() || [];
+  for (const library of libraries) {
+    const libraryID = Number(library?.libraryID);
+    if (!libraryID) continue;
+    try {
+      const item = zotero?.Items?.getByLibraryAndKey?.(libraryID, key) as
+        | ItemLike
+        | false
+        | undefined;
+      if (item) return item;
+    } catch {
+      /* try the next library */
+    }
+  }
+  return null;
+}
+
+/** Files and bytes under a folder, every level down. */
+async function measureFolder(
+  path: string,
+): Promise<{ fileCount: number; bytes: number }> {
+  const IOUtils = getIOUtils();
+  let fileCount = 0;
+  let bytes = 0;
+  const visit = async (directory: string) => {
+    let children: string[] = [];
+    try {
+      children = (await IOUtils?.getChildren?.(directory)) || [];
+    } catch {
+      return;
+    }
+    for (const child of children) {
+      try {
+        const stat = await IOUtils?.stat?.(child);
+        if (stat?.type === "directory") {
+          await visit(child);
+        } else if (stat) {
+          const name = child.split(/[\\/]/).pop() || "";
+          if (name === ".llm-files.json") continue;
+          fileCount += 1;
+          bytes += Number(stat.size) || 0;
+        }
+      } catch {
+        /* skip what cannot be read */
+      }
+    }
+  };
+  await visit(path);
+  return { fileCount, bytes };
+}
+
+const STATUS_ORDER: Record<AgentFilesFolderSummary["status"], number> = {
+  gone: 0,
+  trash: 1,
+  unknown: 2,
+  paper: 3,
+  library: 4,
+};
+
+/**
+ * Every folder in the root with its size and whether its paper still exists:
+ * left-over folders first, then the largest.
+ */
+export async function listAgentFilesFolders(
+  root: string | null = getAgentFilesRoot(),
+): Promise<AgentFilesFolderSummary[]> {
+  const IOUtils = getIOUtils();
+  if (!root || !IOUtils?.getChildren) return [];
+  try {
+    if (!(await IOUtils.exists?.(root))) return [];
+  } catch {
+    return [];
+  }
+  let children: string[] = [];
+  try {
+    children = await IOUtils.getChildren(root);
+  } catch {
+    return [];
+  }
+  const summaries: AgentFilesFolderSummary[] = [];
+  for (const child of children) {
+    const name = child.split(/[\\/]/).pop() || "";
+    if (!name || name.startsWith(".")) continue;
+    try {
+      if ((await IOUtils.stat?.(child))?.type !== "directory") continue;
+    } catch {
+      continue;
+    }
+    const key = folderKeyOf(name);
+    let status: AgentFilesFolderSummary["status"] = "unknown";
+    let title: string | undefined;
+    if (
+      key === LIBRARY_FILES_FOLDER ||
+      key.startsWith(`${LIBRARY_FILES_FOLDER} `)
+    ) {
+      status = "library";
+    } else if (/^[A-Z0-9]{8}$/.test(key)) {
+      const item = findItemByKey(key);
+      if (!item) status = "gone";
+      else {
+        status = item.deleted ? "trash" : "paper";
+        try {
+          title =
+            item.getDisplayTitle?.() || String(item.getField?.("title") || "");
+        } catch {
+          title = undefined;
+        }
+      }
+    }
+    summaries.push({
+      path: child,
+      name,
+      status,
+      ...(title ? { title } : {}),
+      ...(await measureFolder(child)),
+    });
+  }
+  return summaries.sort(
+    (a, b) =>
+      STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.bytes - a.bytes,
+  );
+}
+
+/** Deletes the folders the user picked. Only folders inside the root. */
+export async function deleteAgentFilesFolders(
+  paths: readonly string[],
+  root: string | null = getAgentFilesRoot(),
+): Promise<{ deleted: string[]; failed: string[] }> {
+  const IOUtils = getIOUtils();
+  const deleted: string[] = [];
+  const failed: string[] = [];
+  const base = (root || "").replace(/[\\/]+$/, "");
+  for (const path of paths) {
+    const inside =
+      base &&
+      path !== base &&
+      (path.startsWith(`${base}/`) || path.startsWith(`${base}\\`)) &&
+      !/[\\/]\.\.(?:[\\/]|$)/.test(path);
+    if (!inside || !IOUtils?.remove) {
+      failed.push(path);
+      continue;
+    }
+    try {
+      await IOUtils.remove(path, { recursive: true, ignoreAbsent: true });
+      deleted.push(path);
+    } catch {
+      failed.push(path);
+    }
+  }
+  return { deleted, failed };
 }

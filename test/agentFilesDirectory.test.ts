@@ -3,7 +3,9 @@ import {
   buildAgentFilesInstruction,
   buildPaperFolderName,
   buildShortPaperName,
+  deleteAgentFilesFolders,
   isFolderForKey,
+  listAgentFilesFolders,
   resolveAgentFilesFolder,
   sanitizeFolderNamePart,
 } from "../src/utils/agentFilesDirectory";
@@ -121,5 +123,94 @@ describe("Agent saved-files folder", function () {
       buildAgentFilesInstruction(null),
       "Save files for this chat in",
     );
+  });
+});
+
+describe("Saved files cleanup", function () {
+  const globals = globalThis as typeof globalThis & {
+    Zotero?: unknown;
+    IOUtils?: unknown;
+  };
+  let savedZotero: unknown;
+  let savedIOUtils: unknown;
+  let removed: string[];
+  beforeEach(function () {
+    savedZotero = globals.Zotero;
+    savedIOUtils = globals.IOUtils;
+    removed = [];
+    const root = "/data/llm-for-zotero-files";
+    const tree: Record<string, { dir?: boolean; size?: number }> = {
+      [root]: { dir: true },
+      [`${root}/AAAA1111 - Kept paper`]: { dir: true },
+      [`${root}/AAAA1111 - Kept paper/page.html`]: { size: 2048 },
+      [`${root}/AAAA1111 - Kept paper/.llm-files.json`]: { size: 99 },
+      [`${root}/BBBB2222 - Deleted paper`]: { dir: true },
+      [`${root}/BBBB2222 - Deleted paper/old.html`]: { size: 10 },
+      [`${root}/CCCC3333 - Trashed paper`]: { dir: true },
+      [`${root}/Library`]: { dir: true },
+      [`${root}/notes.txt`]: { size: 1 },
+    };
+    globals.Zotero = {
+      DataDirectory: { dir: "/data" },
+      Prefs: { get: () => undefined },
+      Libraries: { getAll: () => [{ libraryID: 1 }] },
+      Items: {
+        getByLibraryAndKey: (_libraryID: number, key: string) =>
+          key === "AAAA1111"
+            ? { deleted: false, getDisplayTitle: () => "Kept paper title" }
+            : key === "CCCC3333"
+              ? { deleted: true, getDisplayTitle: () => "Trashed" }
+              : false,
+      },
+    };
+    globals.IOUtils = {
+      exists: async (path: string) => path in tree,
+      stat: async (path: string) => {
+        const entry = tree[path];
+        if (!entry) throw new Error("missing");
+        return { type: entry.dir ? "directory" : "regular", size: entry.size };
+      },
+      getChildren: async (path: string) =>
+        Object.keys(tree).filter(
+          (key) =>
+            key.startsWith(`${path}/`) &&
+            !key.slice(path.length + 1).includes("/"),
+        ),
+      remove: async (path: string) => {
+        removed.push(path);
+      },
+    };
+  });
+  afterEach(function () {
+    globals.Zotero = savedZotero;
+    globals.IOUtils = savedIOUtils;
+  });
+
+  it("lists left-over folders first, with size and paper status", async function () {
+    const folders = await listAgentFilesFolders();
+    assert.deepEqual(
+      folders.map((folder) => [folder.name, folder.status, folder.fileCount]),
+      [
+        ["BBBB2222 - Deleted paper", "gone", 1],
+        ["CCCC3333 - Trashed paper", "trash", 0],
+        ["AAAA1111 - Kept paper", "paper", 1],
+        ["Library", "library", 0],
+      ],
+    );
+    assert.equal(folders[2].bytes, 2048);
+    assert.equal(folders[2].title, "Kept paper title");
+  });
+
+  it("deletes only folders inside the saved-files root", async function () {
+    const result = await deleteAgentFilesFolders([
+      "/data/llm-for-zotero-files/BBBB2222 - Deleted paper",
+      "/data/llm-for-zotero-files",
+      "/data/storage",
+      "/data/llm-for-zotero-files/../storage",
+    ]);
+    assert.deepEqual(removed, [
+      "/data/llm-for-zotero-files/BBBB2222 - Deleted paper",
+    ]);
+    assert.equal(result.failed.length, 3);
   });
 });

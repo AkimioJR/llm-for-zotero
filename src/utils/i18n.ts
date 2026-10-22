@@ -1590,6 +1590,24 @@ const zhCN: Record<string, string> = {
   "This file could not be read.": "无法读取此文件。",
   "Load again from disk": "从磁盘重新载入",
   "Loaded again": "已重新载入",
+  // Settings > Saved files.
+  "Left over: its paper was deleted": "残留：对应文献已删除",
+  "Its paper is in the trash": "对应文献在回收站中",
+  Paper: "文献",
+  "Not made by the plugin": "并非插件创建",
+  "Files already saved stay where they are; new files go here.":
+    "已保存的文件保留在原处；新文件保存到这里。",
+  "Default:": "默认：",
+  "Enter a full folder path, such as /Users/me/Documents/LLM files.":
+    "请输入完整的文件夹路径，例如 /Users/me/Documents/LLM files。",
+  "No saved files yet.": "还没有保存的文件。",
+  folders: "个文件夹",
+  file: "个文件",
+  files: "个文件",
+  "Checking…": "正在检查…",
+  "Delete the selected folders and every file in them? This cannot be undone.":
+    "删除所选文件夹及其中的所有文件？此操作无法撤销。",
+  "Could not delete:": "无法删除：",
   "Show in chat": "在对话中显示",
   "The source message is not in the main chat now.":
     "来源消息当前不在主对话中。",
