@@ -21,6 +21,7 @@
  * Pure decisions live in standaloneSidePanelState.ts; this module owns the
  * DOM and the panel lifecycles.
  */
+import { markStandaloneFlatScope } from "./contentChrome";
 import { pendingDeletionStore } from "../../core/conversations/pendingDeletionStore";
 import { appLogger } from "../../core/logging";
 import { createElement } from "../../utils/domHelpers";
@@ -1825,8 +1826,10 @@ export function createStandaloneSidePanel(
       body.replaceChildren();
       if (kind === "file") {
         void renderSavedFileInto(doc, body, filePath, {
-          markdown: (target, markdown) =>
-            renderRenderedMarkdownInto(target, markdown, doc),
+          markdown: (target, markdown) => {
+            markStandaloneFlatScope(target);
+            renderRenderedMarkdownInto(target, markdown, doc);
+          },
         });
         return;
       }
@@ -1845,6 +1848,8 @@ export function createStandaloneSidePanel(
         "div",
         "llm-standalone-side-panel-item-rendered",
       );
+      // The flat style, as in chat answers: no container, one hover bar.
+      markStandaloneFlatScope(box);
       body.appendChild(box);
       if (request.renderBody) {
         request.renderBody(doc, box);

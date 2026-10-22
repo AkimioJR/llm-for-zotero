@@ -359,6 +359,11 @@ export type GeneratedImageRenderOptions = {
    * the flat scope class.
    */
   flatChrome?: boolean;
+  /**
+   * Flat style only: the bar has Open full view although a click on the image
+   * does not open it (the side panel tab, where a click starts a drag).
+   */
+  fullViewInBar?: boolean;
 };
 
 /** A figure box can reopen its page only when it knows the paper and a page. */
@@ -837,7 +842,9 @@ export function createGeneratedImageFrame(
       image,
       doc,
       options,
-      options.zoomOnClick !== false ? openFullView : null,
+      options.zoomOnClick !== false || options.fullViewInBar
+        ? openFullView
+        : null,
     );
     return figure;
   }
@@ -877,7 +884,8 @@ export function buildFigureSidePanelRequest(
         ...options,
         allowMoveToSidePanel: false,
         zoomOnClick: false,
-        flatChrome: false,
+        flatChrome: true,
+        fullViewInBar: true,
       });
       if (!frame) return;
       root.appendChild(frame);

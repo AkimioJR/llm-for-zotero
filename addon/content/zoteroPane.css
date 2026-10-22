@@ -201,7 +201,8 @@
 /* Code block and Mermaid colours, shared by the chat panel and the
  * standalone side panel's item tabs (which sit outside .llm-panel). */
 .llm-panel,
-.llm-standalone-side-panel-item-rendered {
+.llm-standalone-side-panel-item-rendered,
+.llm-plan-document-window-root {
   --llm-codeblock-bg: color-mix(
     in srgb,
     var(--material-background, #ffffff) 92%,
@@ -9969,8 +9970,9 @@ label.llm-search-results-item:hover {
 /* ------------------------------------------------------------------ *
  * Flat answer style: rich content in chat answers has no container, a
  * caption line under it, and one floating hover bar. `.llm-content-flat`
- * marks the answer text root; the side panel item tabs, the agent trace and
- * the document windows do not carry it and keep their framed look.
+ * marks the rendered text root. The chat answers, the side panel item tabs,
+ * the full-view Markdown window and the document windows carry it; the agent
+ * trace does not and keeps its compact framed look.
  * ------------------------------------------------------------------ */
 
 /* The hover bar (shared by every kind of content). The block must be
@@ -11002,6 +11004,63 @@ label.llm-search-results-item:hover {
   flex-direction: column;
 }
 
+/* Flat style outside the chat. The side panel tab fills its width (the 520px
+ * cap is for answers); a code tab is never folded (the script skips the fold).
+ * Document windows take the surface from the text colour, so it follows the
+ * theme the window copied from the chat. */
+.llm-plan-document-window-root {
+  --llm-flat-surface: color-mix(in srgb, var(--fill-primary) 5%, transparent);
+}
+
+.llm-standalone-side-panel-item-body
+  .llm-content-standalone
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-mermaid-preview
+  .llm-mermaid-static-viewport {
+  max-width: none;
+}
+
+.llm-standalone-side-panel-item-body
+  .llm-content-standalone.llm-standalone-side-panel-item-rendered
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-svg-preview
+  img {
+  width: 100%;
+  max-width: 100%;
+  max-height: none;
+  height: auto;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
+  .llm-copyable.llm-copyable-flat-preview,
+.llm-standalone-side-panel-item-body[data-item-kind="svg"]
+  .llm-copyable.llm-copyable-flat-preview {
+  margin-top: 0;
+}
+
+/* Figure tab: the flat figure becomes the zoom frame (mountFigureTabZoom).
+ * The bar and the caption line stay on the figure; the stage clips only the
+ * picture. */
+.llm-standalone-side-panel-item-body[data-item-kind="figure"]
+  .llm-content-flat.llm-standalone-side-panel-item-rendered
+  .llm-assistant-generated-image-frame.llm-flat-figure.llm-figure-tab-frame {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+}
+
+.llm-standalone-side-panel-item-body[data-item-kind="figure"]
+  .llm-flat-figure.llm-figure-tab-frame
+  > .llm-content-caption {
+  flex: 0 0 auto;
+}
+
 /* The note kind scrolls as a document: a centred column of readable width. */
 .llm-viewer-window-document {
   box-sizing: border-box;
@@ -11023,6 +11082,7 @@ label.llm-search-results-item:hover {
 }
 
 .llm-mermaid-theme-dark .llm-viewer-window-markdown {
+  --llm-flat-surface: color-mix(in srgb, #fff 4.5%, transparent);
   --llm-codeblock-bg: #202020;
   --llm-codeblock-border: color-mix(in srgb, #fff 8%, transparent);
   --llm-codeblock-header-text: #d4d4d8;
@@ -18704,13 +18764,8 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   min-width: 0;
 }
 
-.llm-standalone-side-panel-item-body[data-item-kind="mermaid"]
-  .llm-mermaid-preview,
-.llm-standalone-side-panel-item-body[data-item-kind="svg"] .llm-svg-preview {
-  min-height: 60%;
-}
-
-/* A figure tab fits the picture to the tab; scroll or pinch zooms, a drag
+/* A figure tab uses the flat figure chrome (hover bar, caption line) and fits
+   the picture to the tab; scroll or pinch zooms, a drag
    moves it (figureViewer.ts mountFigureTabZoom). */
 .llm-standalone-side-panel-item-body[data-item-kind="figure"] {
   overflow: hidden;

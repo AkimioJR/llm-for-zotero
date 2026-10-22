@@ -10,6 +10,24 @@ export const CONTENT_BAR_BUTTON_CLASS = "llm-content-bar-btn";
 export const CONTENT_CAPTION_CLASS = "llm-content-caption";
 /** Marks the root of rendered answer text that uses the flat style. */
 export const CONTENT_FLAT_SCOPE_CLASS = "llm-content-flat";
+/**
+ * Marks a flat reading surface that is not the chat: a side panel tab, the
+ * full-view Markdown window or a document window. There the bar has no
+ * "Move to side panel" button, code blocks are not folded, and the bar's copy
+ * button copies by itself (the chat's click handler does not reach it).
+ */
+export const CONTENT_STANDALONE_SCOPE_CLASS = "llm-content-standalone";
+
+/** Both scope classes, as one class list for a standalone reading surface. */
+export const STANDALONE_FLAT_SCOPE_CLASSES = `${CONTENT_FLAT_SCOPE_CLASS} ${CONTENT_STANDALONE_SCOPE_CLASS}`;
+
+/** Gives a standalone reading surface the flat style. */
+export function markStandaloneFlatScope(element: Element): void {
+  element.classList.add(
+    CONTENT_FLAT_SCOPE_CLASS,
+    CONTENT_STANDALONE_SCOPE_CLASS,
+  );
+}
 
 export type ContentBarButtonSpec = {
   className: string;
@@ -37,6 +55,11 @@ function findDirectChild(parent: Element, className: string): Element | null {
 /** True when `element` sits inside answer text that uses the flat style. */
 export function isInFlatContentScope(element: Element): boolean {
   return Boolean(element.closest?.(`.${CONTENT_FLAT_SCOPE_CLASS}`));
+}
+
+/** True when `element` sits on a flat reading surface outside the chat. */
+export function isInStandaloneContentScope(element: Element): boolean {
+  return Boolean(element.closest?.(`.${CONTENT_STANDALONE_SCOPE_CLASS}`));
 }
 
 /** The block's hover bar, created as a direct child on first use. */

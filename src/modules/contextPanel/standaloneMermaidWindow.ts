@@ -1,3 +1,4 @@
+import { markStandaloneFlatScope } from "./contentChrome";
 import { config } from "../../../package.json";
 import { installStandaloneWindowTitlebar } from "./standaloneWindowTitlebar";
 import { HTML_NS } from "../../utils/domHelpers";
@@ -246,6 +247,7 @@ function buildViewerContent(
   const article = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
   article.className =
     "llm-viewer-window-markdown llm-standalone-side-panel-item-rendered";
+  markStandaloneFlatScope(article);
   scroller.appendChild(article);
   payload.renderMarkdown(article, payload.markdown);
   return { content: { buttons: [], body: scroller }, label: "note" };

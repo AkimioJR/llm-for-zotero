@@ -1,3 +1,4 @@
+import { markStandaloneFlatScope } from "./contentChrome";
 import { appLogger } from "../../core/logging";
 import { HTML_NS } from "../../utils/domHelpers";
 import type { Message } from "./types";
@@ -92,6 +93,7 @@ function renderResponseDocument(
   if (target.contentText.trim()) {
     const content = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
     content.className = "llm-response-document-markdown";
+    markStandaloneFlatScope(content);
     renderResponseMarkdownInto({ body: root, bubble: content, target });
     article.appendChild(content);
   }

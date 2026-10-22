@@ -13017,10 +13017,10 @@ describe("the shared figure box", function () {
         1,
       );
       assert.lengthOf(target.findAllByClass("llm-side-move-btn"), 0);
-      assert.lengthOf(
-        target.findAllByClass("llm-generated-image-action-jump"),
-        1,
-      );
+      // The tab uses the flat chrome: a Go to page caption link and a bar
+      // with Open full view, still no →| button.
+      assert.lengthOf(target.findAllByClass("llm-content-caption-link"), 1);
+      assert.lengthOf(target.findAllByClass("llm-content-bar-fullview"), 1);
     } finally {
       unregisterSidePanelItemHost(doc, host);
     }

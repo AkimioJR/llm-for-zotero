@@ -32,6 +32,7 @@ import {
   detectNumericColumns,
   ensureContentBar,
   isInFlatContentScope,
+  isInStandaloneContentScope,
   NUMERIC_CELL_CLASS,
   parseHtmlTitle,
   parseMermaidTitle,
@@ -43,6 +44,7 @@ import {
   pickGeneratedImageSavePath,
 } from "./generatedImageRender";
 import { openFigureViewer } from "./figureViewer";
+import { copyTextToClipboard } from "./clipboard";
 import { saveGeneratedImageAssetToPath } from "../../services/images/generatedImageAssets";
 import {
   NO_SIDE_ITEMS_ATTRIBUTE,
@@ -85,7 +87,7 @@ const MERMAID_WHEEL_ZOOM_SENSITIVITY = 0.002;
 type MermaidThemeKey = "light" | "dark";
 // Bumped when the palette changes so cached SVGs (keyed by version, theme
 // and source) and rendered previews are drawn again.
-const MERMAID_RENDER_VERSION = "4";
+const MERMAID_RENDER_VERSION = "5";
 const MERMAID_VENDOR_SCRIPT_URL = `chrome://${config.addonRef}/content/vendor/mermaid/mermaid.min.js`;
 
 /**
@@ -1745,6 +1747,36 @@ function attachRenderedHtmlPreviews(root: ParentNode, doc: Document): void {
 }
 
 /**
+ * True where "Move to side panel" does not belong: inside a block that opted
+ * out of side items, and on flat reading surfaces outside the chat (a side
+ * panel tab is already the side panel).
+ */
+function hasNoSideItems(element: Element): boolean {
+  return isOutsideAnswerContent(element) || isInStandaloneContentScope(element);
+}
+
+/**
+ * The chat answers copy through a click handler on the chat box. A bar copy
+ * button on a standalone reading surface sits outside it, so it copies the
+ * block's source itself. It stops the click, so the chat's handler never runs
+ * for it twice.
+ */
+function bindStandaloneCopyButton(button: HTMLElement): void {
+  if (!isInStandaloneContentScope(button)) return;
+  if (button.dataset.standaloneCopyBound === "true") return;
+  button.dataset.standaloneCopyBound = "true";
+  button.addEventListener("click", (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const copyable = button.closest(".llm-copyable") as HTMLElement | null;
+    const source = copyable?.dataset.llmCopySource || "";
+    if (!source) return;
+    copyable?.setAttribute("data-copy-feedback", "copied");
+    void copyTextToClipboard(button, source).catch(() => undefined);
+  });
+}
+
+/**
  * "Move to side panel" next to the open button, in the same corner. It exists
  * only where the document has a side panel (the standalone window).
  */
@@ -1754,7 +1786,7 @@ function attachSideItemMoveButton(
   kind: "mermaid" | "svg" | "html",
   source: string,
 ): void {
-  if (isOutsideAnswerContent(preview)) return;
+  if (hasNoSideItems(preview)) return;
   preview.setAttribute(SIDE_ITEM_KIND_ATTRIBUTE, kind);
   appendMoveToSidePanelButton({
     doc,
@@ -1783,7 +1815,7 @@ function attachRenderedCodeBlockMoveButtons(
     }
     const header = getDirectChildWithClass(shell, "llm-codeblock-header");
     const body = getDirectChildWithClass(shell, "llm-codeblock-body");
-    if (!header || !body || isOutsideAnswerContent(shell)) continue;
+    if (!header || !body || hasNoSideItems(shell)) continue;
     shell.setAttribute(SIDE_ITEM_KIND_ATTRIBUTE, "code");
     appendMoveToSidePanelButton({
       doc,
@@ -1988,12 +2020,164 @@ function normalizeMermaidStyleDefinitionForTheme(
   return `${trimmed},color:#f8fafc`;
 }
 
+type Rgb = { r: number; g: number; b: number };
+
+function parseMermaidColor(value: string): Rgb | null {
+  const text = value
+    .trim()
+    .replace(/\s*!important\s*$/i, "")
+    .toLowerCase();
+  if (text === "white") return { r: 255, g: 255, b: 255 };
+  const hex = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/);
+  if (hex) {
+    const digits =
+      hex[1].length === 3
+        ? hex[1]
+            .split("")
+            .map((c) => c + c)
+            .join("")
+        : hex[1];
+    return {
+      r: parseInt(digits.slice(0, 2), 16),
+      g: parseInt(digits.slice(2, 4), 16),
+      b: parseInt(digits.slice(4, 6), 16),
+    };
+  }
+  const rgb = text.match(
+    /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/,
+  );
+  if (rgb) {
+    return { r: +rgb[1], g: +rgb[2], b: +rgb[3] };
+  }
+  return null;
+}
+
+/** Hue (degrees), saturation and lightness (0..1) of an sRGB colour. */
+function rgbToHsl(color: Rgb): { h: number; s: number; l: number } {
+  const r = color.r / 255;
+  const g = color.g / 255;
+  const b = color.b / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) return { h: 0, s: 0, l };
+  const s = d / (1 - Math.abs(2 * l - 1));
+  let h: number;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return { h: (h * 60 + 360) % 360, s, l };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  const [r, g, b] =
+    h < 60
+      ? [c, x, 0]
+      : h < 120
+        ? [x, c, 0]
+        : h < 180
+          ? [0, c, x]
+          : h < 240
+            ? [0, x, c]
+            : h < 300
+              ? [x, 0, c]
+              : [c, 0, x];
+  const hex = (v: number) =>
+    Math.round((v + m) * 255)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
+}
+
+const MERMAID_LIGHT_FILL_MIN_LIGHTNESS = 0.62;
+const MERMAID_DARK_TEXT = "#e6e6e6";
+
+function isLightMermaidFill(color: Rgb): boolean {
+  return rgbToHsl(color).l >= MERMAID_LIGHT_FILL_MIN_LIGHTNESS;
+}
+
+/**
+ * One classDef or style definition ("fill:#ffd6e0,stroke:#333,color:#000")
+ * for the dark theme: a light fill becomes a dark tint of the same hue, the
+ * outline turns into a mid-light tone of that hue (a deliberate coloured
+ * outline stays), and dark or missing text turns light. A definition with a
+ * dark or no fill stays as it is.
+ */
+function darkenMermaidDefinition(definition: string): string {
+  const fillMatch = definition.match(/(^|[,;\s])fill\s*:\s*([^,;]+)/i);
+  if (!fillMatch) return definition;
+  const fill = parseMermaidColor(fillMatch[2]);
+  if (!fill || !isLightMermaidFill(fill)) return definition;
+  const { h, s } = rgbToHsl(fill);
+  const chromatic = s >= 0.12;
+  const darkFill = chromatic ? hslToHex(h, 0.22, 0.19) : "#2b2b2b";
+  const outline = chromatic ? hslToHex(h, 0.45, 0.62) : "#71717a";
+  const important = /!important/i.test(fillMatch[2]) ? " !important" : "";
+  let result = definition.replace(
+    /(^|[,;\s])fill\s*:\s*[^,;]+/i,
+    (_all, lead) => `${lead}fill:${darkFill}${important}`,
+  );
+  const strokeMatch = result.match(/(^|[,;\s])stroke\s*:\s*([^,;]+)/i);
+  if (strokeMatch) {
+    const stroke = parseMermaidColor(strokeMatch[2]);
+    const hsl = stroke ? rgbToHsl(stroke) : null;
+    const deliberate =
+      hsl && hsl.s >= 0.3 && hsl.l >= 0.35 && hsl.l <= 0.8 ? true : false;
+    if (!deliberate) {
+      result = result.replace(
+        /(^|[,;\s])stroke\s*:\s*[^,;]+/i,
+        (_all, lead) => `${lead}stroke:${outline}${important}`,
+      );
+    }
+  } else {
+    result = `${result.replace(/[;\s]+$/, "")},stroke:${outline}${
+      /;\s*$/.test(definition) ? ";" : ""
+    }`;
+  }
+  const colorMatch = result.match(/(^|[,;\s])color\s*:\s*([^,;]+)/i);
+  const text = colorMatch ? parseMermaidColor(colorMatch[2]) : null;
+  if (!colorMatch) {
+    const trailing = /;\s*$/.test(result);
+    result = `${result.replace(/[;\s]+$/, "")},color:${MERMAID_DARK_TEXT}${
+      trailing ? ";" : ""
+    }`;
+  } else if (!text || rgbToHsl(text).l < 0.5) {
+    result = result.replace(
+      /(^|[,;\s])color\s*:\s*[^,;]+/i,
+      (_all, lead) => `${lead}color:${MERMAID_DARK_TEXT}`,
+    );
+  }
+  return result;
+}
+
+/**
+ * Dark theme only: a diagram's own `classDef` and `style` lines often use
+ * light pastel fills that glare on a dark page. Each light fill becomes a dark
+ * tint that keeps its hue, with a matching outline and light text. The
+ * theme's own node colours are not in the source and are not touched.
+ */
+export function remapMermaidLightFillsForDark(source: string): string {
+  return source
+    .replace(
+      /^(\s*classDef\s+[^\s]+\s+)([^\n]+)$/gim,
+      (_line, prefix, def) => `${prefix}${darkenMermaidDefinition(def)}`,
+    )
+    .replace(
+      /^(\s*style\s+[^\s]+\s+)([^\n]+)$/gim,
+      (_line, prefix, def) => `${prefix}${darkenMermaidDefinition(def)}`,
+    );
+}
+
 export function normalizeMermaidSourceForTheme(
   source: string,
   themeKey: MermaidThemeKey,
 ): string {
   const subgraphIds = getMermaidSubgraphIds(source);
-  return source
+  const normalized = source
     .replace(/^\s*%%\{\s*init\s*:[^\n]*\}%%\s*\r?\n?/gim, (directive) =>
       MERMAID_LOCKED_INIT_DIRECTIVE_KEYS.test(directive) ? "" : directive,
     )
@@ -2016,6 +2200,9 @@ export function normalizeMermaidSourceForTheme(
         )}`;
       },
     );
+  return themeKey === "dark"
+    ? remapMermaidLightFillsForDark(normalized)
+    : normalized;
 }
 
 function getMermaidSvgPolishCss(themeKey: MermaidThemeKey): string {
@@ -2548,6 +2735,7 @@ export function attachFlatCodeBlockChrome(
       copyButton.title = label;
       copyButton.setAttribute("aria-label", label);
       adoptContentBarButton(bar, copyButton);
+      bindStandaloneCopyButton(copyButton);
     }
     const moveButton = getDirectChildWithClass(
       header,
@@ -2562,7 +2750,11 @@ export function attachFlatCodeBlockChrome(
     }
 
     const lineCount = countCodeLines(body.textContent || "");
-    if (lineCount >= FLAT_CODE_FOLD_MIN_LINES) {
+    // A reading surface outside the chat (a side panel tab) shows it all.
+    if (
+      lineCount >= FLAT_CODE_FOLD_MIN_LINES &&
+      !isInStandaloneContentScope(shell)
+    ) {
       const foldButton = doc.createElement("button") as HTMLButtonElement;
       foldButton.type = "button";
       foldButton.className = "llm-content-fold-btn";
@@ -2748,6 +2940,7 @@ export function attachFlatPreviewChrome(root: ParentNode, doc: Document): void {
       copyButton.title = label;
       copyButton.setAttribute("aria-label", label);
       adoptContentBarButton(bar, copyButton);
+      bindStandaloneCopyButton(copyButton);
     }
 
     const readSvgMarkup = (): string | null =>
@@ -2819,7 +3012,7 @@ export function attachFlatPreviewChrome(root: ParentNode, doc: Document): void {
     if (kind === "mermaid") fullViewButton.dataset.needsRender = "true";
 
     // 3. The side panel (standalone window only).
-    if (!isOutsideAnswerContent(preview)) {
+    if (!hasNoSideItems(preview)) {
       const sideSource =
         kind === "mermaid"
           ? preview.dataset.llmMermaidSource || ""
@@ -3074,6 +3267,7 @@ export function attachFlatTableChrome(root: ParentNode, doc: Document): void {
       copyButton.title = label;
       copyButton.setAttribute("aria-label", label);
       adoptContentBarButton(bar, copyButton);
+      bindStandaloneCopyButton(copyButton);
     }
     const csvButton = appendContentBarButton(
       bar,
@@ -3122,6 +3316,7 @@ export function attachFlatMathChrome(root: ParentNode, doc: Document): void {
     copyButton.title = label;
     copyButton.setAttribute("aria-label", label);
     adoptContentBarButton(bar, copyButton);
+    bindStandaloneCopyButton(copyButton);
   }
 }
 
