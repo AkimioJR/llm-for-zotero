@@ -412,7 +412,16 @@ import {
 } from "./quoteValidation/locationWriteBack";
 import { applyStableAnimationPhase } from "./stableAnimationPhase";
 import { stripReceiptStatusForDisplay } from "../../agent/contracts/actionEvaluation";
-import { renderRenderedMarkdownInto } from "./renderedMarkdown";
+import {
+  openHtmlPreviewViewer,
+  renderRenderedMarkdownInto,
+} from "./renderedMarkdown";
+import {
+  buildTurnWindow,
+  mountSavedFileCards,
+  resolveAgentFilesTargetForPanelItem,
+  resolveHomeDir,
+} from "./savedFileCards";
 import {
   disposeStreamingMarkdown,
   renderStreamingMarkdownInto,
@@ -12260,6 +12269,32 @@ function renderChatForPanel(
           pairedUserMessage: previousUserMessage,
           conversationKey,
         });
+      }
+      // Files the finished turn saved to disk, as cards under the answer.
+      if (!msg.streaming && !msg.compactMarker && hasAnswerText) {
+        const savedFilesHost = doc.createElement("div");
+        savedFilesHost.className = "llm-saved-files";
+        savedFilesHost.hidden = true;
+        bubble.appendChild(savedFilesHost);
+        const nextUserMessage = history
+          .slice(index + 1)
+          .find((entry) => entry.role === "user");
+        void mountSavedFileCards(savedFilesHost, {
+          target: resolveAgentFilesTargetForPanelItem(item),
+          conversationKey,
+          assistantTimestamp: msg.timestamp,
+          text: msg.text,
+          window: buildTurnWindow({
+            userTimestamp: previousUserMessage?.timestamp || 0,
+            assistantTimestamp: msg.timestamp,
+            nextUserTimestamp: nextUserMessage?.timestamp,
+          }),
+          homeDir: resolveHomeDir(),
+          openViewer: (source, anchor) =>
+            openHtmlPreviewViewer(doc, source, anchor),
+          onMounted: () =>
+            scheduleChatScrollReconciliation(conversationKey, chatBox),
+        }).catch((err) => appLogger.warn("LLM: saved file cards failed", err));
       }
       if (agentTraceEl) bubble.appendChild(actionSummaryHost);
     }

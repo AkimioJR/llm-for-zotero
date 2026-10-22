@@ -1576,6 +1576,20 @@ const zhCN: Record<string, string> = {
   "Could not save the note": "无法保存笔记",
   "Run again": "重新运行",
   "Ran again": "已重新运行",
+  // Files the agent saved to disk.
+  File: "文件",
+  "Show in folder": "在文件夹中显示",
+  "Saved to": "保存到",
+  "This file is no longer there": "此文件已不在原处",
+  "This file is no longer there. It may have been moved, renamed, or deleted.":
+    "此文件已不在原处，可能已被移动、重命名或删除。",
+  "This kind of file can't be shown here. Use Show in folder.":
+    "此类文件无法在这里显示，请使用“在文件夹中显示”。",
+  "This file is too big to show here. Use Show in folder.":
+    "此文件太大，无法在这里显示，请使用“在文件夹中显示”。",
+  "This file could not be read.": "无法读取此文件。",
+  "Load again from disk": "从磁盘重新载入",
+  "Loaded again": "已重新载入",
   "Show in chat": "在对话中显示",
   "The source message is not in the main chat now.":
     "来源消息当前不在主对话中。",

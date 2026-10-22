@@ -1612,6 +1612,32 @@ function attachRenderedSvgPreviewButtons(
   }
 }
 
+/** An HTML page in the full-window viewer, in the same safe box. */
+export function openHtmlPreviewViewer(
+  doc: Document,
+  source: string,
+  anchor: HTMLElement,
+): void {
+  const viewerFrame = createSandboxedHtmlFrame(
+    doc,
+    source,
+    "llm-html-preview-viewer-frame",
+  );
+  openPreviewViewer(
+    doc,
+    viewerFrame,
+    anchor,
+    getMermaidThemeKey(doc, anchor),
+    {
+      ariaLabel: t("HTML preview"),
+      toolbarLabel: t("HTML preview viewer controls"),
+      zoomTargetLabel: t("HTML preview"),
+      closeTitle: t("Close HTML preview viewer"),
+    },
+    false,
+  );
+}
+
 function attachRenderedHtmlPreviews(root: ParentNode, doc: Document): void {
   const previews = Array.from(
     root.querySelectorAll(".llm-html-preview[data-llm-html-source]"),
@@ -1630,24 +1656,7 @@ function attachRenderedHtmlPreviews(root: ParentNode, doc: Document): void {
     );
     openButton.classList.add("llm-mermaid-open-btn", "llm-html-open-btn");
     openButton.addEventListener("click", () => {
-      const viewerFrame = createSandboxedHtmlFrame(
-        doc,
-        source,
-        "llm-html-preview-viewer-frame",
-      );
-      openPreviewViewer(
-        doc,
-        viewerFrame,
-        preview,
-        getMermaidThemeKey(doc, preview),
-        {
-          ariaLabel: t("HTML preview"),
-          toolbarLabel: t("HTML preview viewer controls"),
-          zoomTargetLabel: t("HTML preview"),
-          closeTitle: t("Close HTML preview viewer"),
-        },
-        false,
-      );
+      openHtmlPreviewViewer(doc, source, preview);
     });
     preview.replaceChildren(frame, openButton);
     attachSideItemMoveButton(doc, preview, "html", source);

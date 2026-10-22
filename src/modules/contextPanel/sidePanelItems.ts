@@ -1,7 +1,7 @@
 /**
  * Items that move from the main chat into a side panel tab: a Mermaid
- * diagram, an SVG figure, a paper figure crop, an HTML page, a code block, or
- * a plan document.
+ * diagram, an SVG figure, a paper figure crop, an HTML page, a code block, a
+ * plan document, or a file the agent saved to disk.
  *
  * Only the standalone window has a side panel, and only its panel registers an
  * item host for its document. A renderer that wants a "Move to side panel"
@@ -19,7 +19,8 @@ export type SidePanelItemKind =
   | "html"
   | "code"
   | "plan"
-  | "figure";
+  | "figure"
+  | "file";
 
 /** What a renderer hands over when its button is clicked. */
 export type SidePanelItemRequest = {
@@ -34,6 +35,8 @@ export type SidePanelItemRequest = {
   element?: Element | null;
   /** A plan document's id. */
   documentId?: string;
+  /** A saved file's path; the tab reads the file from disk each time. */
+  filePath?: string;
   /** Draws the tab body (a plan, a paper figure); default is rendered Markdown. */
   renderBody?: (doc: Document, root: HTMLElement) => void;
   /** Saves a plan as a Zotero note; resolves to a status line. */
@@ -75,6 +78,7 @@ export const SIDE_PANEL_ITEM_KINDS: readonly SidePanelItemKind[] = [
   "code",
   "plan",
   "figure",
+  "file",
 ];
 
 /** The renderer marks the element it moves, so its position can be counted. */
@@ -194,6 +198,8 @@ export function resolveItemTabTitle(
       return own || translate("Plan");
     case "figure":
       return own || translate("Figure");
+    case "file":
+      return own || translate("File");
   }
 }
 
@@ -264,9 +270,9 @@ export function canSaveItemAsNote(kind: SidePanelItemKind): boolean {
   return kind === "plan";
 }
 
-/** Only an HTML page runs, so only it can run again. */
+/** A page runs again; a saved file loads again from disk. */
 export function canRunItemAgain(kind: SidePanelItemKind): boolean {
-  return kind === "html";
+  return kind === "html" || kind === "file";
 }
 
 /**
@@ -337,7 +343,7 @@ export function mergeChatMadeItems(
 
 /**
  * Everything movable in the rendered main chat (diagrams, figures, pages,
- * code blocks, plan documents) in the answers, never in the agent trace,
+ * code blocks, plan documents, saved files) in the answers, never in the agent trace,
  * newest first. Items come
  * from the same markers and request builders the →| buttons use, so identity
  * and content match what the button would open.

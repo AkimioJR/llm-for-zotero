@@ -144,6 +144,8 @@ import { copyTextToClipboard } from "./clipboard";
 import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
 import { flushPendingChatRender } from "./progressiveChatRender";
 import { renderRenderedMarkdownInto } from "./renderedMarkdown";
+import { renderSavedFileInto, savedFilePreviewKind } from "./savedFileCards";
+import { revealLocalPath } from "../../utils/revealLocalPath";
 import {
   buildItemFenceMarkdown,
   canRunItemAgain,
@@ -1754,6 +1756,7 @@ export function createStandaloneSidePanel(
     code: "Code",
     plan: "Plan",
     figure: "Paper figure",
+    file: "File",
   };
   const HTML_SAFE_BOX_NOTE =
     "Runs in a safe box: no internet, no access to Zotero";
@@ -1793,7 +1796,11 @@ export function createStandaloneSidePanel(
       "llm-standalone-side-panel-item-status",
     );
     status.setAttribute("role", "status");
-    const defaultStatus = kind === "html" ? t(HTML_SAFE_BOX_NOTE) : "";
+    const filePath = kind === "file" ? request.filePath || request.source : "";
+    const runsPage =
+      kind === "html" ||
+      (kind === "file" && savedFilePreviewKind(filePath) === "html");
+    const defaultStatus = runsPage ? t(HTML_SAFE_BOX_NOTE) : "";
     status.textContent = defaultStatus;
     status.hidden = !defaultStatus;
     let feedbackTimer: number | null = null;
@@ -1816,6 +1823,13 @@ export function createStandaloneSidePanel(
     body.dataset.itemKind = kind;
     const mountBody = () => {
       body.replaceChildren();
+      if (kind === "file") {
+        void renderSavedFileInto(doc, body, filePath, {
+          markdown: (target, markdown) =>
+            renderRenderedMarkdownInto(target, markdown, doc),
+        });
+        return;
+      }
       if (kind === "html") {
         body.appendChild(
           createSandboxedHtmlFrame(
@@ -1876,12 +1890,24 @@ export function createStandaloneSidePanel(
       });
       actions.appendChild(button);
     }
-    if (canRunItemAgain(kind)) {
+    if (kind === "file") {
       actions.appendChild(
-        makeAction("rerun", t("Run again"), () => {
-          mountBody();
-          showFeedback(t("Ran again"));
+        makeAction("reveal", t("Show in folder"), () => {
+          revealLocalPath(filePath);
         }),
+      );
+    }
+    if (canRunItemAgain(kind)) {
+      const reload = kind === "file";
+      actions.appendChild(
+        makeAction(
+          "rerun",
+          t(reload ? "Load again from disk" : "Run again"),
+          () => {
+            mountBody();
+            showFeedback(t(reload ? "Loaded again" : "Ran again"));
+          },
+        ),
       );
     }
     if (messageIndex >= 0) {
