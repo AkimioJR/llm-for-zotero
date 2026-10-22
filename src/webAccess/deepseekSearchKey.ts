@@ -1,6 +1,5 @@
 import { config } from "../../package.json";
 import { getModelProviderGroups } from "../utils/modelProviders";
-import type { WebAccessProviderId, WebAccessProviderSetting } from "./types";
 
 export const DEEPSEEK_SEARCH_ORIGIN = "https://api.deepseek.com";
 const MODEL_PROVIDER_GROUPS_PREF = `${config.prefsPrefix}.modelProviderGroups`;
@@ -68,22 +67,6 @@ export function resolveDeepSeekSearchCredential(
     : null;
 }
 
-/**
- * An explicit choice always wins. "auto" prefers a saved Tavily key, then an
- * official DeepSeek key; with neither it stays on Tavily, whose tools are
- * hidden until a key exists. The DeepSeek check is lazy so that the profile
- * read only happens when the first two rules do not decide.
- */
-export function resolveEffectiveWebAccessProvider(input: {
-  setting: WebAccessProviderSetting;
-  hasTavilyKey: boolean;
-  hasDeepSeekKey: () => boolean;
-}): WebAccessProviderId {
-  if (input.setting !== "auto") return input.setting;
-  if (input.hasTavilyKey) return "tavily";
-  return input.hasDeepSeekKey() ? "deepseek" : "tavily";
-}
-
 /** Shows enough of a key to tell two keys apart, e.g. sk-…1234. */
 export function maskApiKey(apiKey: string): string {
   const key = apiKey.trim();
@@ -99,7 +82,7 @@ function readRawProviderGroups(): string {
   }
 }
 
-// Validators, schema getters, and trace re-renders all ask for the effective
+// Validators, schema getters, and trace re-renders all ask for the chosen
 // provider, so the profile parse is reused while the stored value is unchanged.
 let cached: { raw: string; credential: DeepSeekSearchCredential | null } = {
   raw: "",

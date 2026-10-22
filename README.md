@@ -400,12 +400,13 @@ To enable general web search with Tavily:
 
 1. Get a Tavily API key from [app.tavily.com](https://app.tavily.com/).
 2. Open `Preferences` -> `llm-for-zotero` -> **Agent**.
-3. In **Web search**, keep **Automatic** or select **Tavily**, paste the API key and click **Test connection**.
+3. In **Web search**, keep **Tavily** (the default), paste the API key and click **Test connection**.
 4. Enable Agent Mode and ask it to search or verify something online.
 
 There is no separate enable switch.
-The `web_search` and `web_read` tools become available to compatible in-plugin Agent conversations when the provider in use can run: Tavily has a key, AnySearch is selected, or DeepSeek finds an official DeepSeek model profile.
-**Automatic** (the default) uses Tavily when a Tavily key is saved, otherwise DeepSeek when an official DeepSeek model profile exists.
+The `web_search` and `web_read` tools become available to compatible in-plugin Agent conversations when the selected provider can run: Tavily has a key, AnySearch is selected, or DeepSeek finds an official DeepSeek model profile.
+Tavily is the default.
+**DeepSeek** is an optional choice that uses the key of an official DeepSeek model profile, and DeepSeek bills that account.
 They are not added to WebChat, Codex App Server, or Claude Code conversations, which use their own runtimes and tool sets.
 
 With Tavily, the agent chooses basic or advanced search and page-reading depth from the request, or follows an explicit request such as _"use advanced web search."_

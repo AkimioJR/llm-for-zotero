@@ -1,13 +1,6 @@
 export type WebAccessDepth = "basic" | "advanced";
 
-/** The saved choice; "auto" picks a provider from the keys the user has. */
-export type WebAccessProviderSetting =
-  | "auto"
-  | "tavily"
-  | "anysearch"
-  | "deepseek";
-
-/** The provider that web_search and web_read actually call. */
+/** The saved choice, and the provider that web_search and web_read call. */
 export type WebAccessProviderId = "tavily" | "anysearch" | "deepseek";
 
 export type WebAccessErrorCode =

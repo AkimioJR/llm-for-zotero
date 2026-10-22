@@ -10,9 +10,8 @@ import { stringPrefFromContents } from "./liveAgentCredentials";
  *
  * The profile comes from LLM_FOR_ZOTERO_LIVE_PROFILE_PATH (a prefs.js) or the
  * running Zotero's prefs. The suite seeds only that group, sets the provider
- * to Automatic and clears the Tavily key, so Automatic must pick DeepSeek;
- * every pref it touches is restored afterwards. Without an official
- * DeepSeek group the suite is skipped.
+ * to DeepSeek and clears the Tavily key; every pref it touches is restored
+ * afterwards. Without an official DeepSeek group the suite is skipped.
  */
 
 declare const Zotero: any;
@@ -138,7 +137,7 @@ describe("live DeepSeek web search", function () {
         true,
       );
     }
-    Zotero.Prefs.set(`${PREF_PREFIX}.webAccessProvider`, "auto", true);
+    Zotero.Prefs.set(`${PREF_PREFIX}.webAccessProvider`, "deepseek", true);
     Zotero.Prefs.set(`${PREF_PREFIX}.tavilyApiKey`, "", true);
   });
 
@@ -176,7 +175,7 @@ describe("live DeepSeek web search", function () {
     assert.isNotEmpty(read.pages[0].content?.trim() || "");
   });
 
-  it("answers an Agent turn through DeepSeek search under Automatic", async function () {
+  it("answers an Agent turn through DeepSeek search when DeepSeek is chosen", async function () {
     const api = Zotero.LLMForZotero?.api?.agent;
     assert.isOk(api, "agent API must be installed");
     const requested = environmentValue("LLM_FOR_ZOTERO_LIVE_MODEL");

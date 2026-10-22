@@ -11,18 +11,19 @@ import {
 } from "./helpers/heldChatProvider";
 
 /**
- * Web search provider "Automatic", end to end in the real Zotero host: the
+ * Web search provider choice, end to end in the real Zotero host: the
  * preferences window renders the card from saved prefs and model profiles,
  * and a real Agent turn sends the tool schemas that follow from them. The
  * chat model is a held fake provider; DeepSeek and OpenRouter are blocked so
  * that the dummy key never leaves the machine and no search is made. Requests
  * through fetch and through Zotero.HTTP.request are both blocked.
  *
- * Rows of the provider table under test:
- * - Automatic, no Tavily key, an official DeepSeek profile → DeepSeek;
- * - Automatic with a Tavily key → Tavily;
- * - Automatic, no Tavily key, the DeepSeek profile moved to a relay → no web
- *   tools (a relay key is never used for DeepSeek search).
+ * Contract under test:
+ * - the default, and an old saved "auto", read as Tavily with only the Tavily
+ *   section shown;
+ * - choosing DeepSeek shows only the DeepSeek section (profile key masked)
+ *   and the Agent searches through DeepSeek;
+ * - choosing Tavily again shows only the Tavily section.
  */
 
 declare const Zotero: any;
@@ -30,7 +31,6 @@ declare const Zotero: any;
 const PREF_PREFIX = "extensions.zotero.llmforzotero.";
 const API_BASE = "https://workflow-web-search-provider.invalid/v1";
 const DEEPSEEK_ORIGIN = "https://api.deepseek.com";
-const RELAY_BASE = "https://openrouter.ai/api/v1";
 const CHAT_GROUP_ID = "workflow-web-search-chat-group";
 const CHAT_ENTRY_ID = "workflow-web-search-chat-model";
 const DEEPSEEK_GROUP_ID = "workflow-web-search-deepseek-group";
@@ -138,7 +138,7 @@ async function waitForPaneReady(win: Window): Promise<Element> {
   throw new Error("preferences pane never finished rendering");
 }
 
-describe("workflow: web search provider Automatic", function () {
+describe("workflow: web search provider choice", function () {
   this.timeout(180_000);
 
   let api: WorkflowTestApi;
@@ -215,7 +215,6 @@ describe("workflow: web search provider Automatic", function () {
       doc.querySelector(`#llmforzotero-${id}`) as HTMLElement | null;
     return {
       select: element("web-access-provider") as HTMLSelectElement | null,
-      autoStatus: element("web-access-auto-status"),
       tavily: element("tavily-settings"),
       tavilyKey: element("tavily-api-key") as HTMLInputElement | null,
       anysearch: element("anysearch-settings"),
@@ -228,8 +227,6 @@ describe("workflow: web search provider Automatic", function () {
     const view = card(win);
     return JSON.stringify({
       select: view.select?.value,
-      autoStatus: view.autoStatus?.textContent,
-      autoHidden: view.autoStatus?.hidden,
       tavilyHidden: view.tavily?.hidden,
       anysearchHidden: view.anysearch?.hidden,
       deepseekHidden: view.deepseek?.hidden,
@@ -243,6 +240,14 @@ describe("workflow: web search provider Automatic", function () {
     input!.value = value;
     const EventCtor = (win as unknown as { Event: typeof Event }).Event;
     input!.dispatchEvent(new EventCtor("change", { bubbles: true }));
+  }
+
+  function chooseProvider(win: Window, value: string): void {
+    const select = card(win).select;
+    assert.isOk(select, "the provider select exists");
+    select!.value = value;
+    const EventCtor = (win as unknown as { Event: typeof Event }).Event;
+    select!.dispatchEvent(new EventCtor("change", { bubbles: true }));
   }
 
   before(async function () {
@@ -276,7 +281,7 @@ describe("workflow: web search provider Automatic", function () {
     Zotero.Prefs.set(PREF_PREFIX + "enableClaudeCodeMode", false, true);
     Zotero.Prefs.set(PREF_PREFIX + "enableAgentMode", true, true);
     Zotero.Prefs.set(PREF_PREFIX + "lastUsedRuntimeMode", "agent", true);
-    Zotero.Prefs.set(PREF_PREFIX + "webAccessProvider", "auto", true);
+    Zotero.Prefs.set(PREF_PREFIX + "webAccessProvider", "auto", true); // an old saved value
     Zotero.Prefs.set(PREF_PREFIX + "tavilyApiKey", "", true);
     setModelProviderGroups([
       chatGroup(),
@@ -300,11 +305,11 @@ describe("workflow: web search provider Automatic", function () {
     }
   });
 
-  it("follows the saved keys and model profiles in settings and in the Agent's tools", async function () {
+  it("defaults to Tavily and offers DeepSeek only when chosen", async function () {
     await api.reset();
     api.enableLiveAgentSending();
     fixture = await api.createPaperWithPdfFixture({
-      title: "Web search provider Automatic",
+      title: "Web search provider choice",
       pdfTitle: "Web search provider PDF",
       pages: ["Web search provider: one short page of text."],
     });
@@ -315,23 +320,24 @@ describe("workflow: web search provider Automatic", function () {
       "the panel runs the in-plugin Agent",
     );
 
-    // Row: Automatic, no Tavily key, an official DeepSeek profile.
+    // An old saved "auto" reads as Tavily, even with a DeepSeek profile.
     prefsWindow = openPreferences();
     await waitForPaneReady(prefsWindow);
     const win = prefsWindow;
     let view = card(win);
-    assert.equal(view.select?.value, "auto", "the select shows Automatic");
-    assert.isFalse(
-      view.deepseek?.hidden,
-      `DeepSeek block: ${describeCard(win)}`,
-    );
-    assert.isFalse(
-      view.tavily?.hidden,
-      "in Automatic the Tavily key stays visible",
-    );
+    assert.equal(view.select?.value, "tavily", `select: ${describeCard(win)}`);
+    assert.isFalse(view.tavily?.hidden, "the Tavily section is shown");
+    assert.isTrue(view.deepseek?.hidden);
     assert.isTrue(view.anysearch?.hidden);
-    assert.isFalse(view.autoStatus?.hidden);
-    assert.include(view.autoStatus?.textContent || "", "DeepSeek");
+    const none = await offeredTools(panel, "web-search-tavily-nokey");
+    assert.isFalse(none.has("web_search"), "no Tavily key, no web_search");
+
+    // Choose DeepSeek: only its section shows, and the Agent uses it.
+    chooseProvider(win, "deepseek");
+    view = card(win);
+    assert.isFalse(view.deepseek?.hidden, `DeepSeek: ${describeCard(win)}`);
+    assert.isTrue(view.tavily?.hidden);
+    assert.isTrue(view.anysearch?.hidden);
     assert.include(
       view.deepseekKey?.textContent || "",
       "…9876",
@@ -342,19 +348,13 @@ describe("workflow: web search provider Automatic", function () {
       DEEPSEEK_KEY,
       "the full key is not shown",
     );
-
-    const deepseekTools = await offeredTools(panel, "web-search-auto-deepseek");
+    const deepseekTools = await offeredTools(panel, "web-search-deepseek");
     const search = deepseekTools.get("web_search");
     assert.isOk(search, "web_search is offered with a DeepSeek profile");
     assert.equal(search!.parameters?.properties?.query?.maxLength, 128);
     assert.notProperty(search!.parameters?.properties || {}, "depth");
     assert.notProperty(search!.parameters?.properties || {}, "topic");
     assert.deepEqual(search!.parameters?.required, ["query", "need"]);
-    assert.property(
-      search!.parameters?.properties || {},
-      "need",
-      "DeepSeek web_search states the outside-search need",
-    );
     assert.property(search!.parameters?.properties || {}, "gap");
     assert.include(search!.description || "", "DeepSeek Search");
     assert.deepEqual(
@@ -363,38 +363,20 @@ describe("workflow: web search provider Automatic", function () {
       "web_read takes only URLs on DeepSeek",
     );
 
-    // Row: Automatic with a Tavily key.
-    commitTavilyKey(win, "tvly-workflow-dummy-key");
+    // Back to Tavily: only its section shows, and it needs its own key.
+    chooseProvider(win, "tavily");
     view = card(win);
-    await until(
-      () => card(win).deepseek?.hidden === true,
-      () => `saving a Tavily key switches the card: ${describeCard(win)}`,
-    );
-    assert.equal(view.select?.value, "auto");
-    assert.isFalse(view.tavily?.hidden);
-    assert.include(view.autoStatus?.textContent || "", "Tavily");
-    assert.notInclude(view.autoStatus?.textContent || "", "DeepSeek");
-    const tavilyTools = await offeredTools(panel, "web-search-auto-tavily");
+    assert.isFalse(view.tavily?.hidden, `Tavily: ${describeCard(win)}`);
+    assert.isTrue(view.deepseek?.hidden);
+    assert.isTrue(view.anysearch?.hidden);
+    const noKey = await offeredTools(panel, "web-search-tavily-again");
+    assert.isFalse(noKey.has("web_search"), "no fallback to DeepSeek");
+    commitTavilyKey(win, "tvly-workflow-dummy-key");
+    const tavilyTools = await offeredTools(panel, "web-search-tavily-key");
     const tavilySearch = tavilyTools.get("web_search");
     assert.isOk(tavilySearch, "web_search is offered with a Tavily key");
     assert.property(tavilySearch!.parameters?.properties || {}, "depth");
     assert.notInclude(tavilySearch!.description || "", "DeepSeek");
-
-    // Row: Automatic, no Tavily key, the DeepSeek profile on a relay host.
-    setModelProviderGroups([chatGroup(), deepseekGroup(RELAY_BASE)] as any);
-    commitTavilyKey(win, "");
-    await until(
-      () =>
-        card(win).deepseek?.hidden === true &&
-        !(card(win).autoStatus?.textContent || "").includes("DeepSeek ("),
-      () => `a relay profile is not a DeepSeek key: ${describeCard(win)}`,
-    );
-    view = card(win);
-    assert.isTrue(view.deepseek?.hidden);
-    assert.isFalse(view.tavily?.hidden);
-    const noTools = await offeredTools(panel, "web-search-auto-relay");
-    assert.isFalse(noTools.has("web_search"), "no web_search without a key");
-    assert.isFalse(noTools.has("web_read"), "no web_read without a key");
 
     await closePreferences(win);
     prefsWindow = undefined;

@@ -12,18 +12,16 @@ import { subscribeModelProviderGroups } from "../../utils/modelProviders";
 import {
   getAnysearchApiKey,
   getWebAccessProvider,
-  getWebAccessProviderSetting,
-  hasTavilyApiKey,
   setAnysearchApiKey,
   setWebAccessProvider,
-  type WebAccessProviderSetting,
+  type WebAccessProviderId,
 } from "../../webAccess/prefs";
 
 const NO_DEEPSEEK_PROFILE =
   "Add a DeepSeek model profile with the official API address (api.deepseek.com) to use DeepSeek search. Keys from other hosts do not work.";
 
-function isProviderSetting(value: string): value is WebAccessProviderSetting {
-  return ["auto", "tavily", "anysearch", "deepseek"].includes(value);
+function isProviderSetting(value: string): value is WebAccessProviderId {
+  return ["tavily", "anysearch", "deepseek"].includes(value);
 }
 
 export type WebAccessPreferences = {
@@ -38,9 +36,6 @@ export function registerWebAccessPreferences(
   const provider = doc.querySelector(
     `#${config.addonRef}-web-access-provider`,
   ) as HTMLSelectElement | null;
-  const autoStatus = doc.querySelector(
-    `#${config.addonRef}-web-access-auto-status`,
-  ) as HTMLElement | null;
   const key = doc.querySelector(
     `#${config.addonRef}-anysearch-api-key`,
   ) as HTMLInputElement | null;
@@ -81,33 +76,15 @@ export function registerWebAccessPreferences(
     if (deepseekTest) deepseekTest.disabled = false;
     previous?.abort();
   };
-  // The select shows the saved choice; the blocks follow the provider in use.
-  // In Automatic the Tavily key stays visible, because that key decides.
   const render = () => {
-    const setting = getWebAccessProviderSetting();
-    const effective = getWebAccessProvider();
+    const chosen = getWebAccessProvider();
     const credential =
-      effective === "deepseek" ? getDeepSeekSearchCredential() : null;
-    shownSearchTarget = `${effective}:${credential?.apiKey || ""}`;
-    if (provider) provider.value = setting;
-    if (anysearch) anysearch.hidden = effective !== "anysearch";
-    if (tavily) tavily.hidden = effective !== "tavily" && setting !== "auto";
-    if (deepseek) deepseek.hidden = effective !== "deepseek";
-    if (autoStatus) {
-      autoStatus.hidden = setting !== "auto";
-      autoStatus.textContent =
-        setting !== "auto"
-          ? ""
-          : effective === "deepseek"
-            ? t(
-                "Automatic: using DeepSeek (key from your DeepSeek model profile)",
-              )
-            : hasTavilyApiKey()
-              ? t("Automatic: using Tavily")
-              : t(
-                  "Automatic: no web search key yet. Add a Tavily API key, or a DeepSeek model profile with the official API address.",
-                );
-    }
+      chosen === "deepseek" ? getDeepSeekSearchCredential() : null;
+    shownSearchTarget = `${chosen}:${credential?.apiKey || ""}`;
+    if (provider) provider.value = chosen;
+    if (tavily) tavily.hidden = chosen !== "tavily";
+    if (anysearch) anysearch.hidden = chosen !== "anysearch";
+    if (deepseek) deepseek.hidden = chosen !== "deepseek";
     if (deepseekKey) {
       deepseekKey.textContent = credential
         ? `${t("Key from your DeepSeek model profile")}${credential.label ? ` (${credential.label})` : ""}: ${maskApiKey(credential.apiKey)}`
@@ -245,8 +222,7 @@ export function registerWebAccessPreferences(
       }
     })();
   });
-  // A Tavily key or a DeepSeek model profile can change the provider that
-  // Automatic picks and the key that DeepSeek uses.
+  // A DeepSeek model profile change can change the key that DeepSeek uses.
   const refresh = () => {
     const previous = shownSearchTarget;
     render();

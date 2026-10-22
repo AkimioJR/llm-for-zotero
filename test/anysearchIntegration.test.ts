@@ -613,7 +613,7 @@ describe("AnySearch native integration (offline)", function () {
       },
     });
     const elements = makePreferencesDocument();
-    assert.equal(elements.get("web-access-provider")!.value, "auto");
+    assert.equal(elements.get("web-access-provider")!.value, "tavily");
     elements.get("web-access-provider")!.value = "anysearch";
     elements.get("web-access-provider")!.fire("change");
     elements.get("anysearch-api-key")!.value = "   ";

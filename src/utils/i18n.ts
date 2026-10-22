@@ -44,12 +44,6 @@ const zhCN: Record<string, string> = {
     "AnySearch 会接收搜索词和请求的公开网址。密钥保存在本地 Zotero 偏好设置中。请勿发送凭据或私密文献库文本。不会自动重试或回退到其他服务。",
   "General search and bounded page extraction only. No depth, topic, date/domain filters, query-focused extraction, or PDF/Office/media extraction. Usage credits are not reported.":
     "仅支持通用搜索和有数量限制的网页正文提取。不支持深度、主题、日期或域名过滤、按问题聚焦提取以及 PDF、Office 或媒体提取。不报告积分用量。",
-  Automatic: "自动",
-  "Automatic: using Tavily": "自动：使用 Tavily",
-  "Automatic: using DeepSeek (key from your DeepSeek model profile)":
-    "自动：使用 DeepSeek（密钥来自你的 DeepSeek 模型配置）",
-  "Automatic: no web search key yet. Add a Tavily API key, or a DeepSeek model profile with the official API address.":
-    "自动：尚无网页搜索密钥。请添加 Tavily API 密钥，或添加使用官方 API 地址的 DeepSeek 模型配置。",
   "DeepSeek key": "DeepSeek 密钥",
   "Key from your DeepSeek model profile": "密钥来自你的 DeepSeek 模型配置",
   "Add a DeepSeek model profile with the official API address (api.deepseek.com) to use DeepSeek search. Keys from other hosts do not work.":

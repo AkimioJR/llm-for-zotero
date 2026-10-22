@@ -1,50 +1,37 @@
 import { config } from "../../package.json";
-import {
-  getDeepSeekSearchCredential,
-  resolveEffectiveWebAccessProvider,
-} from "./deepseekSearchKey";
-import type { WebAccessProviderId, WebAccessProviderSetting } from "./types";
+import { getDeepSeekSearchCredential } from "./deepseekSearchKey";
+import type { WebAccessProviderId } from "./types";
 
-export type { WebAccessProviderId, WebAccessProviderSetting } from "./types";
+export type { WebAccessProviderId } from "./types";
 
 export const TAVILY_API_KEY_PREF = `${config.prefsPrefix}.tavilyApiKey`;
 export const ANYSEARCH_API_KEY_PREF = `${config.prefsPrefix}.anysearchApiKey`;
 export const WEB_ACCESS_PROVIDER_PREF = `${config.prefsPrefix}.webAccessProvider`;
 
-const PROVIDER_SETTINGS: readonly WebAccessProviderSetting[] = [
-  "auto",
+const PROVIDERS: readonly WebAccessProviderId[] = [
   "tavily",
   "anysearch",
   "deepseek",
 ];
 
-/** The saved choice as the settings select shows it; unknown values read as "auto". */
-export function getWebAccessProviderSetting(): WebAccessProviderSetting {
+/** The saved choice; unknown values (including an old "auto") read as "tavily". */
+export function getWebAccessProvider(): WebAccessProviderId {
   try {
     const value = Zotero.Prefs.get(WEB_ACCESS_PROVIDER_PREF, true);
-    return PROVIDER_SETTINGS.find((setting) => setting === value) || "auto";
+    return PROVIDERS.find((provider) => provider === value) || "tavily";
   } catch {
-    return "auto";
+    return "tavily";
   }
 }
 
-/** The provider that web_search and web_read call after "auto" is resolved. */
-export function getWebAccessProvider(): WebAccessProviderId {
-  return resolveEffectiveWebAccessProvider({
-    setting: getWebAccessProviderSetting(),
-    hasTavilyKey: hasTavilyApiKey(),
-    hasDeepSeekKey: () => Boolean(getDeepSeekSearchCredential()),
-  });
-}
-
-export function setWebAccessProvider(value: WebAccessProviderSetting): void {
-  if (!PROVIDER_SETTINGS.includes(value)) {
+export function setWebAccessProvider(value: WebAccessProviderId): void {
+  if (!PROVIDERS.includes(value)) {
     throw new Error("Unsupported web access provider.");
   }
   Zotero.Prefs.set(WEB_ACCESS_PROVIDER_PREF, value, true);
 }
 
-/** True when the effective provider can make a call: the tools are offered. */
+/** True when the chosen provider can make a call: the tools are offered. */
 export function isWebAccessConfigured(): boolean {
   switch (getWebAccessProvider()) {
     case "anysearch":

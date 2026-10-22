@@ -3671,7 +3671,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     });
   }
 
-  const webAccessPreferences = registerWebAccessPreferences(doc);
+  registerWebAccessPreferences(doc);
 
   if (tavilyApiKeyInput) {
     tavilyApiKeyInput.value = getTavilyApiKey();
@@ -3682,8 +3682,6 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         tavilyStatus.style.display = "none";
         tavilyStatus.textContent = "";
       }
-      // In Automatic, saving or clearing a Tavily key switches the provider.
-      webAccessPreferences.refresh();
       refreshAgentRowSummaries();
     };
     tavilyApiKeyInput.addEventListener("change", commitTavilyKey);
@@ -3709,7 +3707,6 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         }
         setTavilyApiKey(key);
         if (tavilyApiKeyInput) tavilyApiKeyInput.value = key;
-        webAccessPreferences.refresh();
         tavilyTestButton.disabled = true;
         tavilyStatus.style.color = "var(--fill-secondary, #888)";
         tavilyStatus.textContent = t("Testing…");

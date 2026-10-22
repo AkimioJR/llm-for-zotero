@@ -9,10 +9,12 @@ import {
   isOfficialDeepSeekApiBase,
   maskApiKey,
   resolveDeepSeekSearchCredential,
-  resolveEffectiveWebAccessProvider,
 } from "../src/webAccess/deepseekSearchKey";
 import { WebAccessError } from "../src/webAccess/errors";
-import { WEB_ACCESS_PROVIDER_PREF } from "../src/webAccess/prefs";
+import {
+  getWebAccessProvider,
+  WEB_ACCESS_PROVIDER_PREF,
+} from "../src/webAccess/prefs";
 import {
   createWebSearchTool,
   validateWebSearchCall,
@@ -31,7 +33,6 @@ import {
 } from "../src/agent/tools/read/outsideSearchLedger";
 import { clearWebSourcesForRun } from "../src/webAccess/runSources";
 import type { AgentToolContext } from "../src/agent/types";
-import type { WebAccessProviderSetting } from "../src/webAccess/types";
 
 const KEY = "sk-synthetic-deepseek-key-1234";
 const search = { query: "public documentation", maxResults: 3 };
@@ -115,39 +116,6 @@ describe("DeepSeek search key resolution", function () {
     );
   });
 
-  it("resolves every row of the provider table", function () {
-    const resolve = (
-      setting: WebAccessProviderSetting,
-      hasTavilyKey: boolean,
-      hasDeepSeekKey: boolean,
-    ) =>
-      resolveEffectiveWebAccessProvider({
-        setting,
-        hasTavilyKey,
-        hasDeepSeekKey: () => hasDeepSeekKey,
-      });
-    // An explicit choice wins whatever keys exist.
-    for (const setting of ["tavily", "anysearch", "deepseek"] as const)
-      for (const tavily of [false, true])
-        for (const deepseek of [false, true])
-          assert.equal(resolve(setting, tavily, deepseek), setting);
-    assert.equal(resolve("auto", true, true), "tavily");
-    assert.equal(resolve("auto", true, false), "tavily");
-    assert.equal(resolve("auto", false, true), "deepseek");
-    assert.equal(resolve("auto", false, false), "tavily");
-    // With a Tavily key the model profiles are not read at all.
-    assert.equal(
-      resolveEffectiveWebAccessProvider({
-        setting: "auto",
-        hasTavilyKey: true,
-        hasDeepSeekKey: () => {
-          throw new Error("profiles must not be read");
-        },
-      }),
-      "tavily",
-    );
-  });
-
   it("masks a key down to its prefix and last four characters", function () {
     assert.equal(maskApiKey(KEY), "sk-…1234");
     assert.equal(maskApiKey("short"), "…");
@@ -173,6 +141,24 @@ describe("DeepSeek query operators", function () {
     assert.equal(countQueryCharacters("数据"), 2);
     assert.equal(countQueryCharacters("😀😀"), 2);
     assert.equal("😀😀".length, 4);
+  });
+
+  it("reads an unknown or old auto provider setting as tavily", function () {
+    const originalZotero = globalThis.Zotero;
+    try {
+      const read = (value: unknown) => {
+        globalThis.Zotero = {
+          Prefs: { get: () => value },
+        } as unknown as typeof Zotero;
+        return getWebAccessProvider();
+      };
+      assert.equal(read("auto"), "tavily");
+      assert.equal(read(undefined), "tavily");
+      assert.equal(read("anysearch"), "anysearch");
+      assert.equal(read("deepseek"), "deepseek");
+    } finally {
+      globalThis.Zotero = originalZotero;
+    }
   });
 
   describe("web tool validation with DeepSeek selected", function () {
