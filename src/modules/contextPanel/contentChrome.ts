@@ -194,3 +194,47 @@ export function parseHtmlTitle(html: string): string {
   }
   return "";
 }
+
+/** Marks a table column whose body cells are all numbers. */
+export const NUMERIC_CELL_CLASS = "llm-num";
+
+const NUMERIC_CELL_PATTERN = /^(?=.*\d)[−\-+]?[\d.,]+\s?(?:%|pts?|ms|s|x)?$/i;
+const EMPTY_CELL_PATTERN = /^(?:|-|–|—|n\/a)$/i;
+
+/** True for a number-ish cell: "12", "−3.4", "1,200", "85%", "40 ms", "2x". */
+export function isNumericCellText(text: string): boolean {
+  return NUMERIC_CELL_PATTERN.test((text || "").replace(/\s+/g, " ").trim());
+}
+
+/**
+ * Which columns are numeric: every body cell is number-ish, and an empty or
+ * dash cell does not count against it. A column with no number is not numeric.
+ */
+export function detectNumericColumns(bodyRows: string[][]): boolean[] {
+  const width = bodyRows.reduce((max, row) => Math.max(max, row.length), 0);
+  const result: boolean[] = [];
+  for (let col = 0; col < width; col += 1) {
+    let numbers = 0;
+    let ok = true;
+    for (const row of bodyRows) {
+      const text = (row[col] ?? "").replace(/\s+/g, " ").trim();
+      if (EMPTY_CELL_PATTERN.test(text)) continue;
+      if (isNumericCellText(text)) numbers += 1;
+      else {
+        ok = false;
+        break;
+      }
+    }
+    result.push(ok && numbers > 0);
+  }
+  return result;
+}
+
+/** Rows of cell text as CSV (comma separated, quotes doubled, "\n" lines). */
+export function tableRowsToCsv(rows: string[][]): string {
+  const cell = (value: string): string => {
+    const text = (value ?? "").replace(/\s+/g, " ").trim();
+    return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  return rows.map((row) => row.map(cell).join(",")).join("\n");
+}

@@ -1040,6 +1040,12 @@ describe("rendered Markdown code block source controls", function () {
   });
 });
 
+/** The kind part of each flat caption line, such as "Figure 1 \u00b7 p. 2". */
+const flatCaptionKinds = (root: FakeElement): string[] =>
+  root
+    .findAllByClass("llm-content-caption")
+    .map((caption) => caption.children[0]?.textContent || "");
+
 describe("agentTrace render", function () {
   it("hides internal round and segment bookkeeping during streaming and history replay", function () {
     const statusTexts = [
@@ -5702,12 +5708,7 @@ describe("agentTrace render", function () {
 
     const artifactHolder = trace.findByClass("llm-agent-image-artifacts");
     assert.exists(artifactHolder);
-    assert.deepEqual(
-      trace
-        .findAllByClass("llm-assistant-generated-image-caption")
-        .map(collectFakeText),
-      ["Figure 1 · p. 2"],
-    );
+    assert.deepEqual(flatCaptionKinds(trace), ["Figure 1 · p. 2"]);
     assert.equal(
       (
         trace.findByClass("llm-assistant-generated-image") as
@@ -5839,10 +5840,11 @@ describe("agentTrace render", function () {
         "file:///tmp/mineru-paper/figure_crops/page-4.png",
       ],
     );
-    const captions = trace
-      .findAllByClass("llm-assistant-generated-image-caption")
-      .map(collectFakeText);
-    assert.deepEqual(captions, ["Figure 1 · p. 2", "page-4.png · p. 4"]);
+    // The strip uses the flat style: the page is in the caption's kind label.
+    assert.deepEqual(flatCaptionKinds(trace), [
+      "Figure 1 · p. 2",
+      "Figure · p. 4",
+    ]);
   });
 
   it("preserves Codex MCP image artifacts through native tool activity coalescing", function () {
@@ -12895,18 +12897,18 @@ describe("figure strip below the activity", function () {
     }) as unknown as FakeElement;
     const frames = trace.findAllByClass("llm-assistant-generated-image-frame");
     assert.lengthOf(frames, 3);
+    // The flat style turns the jump button into the caption's "Go to page".
     const jumps = frames.map(
       (frame) =>
-        (frame as FakeElement).findAllByClass("llm-generated-image-action-jump")
+        (frame as FakeElement).findAllByClass("llm-content-caption-link")
           .length,
     );
     assert.deepEqual(jumps, [1, 0, 0]);
-    assert.deepEqual(
-      trace
-        .findAllByClass("llm-assistant-generated-image-caption")
-        .map(collectFakeText),
-      ["Figure 1 \u00b7 p. 2", "Figure 2", "Figure 3 \u00b7 p. 4"],
-    );
+    assert.deepEqual(flatCaptionKinds(trace), [
+      "Figure 1 \u00b7 p. 2",
+      "Figure 2",
+      "Figure 3 \u00b7 p. 4",
+    ]);
     disposeAgentTrace(trace as unknown as HTMLElement);
   });
 });

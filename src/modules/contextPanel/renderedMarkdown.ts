@@ -29,13 +29,20 @@ import {
   adoptContentBarButton,
   appendContentBarButton,
   appendContentCaption,
+  detectNumericColumns,
   ensureContentBar,
   isInFlatContentScope,
+  NUMERIC_CELL_CLASS,
   parseHtmlTitle,
   parseMermaidTitle,
   parseSvgTitle,
+  tableRowsToCsv,
 } from "./contentChrome";
-import { pickGeneratedImageSavePath } from "./generatedImageRender";
+import {
+  copyGeneratedImageToClipboard,
+  pickGeneratedImageSavePath,
+} from "./generatedImageRender";
+import { openFigureViewer } from "./figureViewer";
 import { saveGeneratedImageAssetToPath } from "../../services/images/generatedImageAssets";
 import {
   NO_SIDE_ITEMS_ATTRIBUTE,
@@ -2973,6 +2980,217 @@ export function attachRenderedCodeBlockControls(
   }
 }
 
+const FLAT_TABLE_CSV_NAME = "table.csv";
+const UTF8_BOM = "\uFEFF";
+
+function readTableRows(table: HTMLElement): {
+  header: HTMLElement[][];
+  body: HTMLElement[][];
+} {
+  const header: HTMLElement[][] = [];
+  const body: HTMLElement[][] = [];
+  for (const row of Array.from(table.querySelectorAll("tr")) as HTMLElement[]) {
+    const cells = Array.from(row.children) as HTMLElement[];
+    const isHeader =
+      cells.length > 0 &&
+      cells.every((cell) => (cell.tagName || "").toLowerCase() === "th");
+    (isHeader ? header : body).push(cells);
+  }
+  return { header, body };
+}
+
+const cellText = (cell: HTMLElement): string =>
+  (cell.textContent || "").replace(/\s+/g, " ").trim();
+
+/** "Save as CSV": the table as text, written where the user picks. */
+async function saveFlatTableAsCsv(
+  doc: Document,
+  table: HTMLElement,
+): Promise<"saved" | "cancelled" | "failed"> {
+  try {
+    const { header, body } = readTableRows(table);
+    const csv = tableRowsToCsv(
+      [...header, ...body].map((row) => row.map(cellText)),
+    );
+    const target = await pickGeneratedImageSavePath(doc, FLAT_TABLE_CSV_NAME, {
+      title: t("Save as CSV"),
+      filter: { label: "CSV", pattern: "*.csv" },
+    });
+    if (target.status === "cancelled") return "cancelled";
+    if (target.status !== "selected") return "failed";
+    // The byte order mark lets Excel read non-English text as UTF-8.
+    const bytes = new TextEncoder().encode(`${UTF8_BOM}${csv}\n`);
+    await saveGeneratedImageAssetToPath(
+      {
+        image: { id: FLAT_TABLE_CSV_NAME },
+        bytes,
+        mimeType: "text/csv",
+        fileName: FLAT_TABLE_CSV_NAME,
+      },
+      target.path,
+    );
+    return "saved";
+  } catch {
+    return "failed";
+  }
+}
+
+/**
+ * The flat answer style for tables: no outer box (CSS), numeric columns marked
+ * for right alignment, and a hover bar with Copy table and Save as CSV. Runs
+ * once per table, after the copy button exists; tables outside a flat scope
+ * are left as they are.
+ */
+export function attachFlatTableChrome(root: ParentNode, doc: Document): void {
+  const blocks = Array.from(
+    root.querySelectorAll(".llm-copyable-table"),
+  ) as HTMLElement[];
+  for (const block of blocks) {
+    if (block.dataset.flatChrome === "true") continue;
+    if (!isInFlatContentScope(block)) continue;
+    const table = (
+      Array.from(block.querySelectorAll("table")) as HTMLElement[]
+    )[0];
+    if (!table) continue;
+    block.dataset.flatChrome = "true";
+    block.classList.add("llm-copyable-flat-table");
+
+    const { header, body } = readTableRows(table);
+    const numeric = detectNumericColumns(body.map((row) => row.map(cellText)));
+    for (const row of [...header, ...body]) {
+      row.forEach((cell, index) => {
+        if (numeric[index]) cell.classList.add(NUMERIC_CELL_CLASS);
+      });
+    }
+
+    const bar = ensureContentBar(block, doc);
+    const copyButton = getDirectChildWithClass(
+      block,
+      "llm-render-copy-btn",
+    ) as HTMLButtonElement | null;
+    if (copyButton) {
+      copyButton.textContent = "";
+      const label = t("Copy table");
+      copyButton.title = label;
+      copyButton.setAttribute("aria-label", label);
+      adoptContentBarButton(bar, copyButton);
+    }
+    const csvButton = appendContentBarButton(
+      bar,
+      {
+        className: "llm-content-bar-save llm-content-bar-csv",
+        label: t("Save as CSV"),
+        onClick: () => {
+          csvButton.disabled = true;
+          void saveFlatTableAsCsv(doc, table).then((result) => {
+            csvButton.disabled = false;
+            if (result === "cancelled") return;
+            csvButton.dataset.saveState = result;
+            doc.defaultView?.setTimeout?.(() => {
+              delete csvButton.dataset.saveState;
+            }, FLAT_SAVE_RESET_DELAY_MS);
+          });
+        },
+      },
+      doc,
+    );
+  }
+}
+
+/**
+ * The flat answer style for display equations: no tinted box (CSS) and a
+ * hover bar with one button, Copy LaTeX. Inline math is left alone.
+ */
+export function attachFlatMathChrome(root: ParentNode, doc: Document): void {
+  const blocks = Array.from(
+    root.querySelectorAll(".llm-copyable-math"),
+  ) as HTMLElement[];
+  for (const block of blocks) {
+    if (block.dataset.flatChrome === "true") continue;
+    if (block.classList.contains("llm-copyable-inline")) continue;
+    if (!isInFlatContentScope(block)) continue;
+    const copyButton = getDirectChildWithClass(
+      block,
+      "llm-render-copy-btn",
+    ) as HTMLButtonElement | null;
+    if (!copyButton) continue;
+    block.dataset.flatChrome = "true";
+    block.classList.add("llm-copyable-flat-math");
+    const bar = ensureContentBar(block, doc);
+    copyButton.textContent = "";
+    const label = t("Copy LaTeX");
+    copyButton.title = label;
+    copyButton.setAttribute("aria-label", label);
+    adoptContentBarButton(bar, copyButton);
+  }
+}
+
+/**
+ * The flat answer style for plain Markdown pictures: the image sits in a
+ * wrapper with a hover bar (Copy image, Open full view). Pictures with no
+ * address (note attachments) are left alone.
+ */
+export function attachFlatInlineImageChrome(
+  root: ParentNode,
+  doc: Document,
+): void {
+  const images = Array.from(
+    root.querySelectorAll(".llm-chat-inline-figure"),
+  ) as HTMLImageElement[];
+  for (const img of images) {
+    if (img.dataset.flatChrome === "true") continue;
+    if (!isInFlatContentScope(img)) continue;
+    const src = (img.getAttribute("src") || "").trim();
+    const parent = img.parentElement;
+    if (!src || !parent) continue;
+    img.dataset.flatChrome = "true";
+    const wrapper = doc.createElement("span") as HTMLElement;
+    wrapper.className = "llm-flat-inline-figure";
+    parent.insertBefore(wrapper, img);
+    wrapper.appendChild(img);
+
+    const bar = ensureContentBar(wrapper, doc);
+    appendContentBarButton(
+      bar,
+      {
+        className: "llm-content-bar-copy-image",
+        label: t("Copy image"),
+        onClick: () => {
+          void copyGeneratedImageToClipboard(wrapper, {
+            id: "inline-image",
+            src,
+          }).catch(() => undefined);
+        },
+      },
+      doc,
+    );
+    appendContentBarButton(
+      bar,
+      {
+        className: "llm-content-bar-fullview",
+        label: t("Open full view"),
+        onClick: () => {
+          const alt = img.getAttribute("alt") || "";
+          const opened = openStandaloneViewerWindow(doc, {
+            kind: "image",
+            src: img.src || src,
+            alt,
+            caption: alt,
+          });
+          if (!opened) {
+            openFigureViewer(wrapper, {
+              src: img.src || src,
+              alt,
+              caption: alt,
+            });
+          }
+        },
+      },
+      doc,
+    );
+  }
+}
+
 export function attachRenderedCopyButtons(
   root: ParentNode,
   doc: Document,
@@ -3075,6 +3293,9 @@ export function renderRenderedMarkdownInto(
   attachRenderedSvgPreviewButtons(target, doc);
   attachRenderedHtmlPreviews(target, doc);
   attachFlatPreviewChrome(target, doc);
+  attachFlatTableChrome(target, doc);
+  attachFlatMathChrome(target, doc);
+  attachFlatInlineImageChrome(target, doc);
   void renderMermaidBlocks(
     target,
     doc,

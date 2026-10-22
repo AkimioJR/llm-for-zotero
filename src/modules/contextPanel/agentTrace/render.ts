@@ -7354,6 +7354,8 @@ export function renderAgentTrace({
       const strip = doc.createElement("div") as HTMLDivElement;
       strip.className = "llm-agent-image-artifacts llm-agent-figure-strip";
       renderAssistantGeneratedImagesInto(strip, stripImages, doc, {
+        // Below the activity disclosure, so part of the answer: flat style.
+        flatChrome: true,
         wrapClassName: "llm-agent-image-artifacts-grid",
         frameClassName: "llm-agent-image-artifact-frame",
         onImageActionStatus: figureActionStatusReporter(doc, strip),

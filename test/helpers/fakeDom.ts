@@ -165,7 +165,7 @@ export class FakeElement {
     }
     if (isClassSelector(selector))
       return this.findAllByClass(selector.slice(1));
-    if (selector === "img") return this.findAllByTag("img");
+    if (/^[a-z]+$/.test(selector)) return this.findAllByTag(selector);
     return [];
   }
 

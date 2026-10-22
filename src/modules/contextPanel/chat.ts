@@ -12214,6 +12214,8 @@ function renderChatForPanel(
       if (hasGeneratedImages) {
         if (!agentTraceReplacesAssistantTurn) {
           renderAssistantGeneratedImagesInto(bubble, generatedImages, doc, {
+            // Part of the answer: the flat style, like the answer text.
+            flatChrome: true,
             onImageLoaded: () => {
               scheduleChatScrollReconciliation(conversationKey, chatBox);
             },

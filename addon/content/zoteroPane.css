@@ -10423,6 +10423,147 @@ label.llm-search-results-item:hover {
   padding: 14px 22px 14px 14px;
 }
 
+/* Pictures (paper figures, pictures the agent made, Markdown images): just
+ * the image, 8px radius, at most 560px wide and centered. The caption line
+ * and the hover bar come from the shared chrome. */
+.llm-content-flat.llm-assistant-generated-images {
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.llm-content-flat .llm-assistant-generated-image-frame.llm-flat-figure {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: min(100%, 560px);
+  margin: 6px auto 22px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.llm-content-flat .llm-flat-figure > .llm-assistant-generated-image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+  margin: 0 auto;
+  border-radius: 8px;
+  background: transparent;
+}
+
+/* The caption must not widen a narrow picture's frame. */
+.llm-content-flat .llm-flat-figure > .llm-content-caption {
+  width: 0;
+  min-width: 100%;
+  margin: 6px 0 0;
+  box-sizing: border-box;
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-copy-image,
+.llm-content-flat .llm-content-bar > .llm-render-copy-btn {
+  --llm-content-bar-icon: url("icons/action-copy.svg");
+}
+
+.llm-content-flat .llm-content-bar > .llm-content-bar-folder {
+  --llm-content-bar-icon: url("icons/folder-open.svg");
+}
+
+.llm-content-flat
+  .llm-copyable[data-copy-feedback="copied"]
+  .llm-content-bar
+  > .llm-render-copy-btn {
+  color: #7dd3a8;
+}
+
+.llm-content-flat .llm-flat-inline-figure {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: min(100%, 560px);
+  margin: 6px auto;
+}
+
+.llm-content-flat .llm-flat-inline-figure > img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto !important;
+  border-radius: 8px !important;
+}
+
+/* Tables: no outer box, one rule under the header, hairlines between rows,
+ * numbers right-aligned, and a horizontal scroll when the table is wide. */
+.llm-content-flat .llm-copyable.llm-copyable-flat-table {
+  margin: 8px 0 14px;
+}
+
+.llm-content-flat .llm-copyable-flat-table .llm-table-scroll {
+  overflow-x: auto;
+}
+
+.llm-content-flat .llm-copyable-flat-table table {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  margin: 0;
+  border: 0;
+}
+
+.llm-content-flat .llm-copyable-flat-table th,
+.llm-content-flat .llm-copyable-flat-table td {
+  max-width: 28em;
+  padding: 7px 14px 7px 0;
+  border: 0;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--stroke-secondary) 55%, transparent);
+  background: transparent;
+}
+
+.llm-content-flat .llm-copyable-flat-table thead th {
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--fill-primary) 35%, transparent);
+  font-weight: 600;
+}
+
+.llm-content-flat .llm-copyable-flat-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.llm-content-flat .llm-copyable-flat-table th:last-child,
+.llm-content-flat .llm-copyable-flat-table td:last-child {
+  padding-right: 0;
+}
+
+.llm-content-flat .llm-copyable-flat-table .llm-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Display equations: centered, no tinted box. The bar floats at the block's
+ * top-right corner and shows on hover only, so nothing moves; it can cover a
+ * far-right equation number while the pointer is over the equation. */
+.llm-content-flat .llm-copyable.llm-copyable-flat-math {
+  margin: 12px 0;
+}
+
+.llm-content-flat .llm-copyable-flat-math > .math-display {
+  margin: 0;
+  padding: 4px 0;
+  background: transparent;
+  border-radius: 0;
+  text-align: center;
+}
+
+.llm-content-flat .llm-copyable-flat-math > .llm-content-bar {
+  top: -4px;
+  right: 0;
+}
+
 .llm-rendered-markdown .llm-svg-preview {
   position: relative;
   display: flex;
