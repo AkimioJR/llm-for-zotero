@@ -1365,6 +1365,7 @@ const zhCN: Record<string, string> = {
   "Updated to v{version}": "已更新到 v{version}",
   "From GitHub releases": "来自 GitHub 发布页",
   "Open on GitHub": "在 GitHub 上打开",
+  "Close (Esc)": "关闭 (Esc)",
   "Loading…": "加载中…",
   "Could not load the release notes. Check your connection, or open them on GitHub.":
     "无法加载更新说明。请检查网络连接，或在 GitHub 上打开。",

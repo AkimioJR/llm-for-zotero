@@ -5,6 +5,7 @@ import type {
   PluginUpdateState,
 } from "../pluginUpdate";
 import { renderRenderedMarkdownInto } from "./renderedMarkdown";
+import { openStandaloneViewerWindow } from "./standaloneMermaidWindow";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -43,6 +44,39 @@ function downloadIcon(doc: Document): SVGElement {
   return svg;
 }
 
+function strokeIcon(doc: Document, d: string): SVGElement {
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "15");
+  svg.setAttribute("height", "15");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.6");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = doc.createElementNS(SVG_NS, "path");
+  path.setAttribute("d", d);
+  svg.append(path);
+  return svg;
+}
+
+const EXTERNAL_ICON_PATH = "M6 3H3.5v9.5H13V10M9 3h4v4M13 3 7.5 8.5";
+const CLOSE_ICON_PATH = "M4 4l8 8M12 4l-8 8";
+
+/**
+ * The headings the section chips jump to: the top heading level that appears
+ * at least twice, so a release with one title and many `##` sections gets
+ * chips for the sections. Fewer than two headings means no chips.
+ */
+function sectionHeadings(root: HTMLElement): HTMLElement[] {
+  for (const level of ["h1", "h2", "h3"]) {
+    const found = Array.from(root.querySelectorAll(level)) as HTMLElement[];
+    if (found.length >= 2) return found;
+  }
+  return [];
+}
+
 function fill(template: string, version: string): string {
   return template.replace("{version}", version);
 }
@@ -62,7 +96,7 @@ function formatDate(iso: string): string {
 
 /**
  * The update button at the right end of the sidebar footer row, and the
- * release-notes card and confirm popover it opens. State decisions live in
+ * release notes panel and confirm popover it opens. State decisions live in
  * the controller; this file only draws and routes clicks.
  */
 export function createStandaloneUpdateControl(args: {
@@ -87,10 +121,12 @@ export function createStandaloneUpdateControl(args: {
 
   const closePopover = () => {
     notesToken++;
+    const hadNotes = popoverKind === "notes";
     popover?.remove();
     popover = null;
     popoverKind = null;
     button.setAttribute("aria-expanded", "false");
+    if (hadNotes && button.isConnected) button.focus();
   };
 
   const render = (state: PluginUpdateState) => {
@@ -165,7 +201,7 @@ export function createStandaloneUpdateControl(args: {
     const viewportHeight = win.innerHeight || 600;
     card.style.left = `${Math.max(8, Math.round(rect.left))}px`;
     card.style.bottom = `${Math.max(8, Math.round(viewportHeight - rect.top + 6))}px`;
-    card.style.width = `${Math.min(kind === "notes" ? 360 : 300, viewportWidth - 48)}px`;
+    card.style.width = `${Math.min(300, viewportWidth - 48)}px`;
     // The font-scale variables live on the standalone root, not the window.
     (
       doc.getElementById("llmforzotero-standalone-chat-root") ||
@@ -177,22 +213,53 @@ export function createStandaloneUpdateControl(args: {
     return card;
   };
 
+  /**
+   * The release notes, as a large panel over the whole window with the chat
+   * dimmed behind it. Esc, the close button, or a click on the dimmed area
+   * closes it.
+   */
   const openNotes = (version: string) => {
-    const card = openPopover("notes");
-    const header = el(doc, "div", "llm-standalone-update-card-header");
+    closePopover();
+    const scrim = el(doc, "div", "llm-standalone-release-notes");
+    const panel = el(doc, "div", "llm-standalone-release-notes-panel");
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    scrim.append(panel);
+
+    const header = el(doc, "div", "llm-standalone-release-notes-header");
+    const titleText = fill(translate("What's new in v{version}"), version);
     const title = el(
       doc,
       "div",
-      "llm-standalone-update-card-title",
-      fill(translate("What's new in v{version}"), version),
+      "llm-standalone-release-notes-title",
+      titleText,
     );
-    const date = el(doc, "div", "llm-standalone-update-card-date");
-    header.append(title, date);
-    const body = el(doc, "div", "llm-standalone-update-card-body");
-    body.append(
+    panel.setAttribute("aria-label", titleText);
+    const date = el(doc, "div", "llm-standalone-release-notes-date");
+    const tools = el(doc, "div", "llm-standalone-release-notes-tools");
+    const iconButton = (label: string, iconPath: string) => {
+      const iconBtn = el(doc, "button", "llm-standalone-release-notes-btn");
+      iconBtn.type = "button";
+      iconBtn.setAttribute("aria-label", label);
+      iconBtn.append(strokeIcon(doc, iconPath));
+      return iconBtn;
+    };
+    const githubButton = iconButton(
+      translate("Open on GitHub"),
+      EXTERNAL_ICON_PATH,
+    );
+    githubButton.dataset.releaseNotesAction = "github";
+    const closeButton = iconButton(translate("Close (Esc)"), CLOSE_ICON_PATH);
+    closeButton.dataset.releaseNotesAction = "close";
+    tools.append(githubButton, closeButton);
+    header.append(title, date, tools);
+
+    const scroller = el(doc, "div", "llm-standalone-release-notes-scroll");
+    const article = el(doc, "div", "llm-standalone-release-notes-article");
+    article.append(
       el(doc, "div", "llm-standalone-update-muted", translate("Loading…")),
     );
-    const footer = el(doc, "div", "llm-standalone-update-card-footer");
+    const footer = el(doc, "div", "llm-standalone-release-notes-footer");
     const source = el(
       doc,
       "span",
@@ -206,23 +273,55 @@ export function createStandaloneUpdateControl(args: {
       `${translate("Open on GitHub")} ↗`,
     );
     link.type = "button";
-    let linkUrl = "";
-    link.addEventListener("click", () => {
-      if (/^https?:\/\//i.test(linkUrl)) openUrl(linkUrl);
-    });
     footer.append(source, link);
-    card.append(header, body, footer);
-    body.addEventListener("click", (event: Event) => {
-      const anchor = (event.target as Element | null)?.closest?.("a[href]");
-      if (!anchor) return;
-      event.preventDefault();
-      const href = anchor.getAttribute("href") || "";
-      if (/^https?:\/\//i.test(href)) openUrl(href);
+    scroller.append(article);
+    panel.append(header, scroller);
+
+    let linkUrl = "";
+    const openGithub = () => {
+      if (/^https?:\/\//i.test(linkUrl)) openUrl(linkUrl);
+    };
+    githubButton.addEventListener("click", openGithub);
+    link.addEventListener("click", openGithub);
+    closeButton.addEventListener("click", closePopover);
+    scrim.addEventListener("mousedown", (event: Event) => {
+      if (event.target === scrim) closePopover();
     });
+    article.addEventListener("click", (event: Event) => {
+      const target = event.target as Element | null;
+      const anchor = target?.closest?.("a[href]");
+      if (anchor) {
+        event.preventDefault();
+        const href = anchor.getAttribute("href") || "";
+        if (/^https?:\/\//i.test(href)) openUrl(href);
+        return;
+      }
+      const img = target?.closest?.("img") as HTMLImageElement | null;
+      if (img?.src) {
+        const alt = img.getAttribute("alt") || "";
+        openStandaloneViewerWindow(doc, {
+          kind: "image",
+          src: img.src,
+          alt,
+          caption: alt,
+        });
+      }
+    });
+
+    // The font-scale variables live on the standalone root, not the window.
+    (
+      doc.getElementById("llmforzotero-standalone-chat-root") ||
+      doc.documentElement
+    )?.append(scrim);
+    popover = scrim;
+    popoverKind = "notes";
+    button.setAttribute("aria-expanded", "true");
+    closeButton.focus();
+
     const token = notesToken;
     void controller.loadNotes(version).then((result) => {
-      if (token !== notesToken || popover !== card) return;
-      body.replaceChildren();
+      if (token !== notesToken || popover !== scrim) return;
+      article.replaceChildren();
       if (result.status === "ready") {
         linkUrl = result.notes.htmlUrl;
         date.textContent = formatDate(result.notes.publishedAt);
@@ -230,10 +329,31 @@ export function createStandaloneUpdateControl(args: {
         renderRenderedMarkdownInto(rendered, result.notes.body, doc, {
           deferEnrichment: true,
         });
-        body.append(rendered);
+        const headings = sectionHeadings(rendered);
+        if (headings.length) {
+          const chips = el(doc, "nav", "llm-standalone-release-notes-chips");
+          for (const heading of headings) {
+            const chip = el(
+              doc,
+              "button",
+              "llm-standalone-release-notes-chip",
+              heading.textContent?.trim() || "",
+            );
+            chip.type = "button";
+            chip.addEventListener("click", () => {
+              scroller.scrollTo({
+                top: Math.max(0, heading.offsetTop - chips.offsetHeight - 8),
+                behavior: "smooth",
+              });
+            });
+            chips.append(chip);
+          }
+          article.append(chips);
+        }
+        article.append(rendered, footer);
       } else {
         linkUrl = result.htmlUrl;
-        body.append(
+        article.append(
           el(
             doc,
             "div",
@@ -242,9 +362,13 @@ export function createStandaloneUpdateControl(args: {
               "Could not load the release notes. Check your connection, or open them on GitHub.",
             ),
           ),
+          footer,
         );
       }
-      if (!linkUrl) link.disabled = true;
+      if (!linkUrl) {
+        link.disabled = true;
+        githubButton.disabled = true;
+      }
     });
   };
 
@@ -323,13 +447,36 @@ export function createStandaloneUpdateControl(args: {
   });
 
   const onPointerDown = (event: Event) => {
-    if (!popover) return;
+    // The release notes close on a click on their own dimmed area.
+    if (!popover || popoverKind === "notes") return;
     const target = event.target as Node | null;
     if (target && (popover.contains(target) || button.contains(target))) return;
     closePopover();
   };
   const onKeyDown = (event: KeyboardEvent) => {
-    if (!popover || event.key !== "Escape") return;
+    if (!popover) return;
+    if (event.key === "Tab" && popoverKind === "notes") {
+      // Keep keyboard focus inside the release notes while they are open.
+      const focusable = Array.from(
+        popover.querySelectorAll("button:not(:disabled), a[href]"),
+      ) as HTMLElement[];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = doc.activeElement;
+      if (event.shiftKey && (active === first || !popover.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (active === last || !popover.contains(active))
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+      return;
+    }
+    if (event.key !== "Escape") return;
     event.preventDefault();
     event.stopPropagation();
     closePopover();

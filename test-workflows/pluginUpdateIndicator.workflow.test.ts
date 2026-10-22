@@ -70,6 +70,10 @@ describe("workflow: plugin update indicator", function () {
     standaloneDoc().querySelector(
       ".llm-standalone-update-popover",
     ) as HTMLElement | null;
+  const notes = () =>
+    standaloneDoc().querySelector(
+      ".llm-standalone-release-notes",
+    ) as HTMLElement | null;
 
   async function openStandalone(): Promise<void> {
     await api.openStandaloneForItem(fixture!.parentItemId);
@@ -117,33 +121,61 @@ describe("workflow: plugin update indicator", function () {
     assert.equal(button()!.textContent!.trim(), `v${version}`);
     assert.isOk(button()!.closest(".llm-standalone-footer-row"));
 
-    // Release notes card.
+    // Release notes: a large panel over the window.
     button()!.click();
     await until(
-      () => Boolean(popover()?.textContent?.includes(NOTES_MARKER)),
-      "release notes are rendered in the card",
+      () => Boolean(notes()?.textContent?.includes(NOTES_MARKER)),
+      "release notes are rendered in the panel",
     );
-    assert.include(popover()!.textContent!, `What's new in v${version}`);
-    assert.isOk(popover()!.querySelector("li"), "markdown list is rendered");
-    const cardRect = popover()!.getBoundingClientRect();
-    const rowRect = doc
-      .querySelector(".llm-standalone-footer-row")!
+    assert.include(notes()!.textContent!, `What's new in v${version}`);
+    assert.isOk(notes()!.querySelector("li"), "markdown list is rendered");
+    const win = doc.defaultView as any;
+    const panelRect = notes()!
+      .querySelector(".llm-standalone-release-notes-panel")!
       .getBoundingClientRect();
-    assert.isAtMost(
-      cardRect.bottom,
-      rowRect.top + 1,
-      "card sits above the row",
+    assert.isAbove(
+      panelRect.width,
+      win.innerWidth * 0.8,
+      "panel spans most of the window",
+    );
+    assert.isAbove(
+      panelRect.height,
+      win.innerHeight * 0.7,
+      "panel spans most of the window height",
     );
 
-    // Click outside dismisses.
-    doc.documentElement!.dispatchEvent(
-      new (doc.defaultView as any).MouseEvent("mousedown", { bubbles: true }),
+    // Esc closes.
+    doc.dispatchEvent(
+      new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
     );
-    await until(() => !popover(), "card closes on outside click");
+    await until(() => !notes(), "panel closes on Esc");
+
+    // The close button closes.
+    button()!.click();
+    await until(() => Boolean(notes()), "panel opens again");
+    (
+      notes()!.querySelector(
+        '[data-release-notes-action="close"]',
+      ) as HTMLElement
+    ).click();
+    await until(() => !notes(), "panel closes on the close button");
+
+    // A click on the dimmed area closes; a click inside the panel does not.
+    button()!.click();
+    await until(
+      () => Boolean(notes()?.textContent?.includes(NOTES_MARKER)),
+      "panel opens a third time",
+    );
+    notes()!
+      .querySelector(".llm-standalone-release-notes-panel")!
+      .dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true }));
+    await Zotero.Promise.delay(100);
+    assert.isOk(notes(), "a click inside the panel keeps it open");
+    notes()!.dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true }));
+    await until(() => !notes(), "panel closes on a click on the dimmed area");
 
     // Update available: icon only, with a tooltip.
     available = { version: "99.0.0" };
-    const win = doc.defaultView as any;
     // The next check is on a timer; the window reopens to run one now.
     await api.closeStandalone();
     await openStandalone();
@@ -153,7 +185,6 @@ describe("workflow: plugin update indicator", function () {
     );
     assert.equal(button()!.textContent!.trim(), "");
     assert.equal(button()!.title, "Update to v99.0.0");
-    void win;
 
     button()!.click();
     await until(() => Boolean(popover()), "confirm popover opens");
@@ -189,8 +220,8 @@ describe("workflow: plugin update indicator", function () {
     assert.include(button()!.textContent!, `v${version}`);
     button()!.click();
     await until(
-      () => Boolean(popover()?.textContent?.includes(NOTES_MARKER)),
-      "card opens from the updated badge",
+      () => Boolean(notes()?.textContent?.includes(NOTES_MARKER)),
+      "release notes open from the updated badge",
     );
     assert.equal(button()!.dataset.state, "current");
     assert.equal(button()!.textContent!.trim(), `v${version}`);
