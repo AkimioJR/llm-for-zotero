@@ -100,6 +100,7 @@ import {
   recordCodexNativeReadActivity,
 } from "./nativeContextLedger";
 import { buildNotesDirectoryConfigSection } from "../utils/notesDirectoryConfig";
+import { buildAgentFilesInstructionForScope } from "../utils/agentFilesDirectory";
 import {
   externalRuntimeCommandEffect,
   externalRuntimeFileEffect,
@@ -1729,6 +1730,8 @@ export function buildZoteroEnvironmentManifest(params: {
   priorReadContextBlock?: string;
   resourceContextBlock?: string;
   rawPdfMode?: boolean;
+  /** Where saved files go and when to show a page in the answer instead. */
+  agentFilesInstruction?: string;
 }): string {
   const { scope } = params;
   const rawPdfPolicyAlreadyPresent = Boolean(
@@ -1741,6 +1744,9 @@ export function buildZoteroEnvironmentManifest(params: {
   const notesDirectoryConfig = params.rawPdfMode
     ? ""
     : buildNotesDirectoryConfigSection();
+  const agentFilesInstruction = params.rawPdfMode
+    ? ""
+    : params.agentFilesInstruction || "";
   const priorReadContextBlock = params.rawPdfMode
     ? ""
     : params.priorReadContextBlock || "";
@@ -1803,6 +1809,7 @@ export function buildZoteroEnvironmentManifest(params: {
     return [
       lines.join("\n"),
       notesDirectoryConfig,
+      agentFilesInstruction,
       params.resourceContextBlock || "",
       priorReadContextBlock,
       params.skillInstructionBlock || "",
@@ -1819,6 +1826,7 @@ export function buildZoteroEnvironmentManifest(params: {
     return [
       lines.join("\n"),
       notesDirectoryConfig,
+      agentFilesInstruction,
       params.resourceContextBlock || "",
       priorReadContextBlock,
       params.skillInstructionBlock || "",
@@ -1853,6 +1861,7 @@ export function buildZoteroEnvironmentManifest(params: {
   return [
     lines.join("\n"),
     notesDirectoryConfig,
+    agentFilesInstruction,
     params.resourceContextBlock || "",
     priorReadContextBlock,
     params.skillInstructionBlock || "",
@@ -3693,6 +3702,12 @@ export async function runCodexAppServerNativeTurn(input: {
           priorReadContextBlock,
           resourceContextBlock: visibleTurnContextBlock,
           rawPdfMode,
+          agentFilesInstruction: await buildAgentFilesInstructionForScope({
+            conversationKind:
+              scopeWithProfile.kind === "paper" ? "paper" : "global",
+            libraryID: scopeWithProfile.libraryID,
+            paperItemId: scopeWithProfile.paperItemID,
+          }),
         });
         const developerInstructionMessages = buildNativeMessages({
           messages: messagesForNativeTurn,

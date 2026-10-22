@@ -36,6 +36,7 @@ import { buildPermissionModeGuidance } from "./permissionModeGuidance";
 import { resolveProviderCapabilities } from "../../providers";
 import type { ProviderCapabilities } from "../../providers";
 import { buildNotesDirectoryConfigSection } from "../../utils/notesDirectoryConfig";
+import { buildAgentFilesInstructionForScope } from "../../utils/agentFilesDirectory";
 import { NOTE_EDITING_QUOTE_BLOCK_GUIDANCE } from "../../shared/quoteGuidance";
 import {
   findNoteEmbedTokensInSelection,
@@ -54,7 +55,10 @@ import {
 } from "../context/resourceContextPlan";
 import { buildAgentCoverageContextBlock } from "../context/coverageLedger";
 import { buildVisibleTurnContextBlock } from "../context/turnContextEnvelope";
-import { getSelectedPassagePaper } from "../context/turnPaperScope";
+import {
+  getActiveTurnPaper,
+  getSelectedPassagePaper,
+} from "../context/turnPaperScope";
 import { renderLongJobResume } from "../loop/longJob";
 import { OUTCOME_REASONS } from "../loop/outcomes";
 import {
@@ -622,6 +626,16 @@ export async function renderAgentPromptEnvelope(
   } = {},
 ): Promise<RenderedAgentPromptEnvelope> {
   const continuityNotes = await loadAgentTurnMemory(request.conversationKey);
+  // A side chat is read-only, so it saves no files.
+  const agentFilesInstruction = isEphemeralConversationKey(
+    request.conversationKey,
+  )
+    ? ""
+    : await buildAgentFilesInstructionForScope({
+        conversationKind: request.turnPaperScope.conversationKind,
+        libraryID: request.libraryID || request.turnPaperScope.libraryID,
+        paperItemId: getActiveTurnPaper(request.turnPaperScope)?.itemId,
+      });
   const toolGuidanceInstructions = collectMatchingToolGuidance(
     request,
     tools,
@@ -716,6 +730,10 @@ export async function renderAgentPromptEnvelope(
     {
       id: "notes-directory-config",
       lines: [buildNotesDirectoryConfigSection()],
+    },
+    {
+      id: "agent-files",
+      lines: [agentFilesInstruction],
     },
   ];
   // The library overview is deliberately NOT a system section.

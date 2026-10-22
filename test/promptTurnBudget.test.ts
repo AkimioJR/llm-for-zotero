@@ -55,11 +55,15 @@ import {
  * literature_read, the always-listed tool that reads an outside paper's
  * abstract and open-access text instead of shell curl calls, and its clause
  * in the plugin Agent's search-tool map (2026-10-20), to 39,864, 38,597 and 39,962 (+829 each).
+ * Raised by the agent-files section, which tells the agent to put a page in
+ * the answer as an html block and to save files only when the user wants the
+ * file itself, into the chat's own folder (2026-10-22), to 40,269, 39,002 and
+ * 40,367 (+405 each; a turn whose paper has a folder adds its path lines).
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 39_864,
-  paper: 38_597,
-  collection: 39_962,
+  global: 40_269,
+  paper: 39_002,
+  collection: 40_367,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

@@ -38,6 +38,7 @@ import {
 } from "../codexAppServer/mcpSetup";
 import { dbg, dbgError } from "../utils/debugLogger";
 import { buildNotesDirectoryConfigSection } from "../utils/notesDirectoryConfig";
+import { buildAgentFilesInstructionForScope } from "../utils/agentFilesDirectory";
 import {
   externalRuntimeCommandEffect,
   externalRuntimeFileEffect,
@@ -733,6 +734,8 @@ function buildClaudeBridgeNotesDirectoryInstruction(): string {
 function buildClaudeBridgeCustomInstruction(
   options: {
     rawPdfMode?: boolean;
+    /** Where saved files go and when to show a page in the answer instead. */
+    agentFilesInstruction?: string;
   } = {},
 ): string {
   return [
@@ -748,6 +751,7 @@ function buildClaudeBridgeCustomInstruction(
     // directory block below only carves out the file writes that are not notes.
     "A note you are asked to write is a Zotero note: use the Zotero note_write tool, not Claude Code's Write tool. note_write is the only note path Zotero can authorize, journal, and verify against the saved note, so a note written straight to disk leaves the host with no record of what changed.",
     buildClaudeBridgeNotesDirectoryInstruction(),
+    options.rawPdfMode ? "" : options.agentFilesInstruction || "",
     options.rawPdfMode ? RAW_PDF_TRANSPORT_POLICY_BLOCK : "",
   ]
     .map((entry) => entry.trim())
@@ -1209,6 +1213,15 @@ async function runExternalBridgeTurn(
     params.request.metadata && typeof params.request.metadata === "object"
       ? params.request.metadata
       : undefined;
+  const agentFilesInstruction = await buildAgentFilesInstructionForScope({
+    conversationKind:
+      params.request.conversationKind === "paper" ? "paper" : "global",
+    libraryID: resolveFallbackLibraryId(params.request),
+    paperItemId: (
+      getActiveTurnPaper(params.request.turnPaperScope) ||
+      params.request.turnPaperScope.papers[0]?.paper
+    )?.itemId,
+  });
   const providerIdentityStack = await buildClaudeProviderIdentityStack();
   const providerIdentity = hashProviderIdentityStack(providerIdentityStack);
   const providerSessionIdHint = await resolveClaudeProviderSessionHint(
@@ -1234,6 +1247,7 @@ async function runExternalBridgeTurn(
       ...buildAgentPermissionMetadata(),
       customInstruction: buildClaudeBridgeCustomInstruction({
         rawPdfMode: requestLocalDocuments(params.request).length > 0,
+        agentFilesInstruction,
       }),
       providerIdentity,
       providerIdentityStack,

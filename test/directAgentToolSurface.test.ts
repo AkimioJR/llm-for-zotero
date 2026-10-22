@@ -67,10 +67,13 @@ describe("direct Agent model tool surface", function () {
     // tool that reads an outside paper's abstract and open-access text
     // instead of shell curl calls, raised both caps by its measured size, to
     // 26,127 and 36,219 (+760 tool and +829 total) (2026-10-20).
+    // The agent-files section (put a page in the answer, save files only when
+    // the user wants the file, into the chat's own folder) raised the cap
+    // with the fixed prompt to 36,624 (+405) (2026-10-22).
     assert.isAtMost(serializedToolCharacters, 26_127);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      36_219,
+      36_624,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),
