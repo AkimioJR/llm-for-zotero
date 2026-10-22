@@ -3,6 +3,7 @@ import { installStandaloneWindowTitlebar } from "./standaloneWindowTitlebar";
 import { HTML_NS } from "../../utils/domHelpers";
 import { pluginStylesheetHref } from "../../utils/pluginReload";
 import { createInlineSvgElement } from "./mermaidSvg";
+import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
 import { ZOOM_BUTTON_STEP, getWheelZoomScale } from "./wheelZoom";
 
 type MermaidThemeKey = "light" | "dark";
@@ -23,6 +24,38 @@ export type StandaloneSvgPayload = {
   zoomTargetLabel?: string;
 };
 
+export type StandaloneViewerPayload =
+  | ({ kind: "svg" } & StandaloneSvgPayload)
+  | {
+      kind: "image";
+      src: string;
+      title?: string;
+      alt?: string;
+      themeKey?: MermaidThemeKey;
+    }
+  | {
+      kind: "html";
+      source: string;
+      title?: string;
+      themeKey?: MermaidThemeKey;
+    }
+  | {
+      kind: "markdown";
+      markdown: string;
+      title?: string;
+      themeKey?: MermaidThemeKey;
+      /** Draws into the target; it must use the target's own document. */
+      renderMarkdown: (target: HTMLElement, markdown: string) => void;
+    };
+
+type ViewerContent = {
+  /** What the toolbar shows before the close button. */
+  buttons: HTMLElement[];
+  body: HTMLElement;
+  /** Runs once the window is laid out and the stylesheet is in. */
+  afterMount?: (css: HTMLLinkElement) => void;
+};
+
 const MERMAID_WINDOW_MIN_WIDTH_PX = 640;
 const MERMAID_WINDOW_MIN_HEIGHT_PX = 420;
 const MERMAID_WINDOW_ZOOM_MIN = 0.5;
@@ -30,6 +63,13 @@ const MERMAID_WINDOW_ZOOM_MAX = 4;
 const MERMAID_WINDOW_ROOT_ID = "llmforzotero-standalone-mermaid-root";
 const MERMAID_WINDOW_FEATURES =
   "chrome,extrachrome,menubar,resizable,scrollbars,status,centerscreen,dialog=no,dependent=no";
+
+const DEFAULT_TITLES: Record<StandaloneViewerPayload["kind"], string> = {
+  svg: "SVG Preview",
+  image: "Picture",
+  html: "Web page",
+  markdown: "Markdown note",
+};
 
 type OpenDialogWindow = Window & {
   openDialog?: (...args: unknown[]) => Window | null;
@@ -101,17 +141,149 @@ function syncThemeVariables(sourceDoc: Document, targetDoc: Document): void {
   targetDoc.documentElement?.prepend(style);
 }
 
-function initializeStandaloneSvgWindow(
+/** The chat's own theme, for a viewer kind that carries no theme key. */
+function detectThemeKey(sourceDoc: Document): MermaidThemeKey {
+  const root = sourceDoc.documentElement;
+  const dark =
+    root?.hasAttribute("lwtheme-brighttext") ||
+    root?.classList.contains("window-is-dark") ||
+    Boolean(sourceDoc.querySelector(".window-is-dark"));
+  return dark ? "dark" : "light";
+}
+
+/** Width-based zoom for the svg and image kinds: − + fit buttons on a stage. */
+function buildZoomContent(
+  doc: Document,
+  targetWin: Window,
+  root: HTMLElement,
+  media: HTMLElement | SVGElement,
+  zoomTargetLabel: string,
+): ViewerContent {
+  const zoomOut = createButton(doc, "−", `Zoom out ${zoomTargetLabel}`);
+  const zoomIn = createButton(doc, "+", `Zoom in ${zoomTargetLabel}`);
+  const fit = createButton(doc, "⛶", `Fit ${zoomTargetLabel} to window`);
+
+  const viewport = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
+  viewport.className = "llm-mermaid-window-viewport";
+  const stage = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
+  stage.className = "llm-mermaid-window-stage";
+  stage.appendChild(media);
+  viewport.appendChild(stage);
+
+  let scale = 1;
+  let baseFitWidth = 0;
+  const getBaseFitWidth = () => {
+    const nextWidth = getViewportContentWidth(targetWin, viewport);
+    if (nextWidth > 0) baseFitWidth = nextWidth;
+    return baseFitWidth || 1;
+  };
+  const applyZoom = (nextScale: number) => {
+    const previousWidth = stage.scrollWidth || stage.clientWidth || 1;
+    const centerX = viewport.scrollLeft + viewport.clientWidth / 2;
+    const centerRatio = previousWidth > 0 ? centerX / previousWidth : 0.5;
+    scale = clampZoom(nextScale);
+    const baseWidth = getBaseFitWidth();
+    const displayWidth = Math.max(1, Math.round(baseWidth * scale));
+    const stageWidth = Math.max(baseWidth, displayWidth);
+    stage.style.width = `${stageWidth}px`;
+    media.style.width = `${displayWidth}px`;
+    root.dataset.mermaidZoom = formatZoom(scale);
+    zoomOut.disabled = scale <= MERMAID_WINDOW_ZOOM_MIN;
+    zoomIn.disabled = scale >= MERMAID_WINDOW_ZOOM_MAX;
+    targetWin.requestAnimationFrame?.(() => {
+      viewport.scrollLeft = Math.max(
+        0,
+        Math.round(stage.scrollWidth * centerRatio - viewport.clientWidth / 2),
+      );
+    });
+  };
+
+  zoomOut.addEventListener("click", () => applyZoom(scale - ZOOM_BUTTON_STEP));
+  zoomIn.addEventListener("click", () => applyZoom(scale + ZOOM_BUTTON_STEP));
+  fit.addEventListener("click", () => {
+    applyZoom(1);
+    viewport.scrollTop = 0;
+    viewport.scrollLeft = 0;
+  });
+  viewport.addEventListener("wheel", (event: WheelEvent) => {
+    if (!event.metaKey && !event.ctrlKey) return;
+    event.preventDefault();
+    applyZoom(getWheelZoomScale(scale, event.deltaY));
+  });
+  targetWin.addEventListener("resize", () => applyZoom(scale));
+
+  return {
+    buttons: [zoomOut, zoomIn, fit],
+    body: viewport,
+    afterMount: (css) => {
+      css.addEventListener("load", () => applyZoom(scale), { once: true });
+      applyZoom(1);
+      targetWin.requestAnimationFrame?.(() => applyZoom(scale));
+    },
+  };
+}
+
+function buildViewerContent(
+  doc: Document,
+  targetWin: Window,
+  root: HTMLElement,
+  payload: StandaloneViewerPayload,
+): { content: ViewerContent; label: string } | null {
+  if (payload.kind === "svg") {
+    const zoomTargetLabel = payload.zoomTargetLabel || "SVG preview";
+    const svg = createInlineSvgElement(
+      doc,
+      payload.svgMarkup,
+      "llm-mermaid-window-svg",
+      payload.ariaLabel || "SVG preview",
+    );
+    if (!svg) return null;
+    return {
+      content: buildZoomContent(doc, targetWin, root, svg, zoomTargetLabel),
+      label: zoomTargetLabel,
+    };
+  }
+  if (payload.kind === "image") {
+    const img = doc.createElementNS(HTML_NS, "img") as HTMLImageElement;
+    img.className = "llm-mermaid-window-svg";
+    img.alt = payload.alt || payload.title || "";
+    img.src = payload.src;
+    return {
+      content: buildZoomContent(doc, targetWin, root, img, "picture"),
+      label: "picture",
+    };
+  }
+  if (payload.kind === "html") {
+    const frame = createSandboxedHtmlFrame(
+      doc,
+      payload.source,
+      "llm-viewer-window-frame",
+    );
+    return { content: { buttons: [], body: frame }, label: "page" };
+  }
+  const scroller = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
+  scroller.className = "llm-viewer-window-document";
+  const article = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
+  article.className =
+    "llm-viewer-window-markdown llm-standalone-side-panel-item-rendered";
+  scroller.appendChild(article);
+  payload.renderMarkdown(article, payload.markdown);
+  return { content: { buttons: [], body: scroller }, label: "note" };
+}
+
+function initializeStandaloneViewerWindow(
   sourceDoc: Document,
   targetWin: Window,
-  payload: StandaloneSvgPayload,
+  payload: StandaloneViewerPayload,
 ): boolean {
   if (targetWin.closed) return false;
   const doc = targetWin.document;
   const root = doc.getElementById(MERMAID_WINDOW_ROOT_ID) as HTMLElement | null;
   if (!root) return false;
 
-  doc.title = payload.title || "SVG Preview";
+  const themeKey =
+    ("themeKey" in payload && payload.themeKey) || detectThemeKey(sourceDoc);
+  doc.title = payload.title || DEFAULT_TITLES[payload.kind];
   doc.documentElement?.setAttribute(
     "minwidth",
     `${MERMAID_WINDOW_MIN_WIDTH_PX}`,
@@ -130,88 +302,32 @@ function initializeStandaloneSvgWindow(
 
   root.className = [
     "llm-mermaid-window-root",
-    payload.themeKey === "dark"
-      ? "llm-mermaid-theme-dark"
-      : "llm-mermaid-theme-light",
+    themeKey === "dark" ? "llm-mermaid-theme-dark" : "llm-mermaid-theme-light",
+    `llm-viewer-window-${payload.kind}`,
   ].join(" ");
-  root.dataset.llmMermaidTheme = payload.themeKey;
+  root.dataset.llmMermaidTheme = themeKey;
+
+  const built = buildViewerContent(doc, targetWin, root, payload);
+  if (!built) return false;
+  const { content, label } = built;
 
   const toolbar = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
   toolbar.className = "llm-mermaid-window-toolbar";
   toolbar.setAttribute("role", "toolbar");
   toolbar.setAttribute(
     "aria-label",
-    payload.toolbarLabel || "SVG preview controls",
+    (payload.kind === "svg" && payload.toolbarLabel) ||
+      `${label} window controls`,
   );
+  const close = createButton(doc, "×", `Close ${label} window`);
+  toolbar.append(...content.buttons, close);
 
-  const zoomTargetLabel = payload.zoomTargetLabel || "SVG preview";
-  const zoomOut = createButton(doc, "−", `Zoom out ${zoomTargetLabel}`);
-  const zoomIn = createButton(doc, "+", `Zoom in ${zoomTargetLabel}`);
-  const fit = createButton(doc, "⛶", `Fit ${zoomTargetLabel} to window`);
-  const close = createButton(doc, "×", `Close ${zoomTargetLabel} window`);
-  toolbar.append(zoomOut, zoomIn, fit, close);
-
-  const viewport = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
-  viewport.className = "llm-mermaid-window-viewport";
-
-  const stage = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
-  stage.className = "llm-mermaid-window-stage";
-
-  const svg = createInlineSvgElement(
-    doc,
-    payload.svgMarkup,
-    "llm-mermaid-window-svg",
-    payload.ariaLabel || "SVG preview",
-  );
-  if (!svg) return false;
-  stage.appendChild(svg);
-  viewport.appendChild(stage);
-  root.replaceChildren(toolbar, viewport);
+  root.replaceChildren(toolbar, content.body);
   // Inside the root, so the strip inherits the canvas surface colour.
   installStandaloneWindowTitlebar(doc, root);
 
-  let scale = 1;
-  let baseFitWidth = 0;
-  const getBaseFitWidth = () => {
-    const nextWidth = getViewportContentWidth(targetWin, viewport);
-    if (nextWidth > 0) baseFitWidth = nextWidth;
-    return baseFitWidth || 1;
-  };
-  const applyZoom = (nextScale: number) => {
-    const previousWidth = stage.scrollWidth || stage.clientWidth || 1;
-    const centerX = viewport.scrollLeft + viewport.clientWidth / 2;
-    const centerRatio = previousWidth > 0 ? centerX / previousWidth : 0.5;
-    scale = clampZoom(nextScale);
-    const baseWidth = getBaseFitWidth();
-    const displayWidth = Math.max(1, Math.round(baseWidth * scale));
-    const stageWidth = Math.max(baseWidth, displayWidth);
-    stage.style.width = `${stageWidth}px`;
-    svg.style.width = `${displayWidth}px`;
-    root.dataset.mermaidZoom = formatZoom(scale);
-    zoomOut.disabled = scale <= MERMAID_WINDOW_ZOOM_MIN;
-    zoomIn.disabled = scale >= MERMAID_WINDOW_ZOOM_MAX;
-    targetWin.requestAnimationFrame?.(() => {
-      viewport.scrollLeft = Math.max(
-        0,
-        Math.round(stage.scrollWidth * centerRatio - viewport.clientWidth / 2),
-      );
-    });
-  };
   const closeWindow = () => targetWin.close();
-
-  zoomOut.addEventListener("click", () => applyZoom(scale - ZOOM_BUTTON_STEP));
-  zoomIn.addEventListener("click", () => applyZoom(scale + ZOOM_BUTTON_STEP));
-  fit.addEventListener("click", () => {
-    applyZoom(1);
-    viewport.scrollTop = 0;
-    viewport.scrollLeft = 0;
-  });
   close.addEventListener("click", closeWindow);
-  viewport.addEventListener("wheel", (event: WheelEvent) => {
-    if (!event.metaKey && !event.ctrlKey) return;
-    event.preventDefault();
-    applyZoom(getWheelZoomScale(scale, event.deltaY));
-  });
   doc.addEventListener("keydown", (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       closeWindow();
@@ -223,17 +339,18 @@ function initializeStandaloneSvgWindow(
       closeWindow();
     }
   });
-  css.addEventListener("load", () => applyZoom(scale), { once: true });
-  targetWin.addEventListener("resize", () => applyZoom(scale));
-
-  applyZoom(1);
-  targetWin.requestAnimationFrame?.(() => applyZoom(scale));
+  content.afterMount?.(css);
   return true;
 }
 
-export function openStandaloneSvgWindow(
+/**
+ * The one full-view window for what the chat makes: a diagram, an SVG, a web
+ * page, a Markdown note or a picture. Returns false when the host cannot open
+ * a dialog, so the caller can fall back.
+ */
+export function openStandaloneViewerWindow(
   doc: Document,
-  payload: StandaloneSvgPayload,
+  payload: StandaloneViewerPayload,
 ): boolean {
   const opener = doc.defaultView as OpenDialogWindow | null;
   const openDialog = opener?.openDialog;
@@ -242,7 +359,7 @@ export function openStandaloneSvgWindow(
   const newWin = openDialog.call(
     opener,
     `chrome://${config.addonRef}/content/standaloneMermaid.xhtml`,
-    `llmforzotero-standalone-svg-${Date.now()}`,
+    `llmforzotero-standalone-${payload.kind}-${Date.now()}`,
     MERMAID_WINDOW_FEATURES,
   ) as Window | null;
   if (!newWin) return false;
@@ -251,7 +368,7 @@ export function openStandaloneSvgWindow(
   let initialized = false;
   const tryInitialize = () => {
     if (initialized || newWin.closed) return;
-    if (initializeStandaloneSvgWindow(doc, newWin, payload)) {
+    if (initializeStandaloneViewerWindow(doc, newWin, payload)) {
       initialized = true;
       return;
     }
@@ -263,6 +380,13 @@ export function openStandaloneSvgWindow(
   newWin.addEventListener("load", tryInitialize, { once: true });
   newWin.setTimeout(tryInitialize, 0);
   return true;
+}
+
+export function openStandaloneSvgWindow(
+  doc: Document,
+  payload: StandaloneSvgPayload,
+): boolean {
+  return openStandaloneViewerWindow(doc, { kind: "svg", ...payload });
 }
 
 export function openStandaloneMermaidWindow(

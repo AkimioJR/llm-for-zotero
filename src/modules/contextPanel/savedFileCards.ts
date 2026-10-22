@@ -41,6 +41,7 @@ import {
 import { copyTextToClipboard } from "./clipboard";
 import { openFigureViewer } from "./figureViewer";
 import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
+import { openStandaloneViewerWindow } from "./standaloneMermaidWindow";
 import {
   isGlobalPortalItem,
   resolvePaperPortalBaseItem,
@@ -543,7 +544,10 @@ export type SavedFileCardOptions = {
   homeDir?: string;
   /** Opens an HTML page in the full-window viewer (the sidebar's full view). */
   openViewer?: (source: string, anchor: HTMLElement) => void;
-  /** Draws Markdown into a box; without it a note keeps its type tile. */
+  /**
+   * Draws Markdown into a box, using the box's own document (the full-view
+   * window is another document). Without it a note keeps its type tile.
+   */
   renderMarkdown?: (target: HTMLElement, markdown: string) => void;
   /** Called after a card's preview mounts, so the chat can keep its scroll. */
   onPreviewMounted?: () => void;
@@ -637,18 +641,13 @@ export function savedFileCardPreviewKind(
   return "tile";
 }
 
-/** What a click on the card does. A full view exists for pages and pictures. */
+/** What a click on the card does. Every page, note and picture has a full view. */
 export function decideSavedFileClick(params: {
   showable: boolean;
-  kind: SavedFilePreview;
   standalone: boolean;
-  hasViewer: boolean;
 }): SavedFileClickAction {
   if (!params.showable) return "default-app";
-  if (params.standalone) return "side-panel";
-  if (params.kind === "image") return "full-view";
-  if (params.kind === "html" && params.hasViewer) return "full-view";
-  return "default-app";
+  return params.standalone ? "side-panel" : "full-view";
 }
 
 const ACTION_LABELS: Record<SavedFileClickAction, string> = {
@@ -858,6 +857,61 @@ function openCardMenu(
 }
 
 /**
+ * Opens a saved page, note or picture in its own full-view window. Resolves
+ * false when the window could not open, so the caller can fall back.
+ */
+export async function openSavedFileWindow(
+  doc: Document,
+  path: string,
+  renderMarkdown?: (target: HTMLElement, markdown: string) => void,
+): Promise<boolean> {
+  const kind = savedFilePreviewKind(path);
+  const title = fileBaseName(path);
+  if (kind === "image") {
+    return openStandaloneViewerWindow(doc, {
+      kind: "image",
+      src: toFileUrl(path) || path,
+      title,
+      alt: title,
+    });
+  }
+  if (kind !== "html" && kind !== "markdown") return false;
+  const source = await readText(path);
+  if (source === null) return false;
+  if (kind === "html") {
+    return openStandaloneViewerWindow(doc, { kind: "html", source, title });
+  }
+  if (!renderMarkdown) return false;
+  return openStandaloneViewerWindow(doc, {
+    kind: "markdown",
+    markdown: source,
+    title,
+    renderMarkdown,
+  });
+}
+
+/** The old full views, for a host that cannot open a window. */
+async function openFullViewFallback(
+  card: HTMLElement,
+  path: string,
+  kind: SavedFilePreview,
+  options: SavedFileCardOptions,
+): Promise<void> {
+  if (kind === "image") {
+    openFigureViewer(card, {
+      src: toFileUrl(path) || path,
+      alt: fileBaseName(path),
+      caption: fileBaseName(path),
+    });
+  } else if (kind === "html") {
+    const source = await readText(path);
+    if (source !== null) options.openViewer?.(source, card);
+  } else {
+    launchLocalPath(path);
+  }
+}
+
+/**
  * One card: a preview area on top (a type tile for now), then the name, the
  * kind and size, and a ⋯ menu. A click anywhere on the card is its main action.
  */
@@ -881,9 +935,7 @@ export async function createSavedFileCard(
   const decide = () =>
     decideSavedFileClick({
       showable,
-      kind,
       standalone: Boolean(getSidePanelItemHost(doc)),
-      hasViewer: Boolean(options.openViewer),
     });
   const runAction = (action: SavedFileClickAction) => {
     if (action === "side-panel") {
@@ -895,17 +947,11 @@ export async function createSavedFileCard(
         element: card,
       });
     } else if (action === "full-view") {
-      if (kind === "image") {
-        openFigureViewer(card, {
-          src: toFileUrl(path) || path,
-          alt: name,
-          caption: name,
-        });
-      } else {
-        void readText(path).then((source) => {
-          if (source !== null) options.openViewer?.(source, card);
-        });
-      }
+      void openSavedFileWindow(doc, path, options.renderMarkdown).then(
+        (opened) => {
+          if (!opened) void openFullViewFallback(card, path, kind, options);
+        },
+      );
     } else {
       launchLocalPath(path);
     }
@@ -1005,10 +1051,7 @@ export async function createSavedFileCard(
           run: () => runAction("side-panel"),
         });
       }
-      if (
-        showable &&
-        (kind === "image" || (kind === "html" && options.openViewer))
-      ) {
+      if (showable) {
         items.push({
           icon: "full-view",
           label: t("Open full view"),

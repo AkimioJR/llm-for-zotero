@@ -10305,6 +10305,53 @@ label.llm-search-results-item:hover {
   object-fit: contain;
 }
 
+/* The page kind fills the window under the toolbar; the page paints its own
+ * background, so the frame stays white like the side panel's. */
+.llm-viewer-window-frame {
+  display: block;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+.llm-mermaid-window-root.llm-viewer-window-html {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The note kind scrolls as a document: a centred column of readable width. */
+.llm-viewer-window-document {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 72px 40px 56px;
+  background: var(--llm-mermaid-canvas-bg);
+}
+
+.llm-viewer-window-markdown {
+  box-sizing: border-box;
+  max-width: 860px;
+  margin: 0 auto;
+  color: var(--llm-mermaid-viewer-zoom-text);
+  font-size: 15px;
+  line-height: 1.6;
+  user-select: text;
+}
+
+.llm-mermaid-theme-dark .llm-viewer-window-markdown {
+  --llm-codeblock-bg: #202020;
+  --llm-codeblock-border: color-mix(in srgb, #fff 8%, transparent);
+  --llm-codeblock-header-text: #d4d4d8;
+  --llm-codeblock-copy: #d4d4d8;
+  --llm-codeblock-copy-hover: #ffffff;
+  --llm-codeblock-text: #f4f4f5;
+  --llm-codeblock-comment: #a1a1aa;
+}
+
 .llm-rendered-markdown .llm-mermaid-status {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 12px;

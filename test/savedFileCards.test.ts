@@ -264,25 +264,15 @@ describe("Saved file cards", function () {
     assert.isFalse(
       isShowableSavedFile("image", SAVED_FILE_PREVIEW_MAX_BYTES + 1),
     );
-    const base = { showable: true, hasViewer: true, standalone: false };
+    const base = { showable: true, standalone: false };
     assert.equal(
-      decideSavedFileClick({ ...base, kind: "html", standalone: true }),
+      decideSavedFileClick({ ...base, standalone: true }),
       "side-panel",
     );
-    assert.equal(decideSavedFileClick({ ...base, kind: "html" }), "full-view");
-    assert.equal(decideSavedFileClick({ ...base, kind: "image" }), "full-view");
-    assert.equal(
-      decideSavedFileClick({ ...base, kind: "markdown" }),
-      "default-app",
-    );
-    assert.equal(
-      decideSavedFileClick({ ...base, kind: "html", hasViewer: false }),
-      "default-app",
-    );
+    assert.equal(decideSavedFileClick(base), "full-view");
     assert.equal(
       decideSavedFileClick({
         ...base,
-        kind: "text",
         showable: false,
         standalone: true,
       }),
