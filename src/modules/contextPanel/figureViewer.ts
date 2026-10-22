@@ -132,20 +132,56 @@ export type FigurePanZoom = {
 };
 
 /**
+ * Natural size of an inline SVG: its viewBox, else its width and height
+ * attributes, else its bounding box, else 800 x 600.
+ */
+export function inlineSvgNaturalSize(svg: SVGElement): FigureViewSize {
+  const box = (svg as SVGSVGElement).viewBox?.baseVal;
+  if (box && box.width > 0 && box.height > 0) {
+    return { width: box.width, height: box.height };
+  }
+  const width = Number.parseFloat(svg.getAttribute("width") || "");
+  const height = Number.parseFloat(svg.getAttribute("height") || "");
+  if (
+    Number.isFinite(width) &&
+    Number.isFinite(height) &&
+    width > 0 &&
+    height > 0 &&
+    !svg.getAttribute("width")?.includes("%") &&
+    !svg.getAttribute("height")?.includes("%")
+  ) {
+    return { width, height };
+  }
+  try {
+    const bbox = (svg as SVGGraphicsElement).getBBox();
+    if (bbox.width > 0 && bbox.height > 0) {
+      return { width: bbox.width, height: bbox.height };
+    }
+  } catch {
+    // getBBox throws when the element is not rendered.
+  }
+  return { width: 800, height: 600 };
+}
+
+/**
  * Wheel / pinch zoom and drag-to-move for a picture in a stage. The large
  * view and the side panel figure tab both use it, so they zoom alike (at the
  * Mermaid window's speed, see wheelZoom.ts).
  */
 export function attachFigurePanZoom(params: {
   stage: HTMLElement;
-  image: HTMLImageElement;
+  /** A picture, or another element (an inline SVG) given `naturalSize`. */
+  image: HTMLElement | SVGElement;
+  /** Size of a non-picture element; null while it is not known yet. */
+  naturalSize?: () => FigureViewSize | null;
   /** Gets the zoomed / dragging classes for the cursors. */
   stateRoot: HTMLElement;
   percent?: HTMLElement;
   /** A press that did not move: on the picture or beside it. */
   onClick?: (onImage: boolean, clientX: number, clientY: number) => void;
 }): FigurePanZoom {
-  const { stage, image, stateRoot, percent } = params;
+  const { stage, stateRoot, percent, naturalSize } = params;
+  const image = params.image as HTMLElement & Partial<HTMLImageElement>;
   let natural: FigureViewSize = { width: 0, height: 0 };
   let view: FigureViewTransform = { scale: 1, x: 0, y: 0 };
   let minScale = 1;
@@ -183,6 +219,7 @@ export function attachFigurePanZoom(params: {
     paint();
   };
   const relayout = () => {
+    if (!natural.width && naturalSize) onImageReady();
     if (!natural.width) return;
     if (!isZoomed()) {
       fit();
@@ -198,15 +235,25 @@ export function attachFigurePanZoom(params: {
   };
 
   const onImageReady = () => {
-    natural = {
-      width: image.naturalWidth || 800,
-      height: image.naturalHeight || 600,
-    };
+    if (naturalSize) {
+      const size = naturalSize();
+      if (!size || !(size.width > 0) || !(size.height > 0)) return;
+      natural = size;
+    } else {
+      natural = {
+        width: image.naturalWidth || 800,
+        height: image.naturalHeight || 600,
+      };
+    }
     fit();
   };
   image.draggable = false;
-  image.addEventListener("load", onImageReady);
-  if (image.complete && image.naturalWidth) onImageReady();
+  if (naturalSize) {
+    onImageReady();
+  } else {
+    image.addEventListener("load", onImageReady);
+    if (image.complete && image.naturalWidth) onImageReady();
+  }
 
   let press: {
     x: number;
@@ -224,7 +271,7 @@ export function attachFigurePanZoom(params: {
       y: event.clientY,
       viewX: view.x,
       viewY: view.y,
-      onImage: event.target === image,
+      onImage: image.contains(event.target as Node | null),
       moved: false,
     };
     try {
