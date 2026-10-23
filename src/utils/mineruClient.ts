@@ -13,6 +13,7 @@ import {
   getMineruCloudModel,
   isMineruForceOcrEnabled,
   getMineruLocalApiBase,
+  getMineruLocalServerCommand,
   getMineruLocalBackend,
   getMineruMode,
   getMineruLocalOptions,
@@ -2346,6 +2347,7 @@ export function getMineruParseSettings() {
     localApiBase: getMineruLocalApiBase(),
     localBackend: getMineruLocalBackend(),
     localOptions: getMineruLocalOptions(),
+    localServerCommand: getMineruLocalServerCommand(),
     cloudModel: getMineruCloudModel(),
     forceOcr: isMineruForceOcrEnabled(),
   };

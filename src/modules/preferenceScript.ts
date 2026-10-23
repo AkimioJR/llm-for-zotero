@@ -174,6 +174,7 @@ import {
   getMineruCloudModel,
   isMineruForceOcrEnabled,
   getMineruLocalApiBase,
+  getMineruLocalServerCommand,
   getMineruLocalBackend,
   getMineruMode,
   type MineruCloudModel,
@@ -186,6 +187,7 @@ import {
   setMineruCloudModel,
   setMineruForceOcrEnabled,
   setMineruLocalApiBase,
+  setMineruLocalServerCommand,
   setMineruLocalBackend,
   setMineruMode,
   isGlobalAutoParseEnabled,
@@ -1559,6 +1561,14 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   ) as HTMLInputElement | null;
   if (mineruLocalApiBaseEl?.placeholder) {
     mineruLocalApiBaseEl.placeholder = t(mineruLocalApiBaseEl.placeholder);
+  }
+  const mineruLocalServerCommandEl = doc.querySelector(
+    `#${config.addonRef}-mineru-local-server-command`,
+  ) as HTMLInputElement | null;
+  if (mineruLocalServerCommandEl?.placeholder) {
+    mineruLocalServerCommandEl.placeholder = t(
+      mineruLocalServerCommandEl.placeholder,
+    );
   }
   // Translate language dropdown options
   const localeSelectEl = doc.querySelector(
@@ -6176,6 +6186,25 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       commitMineruLocalApiBase,
     );
     mineruLocalApiBaseInput.addEventListener("blur", commitMineruLocalApiBase);
+  }
+
+  const mineruLocalServerCommandInput = doc.querySelector(
+    `#${config.addonRef}-mineru-local-server-command`,
+  ) as HTMLInputElement | null;
+  if (mineruLocalServerCommandInput) {
+    mineruLocalServerCommandInput.value = getMineruLocalServerCommand();
+    const commitMineruLocalServerCommand = () => {
+      setMineruLocalServerCommand(mineruLocalServerCommandInput.value);
+      mineruLocalServerCommandInput.value = getMineruLocalServerCommand();
+    };
+    mineruLocalServerCommandInput.addEventListener(
+      "change",
+      commitMineruLocalServerCommand,
+    );
+    mineruLocalServerCommandInput.addEventListener(
+      "blur",
+      commitMineruLocalServerCommand,
+    );
   }
 
   if (mineruLocalBackendSelect) {

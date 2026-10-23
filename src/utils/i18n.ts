@@ -622,6 +622,9 @@ const zhCN: Record<string, string> = {
   "Enter your MinerU API key first": "请先输入 MinerU API 密钥",
   "Use local MinerU server": "使用本地 MinerU 服务",
   "Local API Base URL": "本地 API URL",
+  "Server start command (optional)": "服务器启动命令（可选）",
+  "Optional command to launch the MinerU server. When set, the plugin can automatically start and stop the local server.":
+    "启动 MinerU 服务器的可选命令（例如 mineru-api）。设置后插件可自动拉起与关闭本地服务。",
   "Uses a self-hosted mineru-api server. Test Connection only checks that the server process is reachable.":
     "使用本地 mineru-api 服务。测试连接仅检查服务进程是否可访问。",
   Backend: "后端模型",
