@@ -188,6 +188,8 @@ import {
   setMineruForceOcrEnabled,
   setMineruLocalApiBase,
   setMineruLocalServerCommand,
+  getMineruLocalServerIdleMinutes,
+  setMineruLocalServerIdleMinutes,
   setMineruLocalBackend,
   setMineruMode,
   isGlobalAutoParseEnabled,
@@ -214,6 +216,14 @@ import {
   testMineruConnection,
   testMineruLocalConnection,
 } from "../utils/mineruClient";
+import {
+  getMineruServerStatus,
+  startMineruServer,
+  stopMineruServer,
+  onMineruServerStatusChange,
+  probeMineruServerHealthy,
+  type MineruServerState,
+} from "../services/mineru/mineruServerManager";
 import {
   MINERU_PARSE_FILTERS_CHANGED_EVENT,
   registerMineruManagerScript,
@@ -6191,11 +6201,35 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const mineruLocalServerCommandInput = doc.querySelector(
     `#${config.addonRef}-mineru-local-server-command`,
   ) as HTMLInputElement | null;
+  const mineruLocalServerManagedContainer = doc.querySelector(
+    `#${config.addonRef}-mineru-local-server-managed-container`,
+  ) as HTMLDivElement | null;
+  const mineruLocalServerIdleMinutesInput = doc.querySelector(
+    `#${config.addonRef}-mineru-local-server-idle-minutes`,
+  ) as HTMLInputElement | null;
+  const mineruLocalServerStatusSpan = doc.querySelector(
+    `#${config.addonRef}-mineru-local-server-status`,
+  ) as HTMLSpanElement | null;
+  const mineruLocalServerToggleBtn = doc.querySelector(
+    `#${config.addonRef}-mineru-local-server-toggle-btn`,
+  ) as HTMLButtonElement | null;
+
+  const syncManagedServerVisibility = () => {
+    if (mineruLocalServerManagedContainer) {
+      const hasCommand = Boolean(getMineruLocalServerCommand());
+      mineruLocalServerManagedContainer.style.display = hasCommand
+        ? "flex"
+        : "none";
+    }
+  };
+  syncManagedServerVisibility();
+
   if (mineruLocalServerCommandInput) {
     mineruLocalServerCommandInput.value = getMineruLocalServerCommand();
     const commitMineruLocalServerCommand = () => {
       setMineruLocalServerCommand(mineruLocalServerCommandInput.value);
       mineruLocalServerCommandInput.value = getMineruLocalServerCommand();
+      syncManagedServerVisibility();
     };
     mineruLocalServerCommandInput.addEventListener(
       "change",
@@ -6205,6 +6239,86 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       "blur",
       commitMineruLocalServerCommand,
     );
+  }
+
+  if (mineruLocalServerIdleMinutesInput) {
+    mineruLocalServerIdleMinutesInput.value = `${getMineruLocalServerIdleMinutes()}`;
+    const commitIdleMinutes = () => {
+      setMineruLocalServerIdleMinutes(
+        Number(mineruLocalServerIdleMinutesInput.value),
+      );
+      mineruLocalServerIdleMinutesInput.value = `${getMineruLocalServerIdleMinutes()}`;
+    };
+    mineruLocalServerIdleMinutesInput.addEventListener(
+      "change",
+      commitIdleMinutes,
+    );
+    mineruLocalServerIdleMinutesInput.addEventListener(
+      "blur",
+      commitIdleMinutes,
+    );
+  }
+
+  const renderManagedServerStatus = (state: MineruServerState) => {
+    if (!mineruLocalServerStatusSpan || !mineruLocalServerToggleBtn) return;
+    switch (state) {
+      case "running":
+        mineruLocalServerStatusSpan.textContent = t("Running");
+        mineruLocalServerStatusSpan.style.color = "green";
+        mineruLocalServerToggleBtn.disabled = false;
+        mineruLocalServerToggleBtn.textContent = t("Stop Server");
+        break;
+      case "starting":
+        mineruLocalServerStatusSpan.textContent = t("Starting…");
+        mineruLocalServerStatusSpan.style.color = "#b45309";
+        mineruLocalServerToggleBtn.disabled = true;
+        mineruLocalServerToggleBtn.textContent = t("Starting…");
+        break;
+      case "stopping":
+        mineruLocalServerStatusSpan.textContent = t("Stopping…");
+        mineruLocalServerStatusSpan.style.color = "#b45309";
+        mineruLocalServerToggleBtn.disabled = true;
+        mineruLocalServerToggleBtn.textContent = t("Stopping…");
+        break;
+      case "stopped":
+      default:
+        mineruLocalServerStatusSpan.textContent = t("Stopped");
+        mineruLocalServerStatusSpan.style.color = "var(--fill-secondary, #888)";
+        mineruLocalServerToggleBtn.disabled = false;
+        mineruLocalServerToggleBtn.textContent = t("Start Server");
+        break;
+    }
+  };
+
+  renderManagedServerStatus(getMineruServerStatus());
+  onMineruServerStatusChange((state) => renderManagedServerStatus(state));
+
+  void probeMineruServerHealthy(getMineruLocalApiBase(), 1000).then(
+    (healthy) => {
+      if (healthy && getMineruServerStatus() === "stopped") {
+        renderManagedServerStatus("running");
+      }
+    },
+  );
+
+  if (mineruLocalServerToggleBtn) {
+    mineruLocalServerToggleBtn.addEventListener("click", () => {
+      const current = getMineruServerStatus();
+      if (current === "running") {
+        void stopMineruServer("manual");
+      } else if (current === "stopped") {
+        void startMineruServer(getMineruLocalApiBase(), (stage) => {
+          if (mineruLocalServerStatusSpan) {
+            mineruLocalServerStatusSpan.textContent = stage;
+          }
+        }).catch((err) => {
+          if (mineruLocalServerStatusSpan) {
+            mineruLocalServerStatusSpan.textContent = `\u2717 ${(err as Error).message}`;
+            mineruLocalServerStatusSpan.style.color = "red";
+          }
+        });
+      }
+    });
   }
 
   if (mineruLocalBackendSelect) {

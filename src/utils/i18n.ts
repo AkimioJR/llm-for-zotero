@@ -623,6 +623,21 @@ const zhCN: Record<string, string> = {
   "Use local MinerU server": "使用本地 MinerU 服务",
   "Local API Base URL": "本地 API URL",
   "Server start command (optional)": "服务器启动命令（可选）",
+  "Idle shutdown timeout (minutes)": "空闲关闭时间（分钟）",
+  "Automatically stops the MinerU server after this many minutes of inactivity to release memory and GPU VRAM.":
+    "无解析任务达到此分钟数后，自动停止本地 MinerU 服务以释放内存和显存。",
+  "Server:": "服务状态：",
+  "Start Server": "启动服务",
+  "Stop Server": "停止服务",
+  Running: "运行中",
+  Stopped: "已停止",
+  "Starting…": "启动中…",
+  "Stopping…": "停止中…",
+  "Local MinerU server is ready.": "本地 MinerU 服务已就绪。",
+  "Starting local MinerU server…": "正在启动本地 MinerU 服务…",
+  "Checking local MinerU server…": "正在检查本地 MinerU 服务…",
+  "No MinerU server start command configured.":
+    "未配置 MinerU 服务器启动命令。",
   "Optional command to launch the MinerU server. When set, the plugin can automatically start and stop the local server.":
     "启动 MinerU 服务器的可选命令（例如 mineru-api）。设置后插件可自动拉起与关闭本地服务。",
   "Uses a self-hosted mineru-api server. Test Connection only checks that the server process is reachable.":

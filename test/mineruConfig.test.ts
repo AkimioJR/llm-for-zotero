@@ -14,6 +14,10 @@ import {
   normalizeMineruLocalServerCommand,
   getMineruLocalServerCommand,
   setMineruLocalServerCommand,
+  DEFAULT_MINERU_LOCAL_SERVER_IDLE_MINUTES,
+  normalizeMineruLocalServerIdleMinutes,
+  getMineruLocalServerIdleMinutes,
+  setMineruLocalServerIdleMinutes,
   normalizeMineruMode,
   toMineruApiBackend,
 } from "../src/utils/mineruConfig";
@@ -166,7 +170,6 @@ describe("mineruConfig", function () {
     });
   });
 
-
   describe("normalizeMineruLocalServerCommand", function () {
     it("trims whitespace and returns empty string for non-string values", function () {
       assert.equal(
@@ -192,6 +195,42 @@ describe("mineruConfig", function () {
         assert.equal(getMineruLocalServerCommand(), "");
         setMineruLocalServerCommand("  mineru-api  ");
         assert.equal(getMineruLocalServerCommand(), "mineru-api");
+      } finally {
+        (globalThis as any).Zotero = originalZotero;
+      }
+    });
+  });
+
+  describe("normalizeMineruLocalServerIdleMinutes", function () {
+    it("defaults to 10 for invalid or non-positive values", function () {
+      assert.equal(DEFAULT_MINERU_LOCAL_SERVER_IDLE_MINUTES, 10);
+      assert.equal(normalizeMineruLocalServerIdleMinutes(undefined), 10);
+      assert.equal(normalizeMineruLocalServerIdleMinutes(null), 10);
+      assert.equal(normalizeMineruLocalServerIdleMinutes(""), 10);
+      assert.equal(normalizeMineruLocalServerIdleMinutes(0), 10);
+      assert.equal(normalizeMineruLocalServerIdleMinutes(-5), 10);
+      assert.equal(normalizeMineruLocalServerIdleMinutes("abc"), 10);
+    });
+
+    it("accepts positive integers and floors decimals", function () {
+      assert.equal(normalizeMineruLocalServerIdleMinutes(5), 5);
+      assert.equal(normalizeMineruLocalServerIdleMinutes("15"), 15);
+      assert.equal(normalizeMineruLocalServerIdleMinutes(12.7), 12);
+    });
+
+    it("gets and sets idle minutes via Zotero.Prefs", function () {
+      const store = new Map();
+      const originalZotero = (globalThis as any).Zotero;
+      (globalThis as any).Zotero = {
+        Prefs: {
+          get: (key: string) => store.get(key),
+          set: (key: string, val: any) => store.set(key, val),
+        },
+      };
+      try {
+        assert.equal(getMineruLocalServerIdleMinutes(), 10);
+        setMineruLocalServerIdleMinutes(20);
+        assert.equal(getMineruLocalServerIdleMinutes(), 20);
       } finally {
         (globalThis as any).Zotero = originalZotero;
       }

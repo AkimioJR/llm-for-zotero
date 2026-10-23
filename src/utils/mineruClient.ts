@@ -14,6 +14,7 @@ import {
   isMineruForceOcrEnabled,
   getMineruLocalApiBase,
   getMineruLocalServerCommand,
+  getMineruLocalServerIdleMinutes,
   getMineruLocalBackend,
   getMineruMode,
   getMineruLocalOptions,
@@ -32,6 +33,10 @@ import {
   mineruErrorDetail,
 } from "./mineruLocalClient";
 import { buildMultipartRequest } from "./multipart";
+import {
+  ensureMineruLocalServerRunning,
+  acquireMineruServerJob,
+} from "../services/mineru/mineruServerManager";
 
 const MINERU_DIRECT_API_BASE = "https://mineru.net/api/v4";
 
@@ -2180,21 +2185,30 @@ export async function parsePdfWithMineruLocal(
   signal?: AbortSignal,
   forceOcr = DEFAULT_MINERU_FORCE_OCR,
   options = getMineruLocalOptions(),
+  serverCommand = getMineruLocalServerCommand(),
 ): Promise<MinerUResult> {
   const report = (stage: string) => {
     appLogger.debug(`MinerU local: ${stage}`);
     onProgress?.(stage);
   };
   try {
-    return await parsePdfViaLocalService(
-      pdfPath,
-      baseUrl,
-      backend,
-      options,
-      forceOcr,
-      report,
-      signal,
-    );
+    if (serverCommand) {
+      await ensureMineruLocalServerRunning(baseUrl, report, signal);
+    }
+    const releaseJob = acquireMineruServerJob();
+    try {
+      return await parsePdfViaLocalService(
+        pdfPath,
+        baseUrl,
+        backend,
+        options,
+        forceOcr,
+        report,
+        signal,
+      );
+    } finally {
+      releaseJob();
+    }
   } catch (e) {
     if (e instanceof MineruCancelledError) throw e;
     report(`Error: ${(e as Error).message}`);
@@ -2218,6 +2232,7 @@ export async function parsePdfWithMineruSingle(
       signal,
       forceOcr,
       settings.localOptions,
+      settings.localServerCommand,
     );
   }
   return parsePdfWithMineruCloud(
@@ -2348,6 +2363,7 @@ export function getMineruParseSettings() {
     localBackend: getMineruLocalBackend(),
     localOptions: getMineruLocalOptions(),
     localServerCommand: getMineruLocalServerCommand(),
+    localServerIdleMinutes: getMineruLocalServerIdleMinutes(),
     cloudModel: getMineruCloudModel(),
     forceOcr: isMineruForceOcrEnabled(),
   };
