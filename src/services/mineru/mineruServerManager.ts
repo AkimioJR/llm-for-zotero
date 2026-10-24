@@ -326,9 +326,12 @@ export async function startMineruServer(
         if (processExited) {
           managedProcess = null;
           setServerStatus("stopped");
-          const errorMsg =
-            recentServerLogs.slice(-5).join("; ") ||
+          let errorMsg =
+            recentServerLogs.slice(-5).filter(Boolean).join("; ") ||
             "Process exited immediately";
+          if (/address already in use|errno 48/i.test(errorMsg)) {
+            errorMsg = `${t("Port 8000 is already in use by another process. Stop the existing process first.")} (${errorMsg})`;
+          }
           throw new Error(`Local MinerU server failed to start: ${errorMsg}`);
         }
         await new Promise((resolve) =>
