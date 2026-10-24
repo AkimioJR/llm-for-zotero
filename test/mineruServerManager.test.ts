@@ -14,6 +14,7 @@ import {
   setSubprocessLoaderForTests,
   startMineruServer,
   stopMineruServer,
+  resolveMineruServerWorkdir,
 } from "../src/services/mineru/mineruServerManager";
 import {
   setMineruLocalServerCommand,
@@ -105,6 +106,7 @@ describe("mineruServerManager", function () {
     it("launches server process when not healthy and start command is configured", async function () {
       setMineruLocalServerCommand("mineru-api --port 8000");
       let launchedCommand = "";
+      let launchedWorkdir = "";
       let probeCount = 0;
 
       setSubprocessLoaderForTests(
@@ -112,6 +114,7 @@ describe("mineruServerManager", function () {
           ({
             call: async (opts) => {
               launchedCommand = opts.arguments?.[1] || "";
+              launchedWorkdir = opts.workdir || "";
               return {
                 pid: 4321,
                 stdout: { readString: async () => "" },
@@ -134,6 +137,8 @@ describe("mineruServerManager", function () {
       );
       assert.isTrue(result);
       assert.equal(launchedCommand, "mineru-api --port 8000");
+      assert.isTrue(launchedWorkdir.length > 0);
+      assert.equal(launchedWorkdir, resolveMineruServerWorkdir());
       assert.equal(getMineruServerStatus(), "running");
       assert.isTrue(isMineruServerProcessManaged());
     });

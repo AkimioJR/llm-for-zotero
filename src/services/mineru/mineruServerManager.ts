@@ -16,6 +16,27 @@ import { t } from "../../utils/i18n";
 
 export type MineruServerState = "stopped" | "starting" | "running" | "stopping";
 
+export function resolveMineruServerWorkdir(): string {
+  const zotero = (globalThis as any).Zotero;
+  const zoteroTemp = zotero?.getTempDirectory?.()?.path?.trim();
+  if (zoteroTemp) return zoteroTemp;
+
+  const pathUtils = (globalThis as any).PathUtils;
+  const tempDir = pathUtils?.tempDir?.trim();
+  if (tempDir) return tempDir;
+
+  const homeDir = pathUtils?.homeDir?.trim();
+  if (homeDir) return homeDir;
+
+  if (typeof process !== "undefined" && process.env) {
+    const tmp = process.env.TMPDIR || process.env.TEMP || process.env.TMP;
+    if (tmp) return tmp;
+  }
+
+  const platform = getRuntimePlatformInfo().platform;
+  return platform === "windows" ? "C:\\Windows\\Temp" : "/tmp";
+}
+
 type StatusListener = (state: MineruServerState) => void;
 
 const SERVER_STARTUP_TIMEOUT_MS = 30_000;
@@ -199,12 +220,14 @@ export async function startMineruServer(
       report?.(t("Starting local MinerU server…"));
       const Subprocess = getSubprocess();
       const platform = getRuntimePlatformInfo();
+      const workdir = resolveMineruServerWorkdir();
 
       let proc: GeckoSubprocessProcess;
       try {
         proc = await Subprocess.call({
           command: platform.shellPath,
           arguments: [platform.shellFlag, command],
+          workdir,
           stderr: "pipe",
         });
       } catch (launchError) {
