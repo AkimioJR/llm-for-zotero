@@ -1,19 +1,19 @@
-import { appLogger } from "../../core/logging";
-import { registerAppQuitBlocker } from "../../utils/appQuitBlocker";
+import { appLogger } from "../core/logging";
+import { registerAppQuitBlocker } from "./appQuitBlocker";
 import {
   loadGeckoSubprocess,
   runGeckoSubprocessForOutput,
   type GeckoSubprocess,
   type GeckoSubprocessProcess,
   type GeckoSubprocessPipe,
-} from "../../utils/geckoSubprocess";
-import { getRuntimePlatformInfo } from "../../utils/runtimePlatform";
+} from "./geckoSubprocess";
+import { getRuntimePlatformInfo } from "./runtimePlatform";
 import {
   getMineruLocalApiBase,
   getMineruLocalServerCommand,
   getMineruLocalServerIdleMinutes,
-} from "../../utils/mineruConfig";
-import { t } from "../../utils/i18n";
+} from "./mineruConfig";
+import { t } from "./i18n";
 
 export type MineruServerState = "stopped" | "starting" | "running" | "stopping";
 
@@ -74,10 +74,36 @@ export async function listListenerPidsOnPort(
     5000,
   );
   if (!output) return [];
-  return output
-    .split(/\s+/)
-    .map((token) => Number.parseInt(token, 10))
-    .filter((pid) => Number.isInteger(pid) && pid > 1);
+  const pids = new Set<number>();
+  if (platform.platform === "windows") {
+    for (const rawLine of output.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const parts = line.split(/\s+/);
+      if (parts.length < 5) continue;
+      // Windows netstat -ano columns: Proto Local Foreign State PID
+      const localAddress = parts[1] || "";
+      const state = parts[3] || "";
+      const pidStr = parts[parts.length - 1] || "";
+      const isListening = state.toUpperCase() === "LISTENING";
+      const matchesPort =
+        localAddress.endsWith(`:${port}`) || localAddress.endsWith(`]:${port}`);
+      if (isListening && matchesPort) {
+        const pid = Number.parseInt(pidStr, 10);
+        if (Number.isInteger(pid) && pid > 1) {
+          pids.add(pid);
+        }
+      }
+    }
+  } else {
+    for (const token of output.split(/\s+/)) {
+      const pid = Number.parseInt(token, 10);
+      if (Number.isInteger(pid) && pid > 1) {
+        pids.add(pid);
+      }
+    }
+  }
+  return Array.from(pids);
 }
 
 /** Kill the given PIDs, ignoring individual failures. */
@@ -85,12 +111,15 @@ async function killPids(
   pids: number[],
   Subprocess: GeckoSubprocess,
 ): Promise<void> {
-  if (!pids.length) return;
+  const uniquePids = Array.from(
+    new Set(pids.filter((pid) => Number.isInteger(pid) && pid > 1)),
+  );
+  if (!uniquePids.length) return;
   const platform = getRuntimePlatformInfo();
   const command =
     platform.platform === "windows"
-      ? `taskkill /F ${pids.map((pid) => `/PID ${pid}`).join(" ")}`
-      : `kill -9 ${pids.join(" ")}`;
+      ? `taskkill /F ${uniquePids.map((pid) => `/PID ${pid}`).join(" ")}`
+      : `kill -9 ${uniquePids.join(" ")}`;
   await runGeckoSubprocessForOutput(
     Subprocess,
     {
@@ -99,7 +128,9 @@ async function killPids(
     },
     5000,
   );
-  appLogger.debug(`[MinerU server] killed listener PIDs: ${pids.join(", ")}`);
+  appLogger.debug(
+    `[MinerU server] killed listener PIDs: ${uniquePids.join(", ")}`,
+  );
 }
 
 type StatusListener = (state: MineruServerState) => void;
@@ -161,31 +192,49 @@ export async function probeMineruServerHealthy(
       (globalThis as any).AbortController ??
       (globalThis as any).ztoolkit?.getGlobal("AbortController");
     const ctrl = AbortCtrl ? new AbortCtrl() : null;
-    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    let timer: any = null;
+    if (ctrl && timeoutMs > 0) {
+      timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    }
     try {
       const resp = await fetchFn(`${base}/v1/health`, {
         method: "GET",
         signal: ctrl?.signal,
       });
-      if (timer) clearTimeout(timer);
-      if (resp.status >= 200 && resp.status < 300) return true;
-      if (resp.status === 404 || resp.status === 405) {
-        // Probe legacy health endpoint
+      if (resp && resp.status >= 200 && resp.status < 300) return true;
+      if (resp && (resp.status === 404 || resp.status === 405)) {
+        // Probe legacy health endpoint with timeout signal preserved
         const legacyResp = await fetchFn(`${base}/health`, {
           method: "GET",
+          signal: ctrl?.signal,
         }).catch(() => null);
         if (legacyResp && legacyResp.status >= 200 && legacyResp.status < 300) {
           return true;
         }
       }
-    } catch {
+    } finally {
       if (timer) clearTimeout(timer);
-      return false;
     }
   } catch {
     return false;
   }
   return false;
+}
+
+/**
+ * Probe server health and synchronize currentStatus if an external server is running.
+ */
+export async function syncMineruServerStatus(
+  baseUrl = getMineruLocalApiBase(),
+  timeoutMs = 1000,
+): Promise<MineruServerState> {
+  const healthy = await probeMineruServerHealthy(baseUrl, timeoutMs);
+  if (healthy && currentStatus === "stopped") {
+    setServerStatus("running");
+  } else if (!healthy && currentStatus === "running" && !managedProcess) {
+    setServerStatus("stopped");
+  }
+  return currentStatus;
 }
 
 export function getMineruServerStatus(): MineruServerState {
@@ -360,8 +409,13 @@ export async function startMineruServer(
           setServerStatus("stopped");
           let errorMsg =
             recentStderr.slice(-5).join("; ") || "Process exited immediately";
-          if (/address already in use|errno 48/i.test(errorMsg)) {
-            errorMsg = `${t("Port 8000 is already in use by another process. Stop the existing process first.")} (${errorMsg})`;
+          if (
+            /address already in use|10048|errno (?:48|98)|eaddrinuse/i.test(
+              errorMsg,
+            )
+          ) {
+            const port = extractPortFromBaseUrl(baseUrl) ?? 8000;
+            errorMsg = `${t("Port %s is already in use by another process. Stop the existing process first.").replace("%s", String(port))} (${errorMsg})`;
           }
           throw new Error(`Local MinerU server failed to start: ${errorMsg}`);
         }

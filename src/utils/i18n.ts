@@ -638,6 +638,8 @@ const zhCN: Record<string, string> = {
   "Checking local MinerU server…": "正在检查本地 MinerU 服务…",
   "No MinerU server start command configured.":
     "未配置 MinerU 服务器启动命令。",
+  "Port %s is already in use by another process. Stop the existing process first.":
+    "端口 %s 已被其他进程占用。请先停止现有进程。",
   "Optional command to launch the MinerU server. When set, the plugin can automatically start and stop the local server.":
     "启动 MinerU 服务器的可选命令（例如 mineru-api）。设置后插件可自动拉起与关闭本地服务。",
   "Uses a self-hosted mineru-api server. Test Connection only checks that the server process is reachable.":

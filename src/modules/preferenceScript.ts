@@ -221,9 +221,9 @@ import {
   startMineruServer,
   stopMineruServer,
   onMineruServerStatusChange,
-  probeMineruServerHealthy,
+  syncMineruServerStatus,
   type MineruServerState,
-} from "../services/mineru/mineruServerManager";
+} from "../utils/mineruServerManager";
 import {
   MINERU_PARSE_FILTERS_CHANGED_EVENT,
   registerMineruManagerScript,
@@ -6291,15 +6291,12 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   };
 
   renderManagedServerStatus(getMineruServerStatus());
-  onMineruServerStatusChange((state) => renderManagedServerStatus(state));
-
-  void probeMineruServerHealthy(getMineruLocalApiBase(), 1000).then(
-    (healthy) => {
-      if (healthy && getMineruServerStatus() === "stopped") {
-        renderManagedServerStatus("running");
-      }
-    },
+  const unsubscribeStatus = onMineruServerStatusChange((state) =>
+    renderManagedServerStatus(state),
   );
+  _window?.addEventListener("unload", unsubscribeStatus, { once: true });
+
+  void syncMineruServerStatus(getMineruLocalApiBase());
 
   if (mineruLocalServerToggleBtn) {
     mineruLocalServerToggleBtn.addEventListener("click", () => {

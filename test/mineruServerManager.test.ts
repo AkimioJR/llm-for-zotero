@@ -17,7 +17,8 @@ import {
   resolveMineruServerWorkdir,
   extractPortFromBaseUrl,
   listListenerPidsOnPort,
-} from "../src/services/mineru/mineruServerManager";
+  syncMineruServerStatus,
+} from "../src/utils/mineruServerManager";
 import {
   setMineruLocalServerCommand,
   setMineruLocalServerIdleMinutes,
@@ -145,6 +146,75 @@ describe("mineruServerManager", function () {
       assert.equal(launchedWorkdir, resolveMineruServerWorkdir());
       assert.equal(getMineruServerStatus(), "running");
       assert.isTrue(isMineruServerProcessManaged());
+    });
+  });
+
+  describe("syncMineruServerStatus", function () {
+    it("updates status to running when probe reports healthy", async function () {
+      assert.equal(getMineruServerStatus(), "stopped");
+      setProbeHealthyForTests(async () => true);
+
+      const status = await syncMineruServerStatus("http://127.0.0.1:8000");
+      assert.equal(status, "running");
+      assert.equal(getMineruServerStatus(), "running");
+    });
+
+    it("leaves status stopped when probe reports unhealthy", async function () {
+      assert.equal(getMineruServerStatus(), "stopped");
+      setProbeHealthyForTests(async () => false);
+
+      const status = await syncMineruServerStatus("http://127.0.0.1:8000");
+      assert.equal(status, "stopped");
+      assert.equal(getMineruServerStatus(), "stopped");
+    });
+  });
+
+  describe("listListenerPidsOnPort", function () {
+    it("parses Windows netstat output correctly without taking IP octets as PIDs", async function () {
+      (globalThis as any).Zotero.isWin = true;
+      (globalThis as any).Zotero.isMac = false;
+
+      const mockNetstat = [
+        "  Proto  Local Address          Foreign Address        State           PID",
+        "  TCP    0.0.0.0:8000           0.0.0.0:0              LISTENING       4296",
+        "  TCP    127.0.0.1:8000         0.0.0.0:0              LISTENING       4296",
+        "  TCP    [::]:8000              [::]:0                 LISTENING       4296",
+        "  TCP    127.0.0.1:18000        0.0.0.0:0              LISTENING       9999",
+        "  TCP    127.0.0.1:8000         127.0.0.1:54321        ESTABLISHED     4296",
+        "",
+      ].join("\r\n");
+
+      const chunks = [mockNetstat];
+      const mockSubprocess = {
+        call: async () => ({
+          stdout: { readString: async () => chunks.shift() || "" },
+          wait: async () => ({ exitCode: 0 }),
+        }),
+      } as unknown as GeckoSubprocess;
+
+      const pids = await listListenerPidsOnPort(8000, mockSubprocess);
+      assert.deepEqual(pids, [4296]);
+      assert.notInclude(pids, 127);
+      assert.notInclude(pids, 9999);
+    });
+
+    it("parses Unix lsof output and filters PID <= 1", async function () {
+      (globalThis as any).Zotero.isWin = false;
+      (globalThis as any).Zotero.isMac = true;
+
+      const mockLsof = "1\n1234\n5678\n";
+
+      const chunks = [mockLsof];
+      const mockSubprocess = {
+        call: async () => ({
+          stdout: { readString: async () => chunks.shift() || "" },
+          wait: async () => ({ exitCode: 0 }),
+        }),
+      } as unknown as GeckoSubprocess;
+
+      const pids = await listListenerPidsOnPort(8000, mockSubprocess);
+      assert.deepEqual(pids.sort(), [1234, 5678]);
+      assert.notInclude(pids, 1);
     });
   });
 

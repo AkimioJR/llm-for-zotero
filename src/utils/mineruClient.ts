@@ -36,7 +36,7 @@ import { buildMultipartRequest } from "./multipart";
 import {
   ensureMineruLocalServerRunning,
   acquireMineruServerJob,
-} from "../services/mineru/mineruServerManager";
+} from "./mineruServerManager";
 
 const MINERU_DIRECT_API_BASE = "https://mineru.net/api/v4";
 
@@ -2193,7 +2193,21 @@ export async function parsePdfWithMineruLocal(
   };
   try {
     if (serverCommand) {
-      await ensureMineruLocalServerRunning(baseUrl, report, signal);
+      const started = await ensureMineruLocalServerRunning(
+        baseUrl,
+        report,
+        signal,
+      );
+      if (!started) {
+        if (signal?.aborted) {
+          throw new MineruCancelledError();
+        }
+        throw new Error(
+          t(
+            "Cannot reach the local MinerU service. Check its address and start the MinerU API server.",
+          ),
+        );
+      }
     }
     const releaseJob = acquireMineruServerJob();
     try {
