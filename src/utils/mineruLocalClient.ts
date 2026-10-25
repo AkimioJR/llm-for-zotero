@@ -61,29 +61,12 @@ function isTransientError(error: unknown): boolean {
 }
 
 export function mineruErrorDetail(value: unknown): string {
-  if (!value) return "";
-  if (typeof value === "string") return value.slice(0, 240);
-  const data = value as Json;
-  let raw: unknown =
-    data?.error?.message ??
-    (typeof data?.error === "string" ? data.error : null) ??
-    data?.message ??
-    data?.detail ??
-    data?.msg ??
-    data?.err_msg;
-  if (
-    typeof raw !== "string" &&
-    data?.error &&
-    typeof data.error === "object"
-  ) {
-    raw =
-      (data.error as Json).detail ??
-      (data.error as Json).message ??
-      (data.error as Json).code;
-  }
-  if (typeof raw !== "string") return "";
+  const data = value as Json | null;
+  const message =
+    data?.error?.message ?? data?.detail ?? data?.msg ?? data?.err_msg;
+  if (typeof message !== "string") return "";
   // Server errors can include signed URLs or authorization strings.
-  return raw
+  return message
     .replace(/https?:\/\/[^\s"<>]+/gi, "[URL]")
     .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
     .replace(/\s+/g, " ")

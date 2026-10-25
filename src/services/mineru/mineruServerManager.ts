@@ -114,11 +114,6 @@ let activeJobCount = 0;
 let idleTimer: any = null;
 let inFlightStartPromise: Promise<boolean> | null = null;
 const statusListeners = new Set<StatusListener>();
-const recentServerLogs: string[] = [];
-
-export function getRecentMineruServerLogs(): string[] {
-  return [...recentServerLogs];
-}
 
 // Test overrides
 let subprocessLoaderOverride: (() => GeckoSubprocess) | null = null;
@@ -151,72 +146,46 @@ function setServerStatus(newStatus: MineruServerState): void {
 /** Check if a local MinerU server is healthy and responding. */
 export async function probeMineruServerHealthy(
   baseUrl = getMineruLocalApiBase(),
-  timeoutMs = 1500,
+  timeoutMs = 2000,
 ): Promise<boolean> {
   if (probeHealthyOverride) {
     return probeHealthyOverride(baseUrl, timeoutMs);
   }
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        resolve(false);
-      }
-    }, timeoutMs);
-
-    const done = (result: boolean) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        resolve(result);
-      }
-    };
-
-    (async () => {
-      try {
-        const fetchFn =
-          (globalThis as any).fetch ??
-          (globalThis as any).ztoolkit?.getGlobal?.("fetch");
-        if (!fetchFn) {
-          done(false);
-          return;
+  try {
+    const fetchFn =
+      (globalThis as any).fetch ??
+      (globalThis as any).ztoolkit?.getGlobal("fetch");
+    if (!fetchFn) return false;
+    const base = baseUrl.replace(/\/+$/, "");
+    const AbortCtrl =
+      (globalThis as any).AbortController ??
+      (globalThis as any).ztoolkit?.getGlobal("AbortController");
+    const ctrl = AbortCtrl ? new AbortCtrl() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const resp = await fetchFn(`${base}/v1/health`, {
+        method: "GET",
+        signal: ctrl?.signal,
+      });
+      if (timer) clearTimeout(timer);
+      if (resp.status >= 200 && resp.status < 300) return true;
+      if (resp.status === 404 || resp.status === 405) {
+        // Probe legacy health endpoint
+        const legacyResp = await fetchFn(`${base}/health`, {
+          method: "GET",
+        }).catch(() => null);
+        if (legacyResp && legacyResp.status >= 200 && legacyResp.status < 300) {
+          return true;
         }
-        const base = baseUrl.replace(/\/+$/, "");
-        const AbortCtrl =
-          (globalThis as any).AbortController ??
-          (globalThis as any).ztoolkit?.getGlobal?.("AbortController");
-        const ctrl = AbortCtrl ? new AbortCtrl() : null;
-
-        try {
-          const resp = await fetchFn(`${base}/v1/health`, {
-            method: "GET",
-            signal: ctrl?.signal,
-          });
-          if (resp && resp.status >= 200 && resp.status < 300) {
-            done(true);
-            return;
-          }
-          if (resp && (resp.status === 404 || resp.status === 405)) {
-            const legacy = await fetchFn(`${base}/health`, {
-              method: "GET",
-              signal: ctrl?.signal,
-            }).catch(() => null);
-            done(
-              Boolean(legacy && legacy.status >= 200 && legacy.status < 300),
-            );
-            return;
-          }
-        } catch {
-          done(false);
-          return;
-        }
-        done(false);
-      } catch {
-        done(false);
       }
-    })();
-  });
+    } catch {
+      if (timer) clearTimeout(timer);
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 export function getMineruServerStatus(): MineruServerState {
@@ -301,7 +270,6 @@ export async function startMineruServer(
 
   inFlightStartPromise = (async () => {
     try {
-      setServerStatus("starting");
       // 1. Check if an external or previously launched instance is already healthy
       report?.(t("Checking local MinerU server…"));
       const isAlreadyHealthy = await probeMineruServerHealthy(baseUrl, 1500);
@@ -311,12 +279,10 @@ export async function startMineruServer(
         return true;
       }
 
-      if (signal?.aborted) {
-        setServerStatus("stopped");
-        return false;
-      }
+      if (signal?.aborted) return false;
 
       // 2. Launch process through system shell
+      setServerStatus("starting");
       report?.(t("Starting local MinerU server…"));
       const Subprocess = getSubprocess();
       const platform = getRuntimePlatformInfo();
@@ -340,6 +306,7 @@ export async function startMineruServer(
       managedProcess = proc;
       managedListenerPort = extractPortFromBaseUrl(baseUrl);
       let processExited = false;
+      const recentStderr: string[] = [];
 
       const drain = async (pipe?: GeckoSubprocessPipe, isStderr = false) => {
         if (!pipe?.readString) return;
@@ -349,18 +316,14 @@ export async function startMineruServer(
             if (!chunk) break;
             if (isStderr) {
               const lines = chunk.split("\n").filter(Boolean);
-              recentServerLogs.push(...lines);
-              if (recentServerLogs.length > 100) {
-                recentServerLogs.splice(0, recentServerLogs.length - 100);
+              recentStderr.push(...lines);
+              if (recentStderr.length > 30) {
+                recentStderr.splice(0, recentStderr.length - 30);
               }
-              if (/error|exception|traceback|fail/i.test(chunk)) {
-                appLogger.warn(`[MinerU server stderr] ${chunk.trim()}`);
-              } else {
-                appLogger.debug(`[MinerU server stderr] ${chunk.trim()}`);
-              }
-            } else {
-              appLogger.debug(`[MinerU server stdout] ${chunk.trim()}`);
             }
+            appLogger.debug(
+              `[MinerU server ${isStderr ? "stderr" : "stdout"}] ${chunk.trim()}`,
+            );
           }
         } catch {
           /* pipe closed */
@@ -396,8 +359,7 @@ export async function startMineruServer(
           managedListenerPort = null;
           setServerStatus("stopped");
           let errorMsg =
-            recentServerLogs.slice(-5).filter(Boolean).join("; ") ||
-            "Process exited immediately";
+            recentStderr.slice(-5).join("; ") || "Process exited immediately";
           if (/address already in use|errno 48/i.test(errorMsg)) {
             errorMsg = `${t("Port 8000 is already in use by another process. Stop the existing process first.")} (${errorMsg})`;
           }
@@ -406,8 +368,6 @@ export async function startMineruServer(
         await new Promise((resolve) =>
           setTimeout(resolve, SERVER_PROBE_INTERVAL_MS),
         );
-        const elapsedSec = Math.round((Date.now() - startTime) / 1000);
-        report?.(`${t("Starting local MinerU server…")} (${elapsedSec}s)`);
         const ready = await probeMineruServerHealthy(baseUrl, 1000);
         if (ready) {
           setServerStatus("running");
@@ -420,7 +380,7 @@ export async function startMineruServer(
       // 4. Timed out
       await stopMineruServer("startup_timeout");
       const errorMsg =
-        recentServerLogs.slice(-5).join("; ") ||
+        recentStderr.slice(-5).join("; ") ||
         "Timed out waiting for server health check";
       throw new Error(`Local MinerU server startup timed out: ${errorMsg}`);
     } finally {
