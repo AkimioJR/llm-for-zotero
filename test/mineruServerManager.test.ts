@@ -15,6 +15,8 @@ import {
   startMineruServer,
   stopMineruServer,
   resolveMineruServerWorkdir,
+  extractPortFromBaseUrl,
+  listListenerPidsOnPort,
 } from "../src/services/mineru/mineruServerManager";
 import {
   setMineruLocalServerCommand,
@@ -39,6 +41,8 @@ describe("mineruServerManager", function () {
   });
 
   afterEach(async function () {
+    // Stop must not reuse a test stub whose fake process never settles.
+    setSubprocessLoaderForTests(null);
     await stopMineruServer("test_cleanup");
     resetMineruServerManagerForTests();
     (globalThis as any).Zotero = originalZotero;
@@ -141,6 +145,16 @@ describe("mineruServerManager", function () {
       assert.equal(launchedWorkdir, resolveMineruServerWorkdir());
       assert.equal(getMineruServerStatus(), "running");
       assert.isTrue(isMineruServerProcessManaged());
+    });
+  });
+
+  describe("extractPortFromBaseUrl", function () {
+    it("extracts explicit ports and defaults by protocol", function () {
+      assert.equal(extractPortFromBaseUrl("http://127.0.0.1:8000"), 8000);
+      assert.equal(extractPortFromBaseUrl("http://localhost:9000/"), 9000);
+      assert.equal(extractPortFromBaseUrl("http://127.0.0.1"), 80);
+      assert.equal(extractPortFromBaseUrl("https://mineru.local/api"), 443);
+      assert.equal(extractPortFromBaseUrl("not a url"), null);
     });
   });
 

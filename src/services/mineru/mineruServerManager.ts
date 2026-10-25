@@ -2,6 +2,7 @@ import { appLogger } from "../../core/logging";
 import { registerAppQuitBlocker } from "../../utils/appQuitBlocker";
 import {
   loadGeckoSubprocess,
+  runGeckoSubprocessForOutput,
   type GeckoSubprocess,
   type GeckoSubprocessProcess,
   type GeckoSubprocessPipe,
@@ -37,12 +38,77 @@ export function resolveMineruServerWorkdir(): string {
   return platform === "windows" ? "C:\\Windows\\Temp" : "/tmp";
 }
 
+/** Extract the TCP port from a base URL like http://127.0.0.1:8000. */
+export function extractPortFromBaseUrl(baseUrl: string): number | null {
+  try {
+    const port = new URL(baseUrl).port;
+    if (port) return Number.parseInt(port, 10);
+    const protocol = new URL(baseUrl).protocol;
+    if (protocol === "https:") return 443;
+    if (protocol === "http:") return 80;
+  } catch {
+    /* invalid URL */
+  }
+  return null;
+}
+
+/**
+ * List PIDs listening on a TCP port. Returns empty on failure — callers must
+ * treat "unknown" as "do not kill".
+ */
+export async function listListenerPidsOnPort(
+  port: number,
+  Subprocess: GeckoSubprocess,
+): Promise<number[]> {
+  const platform = getRuntimePlatformInfo();
+  const command =
+    platform.platform === "windows"
+      ? `netstat -ano | findstr "LISTENING" | findstr ":${port}"`
+      : `lsof -ti tcp:${port} -sTCP:LISTEN`;
+  const output = await runGeckoSubprocessForOutput(
+    Subprocess,
+    {
+      command: platform.shellPath,
+      arguments: [platform.shellFlag, command],
+    },
+    5000,
+  );
+  if (!output) return [];
+  return output
+    .split(/\s+/)
+    .map((token) => Number.parseInt(token, 10))
+    .filter((pid) => Number.isInteger(pid) && pid > 1);
+}
+
+/** Kill the given PIDs, ignoring individual failures. */
+async function killPids(
+  pids: number[],
+  Subprocess: GeckoSubprocess,
+): Promise<void> {
+  if (!pids.length) return;
+  const platform = getRuntimePlatformInfo();
+  const command =
+    platform.platform === "windows"
+      ? `taskkill /F ${pids.map((pid) => `/PID ${pid}`).join(" ")}`
+      : `kill -9 ${pids.join(" ")}`;
+  await runGeckoSubprocessForOutput(
+    Subprocess,
+    {
+      command: platform.shellPath,
+      arguments: [platform.shellFlag, command],
+    },
+    5000,
+  );
+  appLogger.debug(`[MinerU server] killed listener PIDs: ${pids.join(", ")}`);
+}
+
 type StatusListener = (state: MineruServerState) => void;
 
 const SERVER_STARTUP_TIMEOUT_MS = 30_000;
 const SERVER_PROBE_INTERVAL_MS = 500;
 
 let managedProcess: GeckoSubprocessProcess | null = null;
+let managedListenerPort: number | null = null;
 let currentStatus: MineruServerState = "stopped";
 let activeJobCount = 0;
 let idleTimer: any = null;
@@ -272,6 +338,7 @@ export async function startMineruServer(
       }
 
       managedProcess = proc;
+      managedListenerPort = extractPortFromBaseUrl(baseUrl);
       let processExited = false;
 
       const drain = async (pipe?: GeckoSubprocessPipe, isStderr = false) => {
@@ -309,6 +376,7 @@ export async function startMineruServer(
           processExited = true;
           if (managedProcess === proc) {
             managedProcess = null;
+            managedListenerPort = null;
             if (currentStatus === "starting" || currentStatus === "running") {
               setServerStatus("stopped");
             }
@@ -325,6 +393,7 @@ export async function startMineruServer(
         }
         if (processExited) {
           managedProcess = null;
+          managedListenerPort = null;
           setServerStatus("stopped");
           let errorMsg =
             recentServerLogs.slice(-5).filter(Boolean).join("; ") ||
@@ -379,7 +448,10 @@ export async function ensureMineruLocalServerRunning(
 }
 
 /**
- * Stop the managed server process.
+ * Stop the managed server process, including every descendant that survived
+ * the shell wrapper (uv tool run spawns uv -> python; Gecko's kill only
+ * reaches the shell). The real listener is found via the port we started and
+ * killed last, after a graceful shell kill.
  */
 export async function stopMineruServer(reason = "manual"): Promise<void> {
   if (idleTimer) {
@@ -389,17 +461,35 @@ export async function stopMineruServer(reason = "manual"): Promise<void> {
   if (reason === "idle_timeout" && activeJobCount > 0) {
     return;
   }
-  if (!managedProcess && currentStatus === "stopped") {
+  if (!managedProcess && !managedListenerPort && currentStatus === "stopped") {
     return;
   }
   setServerStatus("stopping");
   const proc = managedProcess;
+  const port = managedListenerPort;
   managedProcess = null;
+  managedListenerPort = null;
   if (proc) {
     try {
       await proc.kill?.(2000);
     } catch (err) {
-      appLogger.debug("[MinerU server] kill error (can be ignored)", err);
+      appLogger.debug("[MinerU server] shell kill error (can be ignored)", err);
+    }
+  }
+  // Kill whatever still listens on the port we launched — this is the actual
+  // python/uv descendant the shell kill cannot reach.
+  if (port !== null) {
+    try {
+      const Subprocess = getSubprocess();
+      const survivors = await listListenerPidsOnPort(port, Subprocess);
+      if (survivors.length) {
+        await killPids(survivors, Subprocess);
+      }
+    } catch (err) {
+      appLogger.debug(
+        "[MinerU server] port cleanup error (can be ignored)",
+        err,
+      );
     }
   }
   setServerStatus("stopped");
@@ -420,6 +510,7 @@ export function resetMineruServerManagerForTests(): void {
     idleTimer = null;
   }
   managedProcess = null;
+  managedListenerPort = null;
   currentStatus = "stopped";
   activeJobCount = 0;
   inFlightStartPromise = null;
