@@ -18,6 +18,8 @@ import {
   extractPortFromBaseUrl,
   listListenerPidsOnPort,
   syncMineruServerStatus,
+  parseProcessParentMap,
+  isDescendantPid,
 } from "../src/utils/mineruServerManager";
 import {
   setMineruLocalServerCommand,
@@ -225,6 +227,296 @@ describe("mineruServerManager", function () {
       assert.equal(extractPortFromBaseUrl("http://127.0.0.1"), 80);
       assert.equal(extractPortFromBaseUrl("https://mineru.local/api"), 443);
       assert.equal(extractPortFromBaseUrl("not a url"), null);
+    });
+  });
+
+  describe("process descendant tracking", function () {
+    it("parses PPID and PID correctly from parent map output", function () {
+      const output = [
+        "  PPID    PID",
+        "     0      1",
+        "     1    100",
+        "   100    200",
+        "   200    300",
+      ].join("\n");
+      const map = parseProcessParentMap(output);
+      assert.equal(map.get(100), 1);
+      assert.equal(map.get(200), 100);
+      assert.equal(map.get(300), 200);
+    });
+
+    it("identifies self, children, and grandchildren as descendants", function () {
+      const map = new Map<number, number>([
+        [100, 1],
+        [200, 100],
+        [300, 200],
+        [999, 1],
+      ]);
+      assert.isTrue(isDescendantPid(100, 100, map), "self is descendant");
+      assert.isTrue(isDescendantPid(200, 100, map), "child is descendant");
+      assert.isTrue(isDescendantPid(300, 100, map), "grandchild is descendant");
+      assert.isFalse(
+        isDescendantPid(999, 100, map),
+        "unrelated process is not descendant",
+      );
+    });
+  });
+
+  describe("stopMineruServer process cleanup safety", function () {
+    it("skips port kill if the listener process is not a descendant of spawned process", async function () {
+      setMineruLocalServerCommand("mineru-api --port 9000");
+      const killedPids: number[] = [];
+
+      setSubprocessLoaderForTests(
+        () =>
+          ({
+            call: async (opts) => {
+              const cmd = opts.arguments?.[1] || "";
+              if (cmd.startsWith("taskkill") || cmd.startsWith("kill")) {
+                const nums =
+                  (opts.arguments?.[1] || "").match(/\d+/g)?.map(Number) || [];
+                killedPids.push(...nums);
+                return { wait: async () => ({ exitCode: 0 }) };
+              }
+              if (cmd.includes("lsof") || cmd.includes("netstat")) {
+                const chunks = ["999\n"];
+                return {
+                  stdout: { readString: async () => chunks.shift() || "" },
+                  wait: async () => ({ exitCode: 0 }),
+                };
+              }
+              if (cmd.includes("ps -A") || cmd.includes("wmic")) {
+                const chunks = ["1 1000\n1 999\n"];
+                return {
+                  stdout: { readString: async () => chunks.shift() || "" },
+                  wait: async () => ({ exitCode: 0 }),
+                };
+              }
+              return {
+                pid: 1000,
+                stdout: { readString: async () => "" },
+                stderr: { readString: async () => "" },
+                wait: async () => new Promise(() => {}),
+                kill: async () => ({ exitCode: 0 }),
+              };
+            },
+          }) as GeckoSubprocess,
+      );
+
+      let probeCount0 = 0;
+      setProbeHealthyForTests(async () => {
+        probeCount0++;
+        return probeCount0 > 1;
+      });
+      await startMineruServer("http://127.0.0.1:8000");
+
+      await stopMineruServer("manual");
+      assert.notInclude(
+        killedPids,
+        999,
+        "unrelated process on port 8000 must NOT be killed",
+      );
+      assert.equal(getMineruServerStatus(), "stopped");
+    });
+
+    it("kills the listener process if it IS a descendant of spawned process", async function () {
+      setMineruLocalServerCommand("mineru-api --port 8000");
+      let killedCommand = "";
+
+      setSubprocessLoaderForTests(
+        () =>
+          ({
+            call: async (opts) => {
+              const cmd = opts.arguments?.[1] || "";
+              if (cmd.startsWith("taskkill") || cmd.startsWith("kill")) {
+                killedCommand = cmd;
+                return { wait: async () => ({ exitCode: 0 }) };
+              }
+              if (cmd.includes("lsof") || cmd.includes("netstat")) {
+                const chunks = ["1005\n"];
+                return {
+                  stdout: { readString: async () => chunks.shift() || "" },
+                  wait: async () => ({ exitCode: 0 }),
+                };
+              }
+              if (cmd.includes("ps -A") || cmd.includes("wmic")) {
+                const chunks = ["1000 1005\n"];
+                return {
+                  stdout: { readString: async () => chunks.shift() || "" },
+                  wait: async () => ({ exitCode: 0 }),
+                };
+              }
+              return {
+                pid: 1000,
+                stdout: { readString: async () => "" },
+                stderr: { readString: async () => "" },
+                wait: async () => new Promise(() => {}),
+                kill: async () => ({ exitCode: 0 }),
+              };
+            },
+          }) as GeckoSubprocess,
+      );
+
+      let probeCount1 = 0;
+      setProbeHealthyForTests(async () => {
+        probeCount1++;
+        return probeCount1 > 1;
+      });
+      await startMineruServer("http://127.0.0.1:8000");
+
+      await stopMineruServer("manual");
+      assert.include(
+        killedCommand,
+        "1005",
+        "descendant process listening on port must be killed",
+      );
+      assert.equal(getMineruServerStatus(), "stopped");
+    });
+
+    it("stops managed process when reason is plugin_shutdown", async function () {
+      setMineruLocalServerCommand("mineru-api");
+      let killedShell = false;
+
+      setSubprocessLoaderForTests(
+        () =>
+          ({
+            call: async (opts) => {
+              const cmd = opts.arguments?.[1] || "";
+              if (cmd.includes("mineru")) {
+                return {
+                  pid: 1234,
+                  stdout: { readString: async () => "" },
+                  stderr: { readString: async () => "" },
+                  wait: async () => new Promise(() => {}),
+                  kill: async () => {
+                    killedShell = true;
+                    return { exitCode: 0 };
+                  },
+                };
+              }
+              return {
+                stdout: { readString: async () => "" },
+                wait: async () => ({ exitCode: 0 }),
+              };
+            },
+          }) as GeckoSubprocess,
+      );
+
+      let probeCount2 = 0;
+      setProbeHealthyForTests(async () => {
+        probeCount2++;
+        return probeCount2 > 1;
+      });
+      await startMineruServer("http://127.0.0.1:8000");
+      assert.equal(getMineruServerStatus(), "running");
+
+      await stopMineruServer("plugin_shutdown");
+      assert.isTrue(killedShell);
+      assert.equal(getMineruServerStatus(), "stopped");
+    });
+  });
+
+  describe("health recheck and concurrent cancellations", function () {
+    it("rechecks health when status is running and restarts if dead", async function () {
+      setMineruLocalServerCommand("mineru-api");
+      let launchCount = 0;
+
+      setSubprocessLoaderForTests(
+        () =>
+          ({
+            call: async (opts) => {
+              const cmd = opts.arguments?.[1] || "";
+              if (cmd.includes("mineru")) {
+                launchCount++;
+                return {
+                  pid: 2000 + launchCount,
+                  stdout: { readString: async () => "" },
+                  stderr: { readString: async () => "" },
+                  wait: async () => new Promise(() => {}),
+                  kill: async () => ({ exitCode: 0 }),
+                };
+              }
+              return {
+                stdout: { readString: async () => "" },
+                wait: async () => ({ exitCode: 0 }),
+              };
+            },
+          }) as GeckoSubprocess,
+      );
+
+      let probe1 = 0;
+      setProbeHealthyForTests(async () => {
+        probe1++;
+        return probe1 > 1;
+      });
+
+      // 1. Initial start
+      const res1 = await startMineruServer("http://127.0.0.1:8000");
+      assert.isTrue(res1);
+      assert.equal(launchCount, 1);
+      assert.equal(getMineruServerStatus(), "running");
+
+      // 2. Server dies externally while status was left as running
+      let probe2 = 0;
+      setProbeHealthyForTests(async () => {
+        probe2++;
+        // Probe 1: recheck returns false
+        // Probe 2: step 1 isAlreadyHealthy returns false
+        // Probe 3: wait loop probe returns true
+        return probe2 > 2;
+      });
+
+      const res2 = await startMineruServer("http://127.0.0.1:8000");
+      assert.isTrue(res2);
+      assert.equal(
+        launchCount,
+        2,
+        "must have restarted the process instead of returning true blindly",
+      );
+    });
+
+    it("concurrent parses: cancelling first caller does not cancel the other caller", async function () {
+      setMineruLocalServerCommand("mineru-api");
+      let probeCount = 0;
+
+      setSubprocessLoaderForTests(
+        () =>
+          ({
+            call: async () => ({
+              pid: 1000,
+              stdout: { readString: async () => "" },
+              stderr: { readString: async () => "" },
+              wait: async () => new Promise(() => {}),
+              kill: async () => ({ exitCode: 0 }),
+            }),
+          }) as GeckoSubprocess,
+      );
+
+      setProbeHealthyForTests(async () => {
+        probeCount++;
+        return probeCount >= 3;
+      });
+
+      const ctrl1 = new AbortController();
+      const ctrl2 = new AbortController();
+
+      const p1 = startMineruServer(
+        "http://127.0.0.1:8000",
+        undefined,
+        ctrl1.signal,
+      );
+      const p2 = startMineruServer(
+        "http://127.0.0.1:8000",
+        undefined,
+        ctrl2.signal,
+      );
+
+      ctrl1.abort();
+
+      const [res1, res2] = await Promise.all([p1, p2]);
+      assert.isFalse(res1, "aborted caller must return false");
+      assert.isTrue(res2, "non-aborted caller must succeed");
+      assert.equal(getMineruServerStatus(), "running");
     });
   });
 

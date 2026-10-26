@@ -14,7 +14,6 @@ import {
   isMineruForceOcrEnabled,
   getMineruLocalApiBase,
   getMineruLocalServerCommand,
-  getMineruLocalServerIdleMinutes,
   getMineruLocalBackend,
   getMineruMode,
   getMineruLocalOptions,
@@ -2246,7 +2245,6 @@ export async function parsePdfWithMineruSingle(
       signal,
       forceOcr,
       settings.localOptions,
-      settings.localServerCommand,
     );
   }
   return parsePdfWithMineruCloud(
@@ -2376,8 +2374,6 @@ export function getMineruParseSettings() {
     localApiBase: getMineruLocalApiBase(),
     localBackend: getMineruLocalBackend(),
     localOptions: getMineruLocalOptions(),
-    localServerCommand: getMineruLocalServerCommand(),
-    localServerIdleMinutes: getMineruLocalServerIdleMinutes(),
     cloudModel: getMineruCloudModel(),
     forceOcr: isMineruForceOcrEnabled(),
   };

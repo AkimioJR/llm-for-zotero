@@ -133,13 +133,81 @@ async function killPids(
   );
 }
 
+/**
+ * Parse lines of `ParentProcessId ProcessId` into a map from child PID to parent PID.
+ */
+export function parseProcessParentMap(output: string): Map<number, number> {
+  const parentMap = new Map<number, number>();
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const parts = line.split(/\s+/);
+    if (parts.length >= 2) {
+      const ppid = Number.parseInt(parts[0], 10);
+      const pid = Number.parseInt(parts[1], 10);
+      if (Number.isInteger(pid) && Number.isInteger(ppid) && pid > 0) {
+        parentMap.set(pid, ppid);
+      }
+    }
+  }
+  return parentMap;
+}
+
+/**
+ * Check if candidatePid is rootPid or a descendant of rootPid using parentMap.
+ */
+export function isDescendantPid(
+  candidatePid: number,
+  rootPid: number,
+  parentMap: Map<number, number>,
+): boolean {
+  if (candidatePid === rootPid) return true;
+  let current = candidatePid;
+  const visited = new Set<number>();
+  while (current > 1 && !visited.has(current)) {
+    visited.add(current);
+    const ppid = parentMap.get(current);
+    if (ppid === undefined || ppid === null) break;
+    if (ppid === rootPid) return true;
+    current = ppid;
+  }
+  return false;
+}
+
+export async function getProcessParentMap(
+  Subprocess: GeckoSubprocess,
+): Promise<Map<number, number>> {
+  const platform = getRuntimePlatformInfo();
+  const command =
+    platform.platform === "windows"
+      ? `wmic process get ParentProcessId,ProcessId 2>nul || powershell -NoProfile -Command "Get-CimInstance Win32_Process | ForEach-Object { \\"$($_.ParentProcessId) $($_.ProcessId)\\" }"`
+      : `ps -A -o ppid,pid`;
+  const output = await runGeckoSubprocessForOutput(
+    Subprocess,
+    {
+      command: platform.shellPath,
+      arguments: [platform.shellFlag, command],
+    },
+    5000,
+  );
+  if (!output) return new Map();
+  return parseProcessParentMap(output);
+}
+
 type StatusListener = (state: MineruServerState) => void;
 
 const SERVER_STARTUP_TIMEOUT_MS = 30_000;
 const SERVER_PROBE_INTERVAL_MS = 500;
 
 let managedProcess: GeckoSubprocessProcess | null = null;
+let managedPid: number | null = null;
 let managedListenerPort: number | null = null;
+
+interface StartRequest {
+  report?: (stage: string) => void;
+  signal?: AbortSignal;
+}
+const activeStartRequests = new Set<StartRequest>();
 let currentStatus: MineruServerState = "stopped";
 let activeJobCount = 0;
 let idleTimer: any = null;
@@ -304,145 +372,188 @@ export function acquireMineruServerJob(): () => void {
 /**
  * Start the local MinerU server using the configured start command.
  */
+async function executeServerStartup(baseUrl: string): Promise<boolean> {
+  const areAllCallersAborted = () => {
+    if (activeStartRequests.size === 0) return false;
+    for (const req of activeStartRequests) {
+      if (!req.signal?.aborted) return false;
+    }
+    return true;
+  };
+
+  const broadcastReport = (stage: string) => {
+    for (const req of activeStartRequests) {
+      if (!req.signal?.aborted) {
+        req.report?.(stage);
+      }
+    }
+  };
+
+  // 1. Check if an external or previously launched instance is already healthy
+  broadcastReport(t("Checking local MinerU server…"));
+  const isAlreadyHealthy = await probeMineruServerHealthy(baseUrl, 1500);
+  if (isAlreadyHealthy) {
+    setServerStatus("running");
+    scheduleMineruServerIdleStop();
+    return true;
+  }
+
+  if (areAllCallersAborted()) return false;
+
+  // 2. Launch process through system shell
+  setServerStatus("starting");
+  broadcastReport(t("Starting local MinerU server…"));
+  const Subprocess = getSubprocess();
+  const platform = getRuntimePlatformInfo();
+  const command = getMineruLocalServerCommand();
+  const workdir = resolveMineruServerWorkdir();
+
+  let proc: GeckoSubprocessProcess;
+  try {
+    proc = await Subprocess.call({
+      command: platform.shellPath,
+      arguments: [platform.shellFlag, command],
+      workdir,
+      stderr: "pipe",
+    });
+  } catch (launchError) {
+    setServerStatus("stopped");
+    throw new Error(
+      `Failed to launch MinerU server: ${(launchError as Error).message}`,
+    );
+  }
+
+  managedProcess = proc;
+  managedPid = proc.pid ?? null;
+  managedListenerPort = extractPortFromBaseUrl(baseUrl);
+  let processExited = false;
+  const recentStderr: string[] = [];
+
+  const drain = async (pipe?: GeckoSubprocessPipe, isStderr = false) => {
+    if (!pipe?.readString) return;
+    try {
+      while (true) {
+        const chunk = await pipe.readString();
+        if (!chunk) break;
+        if (isStderr) {
+          const lines = chunk.split("\n").filter(Boolean);
+          recentStderr.push(...lines);
+          if (recentStderr.length > 30) {
+            recentStderr.splice(0, recentStderr.length - 30);
+          }
+        }
+        appLogger.debug(
+          `[MinerU server ${isStderr ? "stderr" : "stdout"}] ${chunk.trim()}`,
+        );
+      }
+    } catch {
+      /* pipe closed */
+    }
+  };
+
+  void drain(proc.stdout, false);
+  void drain(proc.stderr, true);
+
+  proc
+    .wait?.()
+    .then(() => {
+      processExited = true;
+      if (managedProcess === proc) {
+        managedProcess = null;
+        managedListenerPort = null;
+        managedPid = null;
+        if (currentStatus === "starting" || currentStatus === "running") {
+          setServerStatus("stopped");
+        }
+      }
+    })
+    .catch(() => undefined);
+
+  // 3. Poll for readiness
+  const startTime = Date.now();
+  while (Date.now() - startTime < SERVER_STARTUP_TIMEOUT_MS) {
+    if (areAllCallersAborted()) {
+      await stopMineruServer("cancelled");
+      return false;
+    }
+    if (processExited) {
+      managedProcess = null;
+      managedListenerPort = null;
+      managedPid = null;
+      setServerStatus("stopped");
+      let errorMsg =
+        recentStderr.slice(-5).join("; ") || "Process exited immediately";
+      if (
+        /address already in use|10048|errno (?:48|98)|eaddrinuse/i.test(
+          errorMsg,
+        )
+      ) {
+        const port = extractPortFromBaseUrl(baseUrl) ?? 8000;
+        errorMsg = `${t("Port %s is already in use by another process. Stop the existing process first.").replace("%s", String(port))} (${errorMsg})`;
+      }
+      throw new Error(`Local MinerU server failed to start: ${errorMsg}`);
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, SERVER_PROBE_INTERVAL_MS),
+    );
+    const ready = await probeMineruServerHealthy(baseUrl, 1000);
+    if (ready) {
+      setServerStatus("running");
+      broadcastReport(t("Local MinerU server is ready."));
+      scheduleMineruServerIdleStop();
+      return true;
+    }
+  }
+
+  // 4. Timed out
+  await stopMineruServer("startup_timeout");
+  const errorMsg =
+    recentStderr.slice(-5).join("; ") ||
+    "Timed out waiting for server health check";
+  throw new Error(`Local MinerU server startup timed out: ${errorMsg}`);
+}
+
 export async function startMineruServer(
   baseUrl = getMineruLocalApiBase(),
   report?: (stage: string) => void,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  if (currentStatus === "running") return true;
-  if (inFlightStartPromise) return inFlightStartPromise;
+  if (signal?.aborted) return false;
+
+  if (currentStatus === "running") {
+    const stillHealthy = await probeMineruServerHealthy(baseUrl, 1000);
+    if (stillHealthy) return true;
+    setServerStatus("stopped");
+    managedProcess = null;
+    managedListenerPort = null;
+    managedPid = null;
+  }
 
   const command = getMineruLocalServerCommand();
   if (!command) {
     throw new Error(t("No MinerU server start command configured."));
   }
 
-  inFlightStartPromise = (async () => {
-    try {
-      // 1. Check if an external or previously launched instance is already healthy
-      report?.(t("Checking local MinerU server…"));
-      const isAlreadyHealthy = await probeMineruServerHealthy(baseUrl, 1500);
-      if (isAlreadyHealthy) {
-        setServerStatus("running");
-        scheduleMineruServerIdleStop();
-        return true;
-      }
+  const currentRequest: StartRequest = { report, signal };
+  activeStartRequests.add(currentRequest);
 
-      if (signal?.aborted) return false;
-
-      // 2. Launch process through system shell
-      setServerStatus("starting");
-      report?.(t("Starting local MinerU server…"));
-      const Subprocess = getSubprocess();
-      const platform = getRuntimePlatformInfo();
-      const workdir = resolveMineruServerWorkdir();
-
-      let proc: GeckoSubprocessProcess;
+  if (!inFlightStartPromise) {
+    inFlightStartPromise = (async () => {
       try {
-        proc = await Subprocess.call({
-          command: platform.shellPath,
-          arguments: [platform.shellFlag, command],
-          workdir,
-          stderr: "pipe",
-        });
-      } catch (launchError) {
-        setServerStatus("stopped");
-        throw new Error(
-          `Failed to launch MinerU server: ${(launchError as Error).message}`,
-        );
+        return await executeServerStartup(baseUrl);
+      } finally {
+        inFlightStartPromise = null;
       }
+    })();
+  }
 
-      managedProcess = proc;
-      managedListenerPort = extractPortFromBaseUrl(baseUrl);
-      let processExited = false;
-      const recentStderr: string[] = [];
-
-      const drain = async (pipe?: GeckoSubprocessPipe, isStderr = false) => {
-        if (!pipe?.readString) return;
-        try {
-          while (true) {
-            const chunk = await pipe.readString();
-            if (!chunk) break;
-            if (isStderr) {
-              const lines = chunk.split("\n").filter(Boolean);
-              recentStderr.push(...lines);
-              if (recentStderr.length > 30) {
-                recentStderr.splice(0, recentStderr.length - 30);
-              }
-            }
-            appLogger.debug(
-              `[MinerU server ${isStderr ? "stderr" : "stdout"}] ${chunk.trim()}`,
-            );
-          }
-        } catch {
-          /* pipe closed */
-        }
-      };
-
-      void drain(proc.stdout, false);
-      void drain(proc.stderr, true);
-
-      proc
-        .wait?.()
-        .then(() => {
-          processExited = true;
-          if (managedProcess === proc) {
-            managedProcess = null;
-            managedListenerPort = null;
-            if (currentStatus === "starting" || currentStatus === "running") {
-              setServerStatus("stopped");
-            }
-          }
-        })
-        .catch(() => undefined);
-
-      // 3. Poll for readiness
-      const startTime = Date.now();
-      while (Date.now() - startTime < SERVER_STARTUP_TIMEOUT_MS) {
-        if (signal?.aborted) {
-          await stopMineruServer("cancelled");
-          return false;
-        }
-        if (processExited) {
-          managedProcess = null;
-          managedListenerPort = null;
-          setServerStatus("stopped");
-          let errorMsg =
-            recentStderr.slice(-5).join("; ") || "Process exited immediately";
-          if (
-            /address already in use|10048|errno (?:48|98)|eaddrinuse/i.test(
-              errorMsg,
-            )
-          ) {
-            const port = extractPortFromBaseUrl(baseUrl) ?? 8000;
-            errorMsg = `${t("Port %s is already in use by another process. Stop the existing process first.").replace("%s", String(port))} (${errorMsg})`;
-          }
-          throw new Error(`Local MinerU server failed to start: ${errorMsg}`);
-        }
-        await new Promise((resolve) =>
-          setTimeout(resolve, SERVER_PROBE_INTERVAL_MS),
-        );
-        const ready = await probeMineruServerHealthy(baseUrl, 1000);
-        if (ready) {
-          setServerStatus("running");
-          report?.(t("Local MinerU server is ready."));
-          scheduleMineruServerIdleStop();
-          return true;
-        }
-      }
-
-      // 4. Timed out
-      await stopMineruServer("startup_timeout");
-      const errorMsg =
-        recentStderr.slice(-5).join("; ") ||
-        "Timed out waiting for server health check";
-      throw new Error(`Local MinerU server startup timed out: ${errorMsg}`);
-    } finally {
-      inFlightStartPromise = null;
-    }
-  })();
-
-  return inFlightStartPromise;
+  try {
+    const success = await inFlightStartPromise;
+    if (signal?.aborted) return false;
+    return success;
+  } finally {
+    activeStartRequests.delete(currentRequest);
+  }
 }
 
 /**
@@ -480,9 +591,36 @@ export async function stopMineruServer(reason = "manual"): Promise<void> {
   }
   setServerStatus("stopping");
   const proc = managedProcess;
+  const rootPid = proc?.pid ?? managedPid;
   const port = managedListenerPort;
   managedProcess = null;
+  managedPid = null;
   managedListenerPort = null;
+
+  let ownedListenerPids: number[] = [];
+  if (rootPid !== null && port !== null) {
+    try {
+      const Subprocess = getSubprocess();
+      const listenerPids = await listListenerPidsOnPort(port, Subprocess);
+      if (listenerPids.length > 0) {
+        const parentMap = await getProcessParentMap(Subprocess);
+        ownedListenerPids = listenerPids.filter((pid) =>
+          isDescendantPid(pid, rootPid, parentMap),
+        );
+        if (ownedListenerPids.length === 0 && listenerPids.length > 0) {
+          appLogger.debug(
+            `[MinerU server] listener PID(s) ${listenerPids.join(", ")} on port ${port} are not descendants of spawned PID ${rootPid}; skipping port kill`,
+          );
+        }
+      }
+    } catch (err) {
+      appLogger.debug(
+        "[MinerU server] descendant check error (can be ignored)",
+        err,
+      );
+    }
+  }
+
   if (proc) {
     try {
       await proc.kill?.(2000);
@@ -490,15 +628,12 @@ export async function stopMineruServer(reason = "manual"): Promise<void> {
       appLogger.debug("[MinerU server] shell kill error (can be ignored)", err);
     }
   }
-  // Kill whatever still listens on the port we launched — this is the actual
-  // python/uv descendant the shell kill cannot reach.
-  if (port !== null) {
+
+  // Kill only descendant processes that were spawned by our managed process.
+  if (ownedListenerPids.length > 0) {
     try {
       const Subprocess = getSubprocess();
-      const survivors = await listListenerPidsOnPort(port, Subprocess);
-      if (survivors.length) {
-        await killPids(survivors, Subprocess);
-      }
+      await killPids(ownedListenerPids, Subprocess);
     } catch (err) {
       appLogger.debug(
         "[MinerU server] port cleanup error (can be ignored)",
@@ -524,10 +659,12 @@ export function resetMineruServerManagerForTests(): void {
     idleTimer = null;
   }
   managedProcess = null;
+  managedPid = null;
   managedListenerPort = null;
   currentStatus = "stopped";
   activeJobCount = 0;
   inFlightStartPromise = null;
+  activeStartRequests.clear();
   statusListeners.clear();
   subprocessLoaderOverride = null;
   probeHealthyOverride = null;
